@@ -42,6 +42,8 @@ pub struct WorkerSetup {
     pub clock: Arc<dyn Clock>,
     pub gossip_heartbeat: Duration,
     pub adversary: Option<String>,
+    /// Reload the manifest from here every minute (None in tests).
+    pub manifest_source: Option<files::ManifestSource>,
 }
 
 /// Live status written to `state_dir/status.json` for administrators.
@@ -115,6 +117,10 @@ pub fn setup_from_config(
         clock,
         gossip_heartbeat: Duration::from_millis(700),
         adversary: cfg.adversary.clone(),
+        manifest_source: Some(files::ManifestSource {
+            manifest: cfg.manifest.clone(),
+            governance_root: cfg.governance_root.clone(),
+        }),
     })
 }
 
@@ -157,6 +163,11 @@ impl Worker {
         m: &cybermesh_network::InboundMessage,
     ) {
         let now = self.s.clock.now();
+        if now >= self.s.manifest.expires_at {
+            // Never act on authority from an expired manifest.
+            net.report(m, Acceptance::Ignore).await;
+            return;
+        }
         let v = match verify_task(&m.data, &self.s.manifest, now, &self.limits) {
             Ok(v) => v,
             Err(e) => {
@@ -396,6 +407,7 @@ pub async fn run_worker(
         s: setup,
     };
 
+    let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
     let mut hb = tokio::time::interval(heartbeat_every);
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut last_status = Instant::now() - Duration::from_secs(10);
@@ -420,6 +432,28 @@ pub async fn run_worker(
                 }
             }
             _ = hb.tick() => w.heartbeat(&net).await,
+            _ = manifest_tick.tick() => {
+                if let Some(src) = w.s.manifest_source.clone() {
+                    match files::reload_manifest(&src, &w.s.manifest, w.s.clock.now()) {
+                        files::Reload::Updated(m) => {
+                            info!(sequence = m.sequence, "loaded newer trust manifest");
+                            if m.key_with_role(&w.id, cybermesh_protocol::Role::Worker).is_none() {
+                                warn!("this worker's key is revoked or no longer enrolled; stopping");
+                                break;
+                            }
+                            net.set_allowed(allowed_peers(&m, &w.id)).await;
+                            w.s.manifest = m;
+                        }
+                        files::Reload::Equivocation => {
+                            warn!("manifest with the current sequence but different content; ignored (report to governance)");
+                        }
+                        files::Reload::Unchanged => {}
+                    }
+                }
+                if w.s.clock.now() >= w.s.manifest.expires_at {
+                    w.status.state = "manifest-expired".into();
+                }
+            }
             _ = tick.tick() => {
                 let now = w.s.clock.now();
                 match w.governor.decide(now) {
@@ -464,4 +498,14 @@ pub async fn run_worker(
     w.write_status(&net);
     net.shutdown().await;
     Ok(w.status)
+}
+
+#[cfg(test)]
+mod tests {
+    /// A default build must never honour an adversary configuration.
+    #[cfg(not(feature = "adversary-sim"))]
+    #[test]
+    fn adversary_mode_is_not_compiled_into_default_builds() {
+        assert!(!cfg!(feature = "adversary-sim"));
+    }
 }

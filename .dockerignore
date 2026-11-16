@@ -6,3 +6,9 @@ state
 apps/browser-extension/node_modules
 apps/browser-extension/dist
 **/*.key.json
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+measure-out
+apps/browser-extension/artifacts
+*.tmp

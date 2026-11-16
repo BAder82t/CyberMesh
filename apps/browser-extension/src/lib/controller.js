@@ -10,7 +10,7 @@
 
 import { MAX_RELEASE_BYTES, ReleaseError, parseTrustRoot, verifyRelease } from './verify.js';
 import { buildIndex, countActions, hostFromUrl, lookupHost } from './lookup.js';
-import { ALLOW_RULE_ID_BASE, allowRule, domainMatches, planBlockRules, warningPath } from './rules.js';
+import { ALLOW_RULE_ID_BASE, allowRule, domainMatches, planBlockRules, warningPath, moreSpecificIndicators } from './rules.js';
 import { concatBytes, utf8DecodeStrict } from './encoding.js';
 
 export const ALARM_UPDATE = 'cybermesh-update';
@@ -25,6 +25,8 @@ export const KEYS = Object.freeze({
   rules: 'rulesInstalledFor',
 });
 const NAV_PREFIX = 'nav:';
+/** chrome.storage.session key: allow-rule id -> the entry the user accepted. */
+const ALLOW_META = 'allowMeta';
 const FETCH_TIMEOUT_MS = 30_000;
 const BLOCKED_DEDUPE_MS = 3_000;
 const DEFAULT_MAX_DYNAMIC_RULES = 5_000;
@@ -243,6 +245,7 @@ export function createController({ chrome, fetchImpl, loadConfig, loadTrustRootT
     if (fatal) return getStatus();
     await exclusive(async () => {
       await expireIfNeeded();
+      if (rulesProblem) await applyRules(); // retry a failed rule installation
       const at = nowMs();
       let bytes;
       try {
@@ -312,26 +315,68 @@ export function createController({ chrome, fetchImpl, loadConfig, loadTrustRootT
     return rules.filter((r) => r.action?.type === 'allow');
   }
 
+  /**
+   * An exception applies only if it was granted for the very entry that matches `host`
+   * (same indicator and listing), never for a different, more specific entry.
+   */
   async function isAllowed(host, entry) {
     if (entry.action === 'block' && (await strictSettings()).effective) return false;
     const rules = await allowRules();
-    return rules.some((r) => (r.condition?.requestDomains ?? []).some((d) => domainMatches(host, d)));
+    const meta = await allowMeta();
+    return rules.some((r) => {
+      const granted = meta[r.id];
+      return (
+        (r.condition?.requestDomains ?? []).some((d) => domainMatches(host, d)) &&
+        !(r.condition?.excludedRequestDomains ?? []).some((d) => domainMatches(host, d)) &&
+        granted?.indicator === entry.indicator &&
+        granted?.action === entry.action
+      );
+    });
   }
 
-  /** Drops allow rules that strict mode or the current release no longer permits. */
+  async function allowMeta() {
+    try {
+      return (await chrome.storage.session.get(ALLOW_META))[ALLOW_META] ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Drops "Continue anyway" allow rules that are no longer justified: no current release,
+   * host no longer listed, strict mode now covers it, or the listing changed (e.g. a newer
+   * release upgraded the entry from warn to block) since the user accepted the warning.
+   */
   async function reconcileAllowRules() {
     const rules = await allowRules();
     if (rules.length === 0) return;
     const strict = (await strictSettings()).effective;
+    const meta = await allowMeta();
     const remove = rules
       .filter((r) => {
         const host = r.condition?.requestDomains?.[0];
         if (!host || !current) return true;
         const e = lookupHost(current.index, host);
-        return !e || (strict && e.action === 'block');
+        const accepted = meta[r.id];
+        // A newer release that lists a more specific host below this one invalidates the
+        // exception (its exclusions would be out of date).
+        const excluded = [...(r.condition?.excludedRequestDomains ?? [])].sort();
+        const needed = moreSpecificIndicators(current.index, host);
+        return (
+          excluded.join(',') !== needed.join(',') ||
+          !e ||
+          (strict && e.action === 'block') ||
+          !accepted ||
+          accepted.indicator !== e.indicator ||
+          accepted.action !== e.action ||
+          accepted.confidence !== e.confidence
+        );
       })
       .map((r) => r.id);
-    if (remove.length > 0) await dnr().updateSessionRules({ removeRuleIds: remove });
+    if (remove.length === 0) return;
+    await dnr().updateSessionRules({ removeRuleIds: remove });
+    const kept = Object.fromEntries(Object.entries(meta).filter(([id]) => !remove.includes(Number(id))));
+    await chrome.storage.session.set({ [ALLOW_META]: kept }).catch(() => {});
   }
 
   async function setStrict(value) {
@@ -429,7 +474,12 @@ export function createController({ chrome, fetchImpl, loadConfig, loadTrustRootT
       const exists = rules.some((r) => r.action?.type === 'allow' && r.condition?.requestDomains?.includes(nav.host));
       if (!exists) {
         const id = Math.max(ALLOW_RULE_ID_BASE, ...rules.map((r) => r.id)) + 1;
-        await dnr().updateSessionRules({ addRules: [allowRule(id, nav.host)] });
+        const meta = await allowMeta();
+        meta[id] = { host: nav.host, indicator: entry.indicator, action: entry.action, confidence: entry.confidence };
+        await chrome.storage.session.set({ [ALLOW_META]: meta });
+        await dnr().updateSessionRules({
+          addRules: [allowRule(id, nav.host, moreSpecificIndicators(current.index, nav.host))],
+        });
       }
     }
     pendingWarnings.delete(tabId);
@@ -442,6 +492,9 @@ export function createController({ chrome, fetchImpl, loadConfig, loadTrustRootT
   function mode() {
     if (fatal) return 'error';
     if (current) {
+      // Verified data whose block rules could not be installed: only the (racy) navigation
+      // listener protects, so say so instead of claiming full protection.
+      if (rulesProblem) return 'degraded';
       if (status.lastAttemptOk === false) return status.lastErrorKind === 'fetch' ? 'offline' : 'cached';
       return 'active';
     }
@@ -487,6 +540,7 @@ export function createController({ chrome, fetchImpl, loadConfig, loadTrustRootT
       active: ['', null, `protection active (release ${seq})`],
       offline: ['', null, `offline: using cached release ${seq}`],
       cached: ['', null, `using cached release ${seq}; the latest download was rejected`],
+      degraded: ['!', '#b3261e', `release ${seq} verified, but its blocking rules could not be installed`],
       expired: ['EXP', '#b3261e', 'intelligence expired: no sites are being blocked'],
       none: ['!', '#9a5b00', 'no verified intelligence yet'],
       error: ['ERR', '#b3261e', fatal ?? 'configuration error'],

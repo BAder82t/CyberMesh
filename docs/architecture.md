@@ -159,7 +159,7 @@ Key properties:
 ### 3.9 Browser extension (`apps/browser-extension`)
 
 - **Updates and verification.** The extension is MV3. It fetches the release over the network, verifies it with WebCrypto Ed25519 against the bundled trust root, and stores it with anti-rollback state.
-- **Enforcement.** It installs `declarativeNetRequest` redirect rules for main-frame navigations to listed hosts.
+- **Enforcement.** It installs one `declarativeNetRequest` **block** rule per listed host for main-frame requests, so the request to the listed host is never sent. The service worker then shows the warning page in that tab. Redirect rules were tested first, but Chromium silently ignores them without host permission for the blocked site, so they fail open. A test covers this behaviour.
 - **Warn versus block.** `warn` entries always show a dismissible interstitial. `block` entries are dismissible unless strict mode is enabled, either by the user or by enterprise policy.
 - **Privacy.** No browsing data leaves the browser. False-positive reports open a prefilled GitHub issue that the user reviews and submits manually.
 

@@ -43,19 +43,38 @@ export function planBlockRules(entries, maxRules) {
 
 /**
  * Session-scoped allow rule for one host (and, as with every `requestDomains` condition,
- * its subdomains). Higher priority than the block rules.
+ * its subdomains), excluding any more specific listed hosts below it so that a "Continue
+ * anyway" for `example.com` never overrides a separate listing of `bad.example.com`.
+ * Higher priority than the block rules.
  *
  * @param {number} id
  * @param {string} host
+ * @param {string[]} [excluded]  listed indicators that are strict subdomains of `host`
  * @returns {chrome.declarativeNetRequest.Rule}
  */
-export function allowRule(id, host) {
+export function allowRule(id, host, excluded = []) {
+  const condition = { requestDomains: [host], resourceTypes: ['main_frame'] };
+  if (excluded.length > 0) condition.excludedRequestDomains = [...excluded].sort();
   return {
     id,
     priority: ALLOW_RULE_PRIORITY,
     action: { type: 'allow' },
-    condition: { requestDomains: [host], resourceTypes: ['main_frame'] },
+    condition,
   };
+}
+
+/**
+ * Listed indicators that are strict subdomains of `host`.
+ * @param {Map<string, object>} index
+ * @param {string} host
+ * @returns {string[]}
+ */
+export function moreSpecificIndicators(index, host) {
+  const out = [];
+  for (const indicator of index.keys()) {
+    if (indicator !== host && indicator.endsWith(`.${host}`)) out.push(indicator);
+  }
+  return out.sort();
 }
 
 /**

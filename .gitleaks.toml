@@ -7,5 +7,4 @@ useDefault = true
 description = "Public test vectors"
 paths = [
   '''apps/browser-extension/test/fixtures/.*\.json''',
-  '''docs/evaluation-results/.*''',
 ]

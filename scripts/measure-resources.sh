@@ -9,6 +9,7 @@ IDLE=${2:-120}
 OUT=${OUT:-measure-out}
 cargo build -q --release -p cybermesh-cli
 BIN="$PWD/target/release/cybermesh"
+case "$OUT" in ""|/|.|..|/*) echo "refusing OUT=$OUT" >&2; exit 1;; esac
 rm -rf "$OUT"
 "$BIN" demo init --out "$OUT" --evidence datasets/demo/evidence --domains "$DOMAINS" --base-port 4300 >/dev/null
 cd "$OUT"; mkdir -p logs

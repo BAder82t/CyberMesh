@@ -360,13 +360,17 @@ test('envelope structure is strict', async () => {
     JSON.stringify({ ...env, signatures: Array.from({ length: 17 }, () => env.signatures[0]) }),
     JSON.stringify({ ...env, signatures: [{ ...env.signatures[0], extra: 'x' }, env.signatures[1]] }),
     JSON.stringify({ ...env, signatures: [{ keyid: env.signatures[0].keyid }, env.signatures[1]] }),
-    `﻿${text}`,
+    `\ufeff${text}`,
     `${text} x`,
   ];
   for (const c of cases) await rejectsWith(verifyRelease(c, root, NOW), 'envelope');
   // Whitespace and field order in the envelope itself are fine (it is not canonicalised).
   const reordered = JSON.stringify({ signatures: env.signatures, payload: env.payload, payloadType: env.payloadType }, null, 2);
   assert.equal((await verifyRelease(reordered, root, NOW)).digest, expected.valid_digest);
+  // serde also accepts the array form of a struct (fields in declaration order).
+  const arrayForm = JSON.stringify([env.payloadType, env.payload, env.signatures.map((s) => [s.keyid, s.sig])]);
+  assert.equal((await verifyRelease(arrayForm, root, NOW)).digest, expected.valid_digest);
+  await rejectsWith(verifyRelease(JSON.stringify([env.payloadType, env.payload]), root, NOW), 'envelope');
   // 16 signatures (the maximum) are accepted.
   const sixteen = { ...env, signatures: [...env.signatures, ...Array.from({ length: 14 }, () => env.signatures[0])] };
   assert.equal((await verifyRelease(JSON.stringify(sixteen), root, NOW)).digest, expected.valid_digest);

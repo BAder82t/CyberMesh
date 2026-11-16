@@ -115,3 +115,62 @@ async fn disconnected_worker_is_replaced_by_reassignment() {
     );
     assert_eq!(report.faults, 0, "an offline worker is not a faulty worker");
 }
+
+/// Regression: sustained load with large batches must settle every batch (no results lost to
+/// rate limiting, no stalled queue).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sustained_load_settles_every_batch() {
+    let mut ds = cybermesh_tests::domains();
+    for i in 0..600 {
+        ds.push(format!("site{i:04}.example-{}.com", i % 13));
+    }
+    ds.sort();
+    ds.dedup();
+    let h = Harness::start(Options {
+        batch_size: 32,
+        domains: ds,
+        result_timeout: Duration::from_secs(10),
+        ..Options::default()
+    });
+    let (_, report, _, _dir) = h.finish(Duration::from_secs(180)).await;
+    let batches = report.domains_total.div_ceil(32) as u64;
+    assert_eq!(report.verified, batches, "{report:?}");
+    assert_eq!(report.net_dropped_rate_limited, 0);
+    assert_eq!(report.domains_abandoned, 0);
+}
+
+/// Regression: when too few distinct operators remain, the coordinator abandons the batch
+/// after a bounded time instead of stalling forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unassignable_batches_are_abandoned_not_stalled() {
+    let mut h = Harness::start(Options {
+        operators: vec![("org-a", 1), ("org-b", 1), ("org-c", 1)],
+        result_timeout: Duration::from_secs(2),
+        abandon_after: Duration::from_secs(4),
+        ..Options::default()
+    });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Take one of only three operators offline: no batch can reach 3 operators any more.
+    let (_, tx, handle) = h.workers.remove(2);
+    let _ = tx.send(true);
+    let _ = handle.await;
+    let (_, report, _, _dir) = h.finish(Duration::from_secs(90)).await;
+    // The coordinator terminated (finish() did not time out). Every domain reached an
+    // explicit final state: verified, insufficient after the last attempt, or abandoned.
+    let verified_domains: usize = report
+        .records
+        .iter()
+        .filter(|(_, r)| r.status == TaskStatus::Verified)
+        .map(|(_, r)| r.outcomes.len())
+        .sum();
+    let final_insufficient: usize = report
+        .records
+        .iter()
+        .filter(|(_, r)| r.status != TaskStatus::Verified && r.attempt == 2)
+        .count()
+        * 4; // batch_size in Options::default()
+    assert!(
+        verified_domains + final_insufficient + report.domains_abandoned >= report.domains_total,
+        "every domain must reach a final state: {report:?}"
+    );
+}

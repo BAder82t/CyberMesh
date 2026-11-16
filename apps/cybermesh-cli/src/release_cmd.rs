@@ -377,8 +377,14 @@ pub fn appeal(c: AppealCmd) -> Result<()> {
             out,
         } => {
             let indicator = cybermesh_analysis::normalize_domain(&indicator)?;
-            if rationale.len() > 500 || appeal_id.len() > 64 {
-                bail!("rationale must be <= 500 bytes and appeal id <= 64 bytes");
+            let printable = |s: &str| s.bytes().all(|b| (0x20..0x7f).contains(&b));
+            if rationale.len() > 500 || appeal_id.is_empty() || appeal_id.len() > 64 {
+                bail!("rationale must be <= 500 bytes and appeal id 1..=64 bytes");
+            }
+            if !printable(&rationale) || !printable(&appeal_id) {
+                bail!(
+                    "appeal id and rationale must be printable ASCII (they are published in releases)"
+                );
             }
             let d = AppealDecision {
                 v: PROTOCOL_VERSION,

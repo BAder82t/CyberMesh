@@ -46,8 +46,15 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Unit, property, integration and adversarial tests (real libp2p on loopback)
         run: cargo test --locked --workspace --all-features
-      - name: Default-feature build (no adversary simulation, no test keys)
-        run: cargo build --locked --release -p cybermesh-cli
+      - name: Default build refuses adversary-simulation configs
+        run: |
+          cargo build --locked --release
+          ./target/release/cybermesh demo init --out "$RUNNER_TEMP/adv" --evidence datasets/demo/evidence \
+            --domains datasets/demo/domains.txt --adversary flip-verdicts
+          if ./target/release/cybermesh worker run --config "$RUNNER_TEMP/adv/worker-m1.toml" 2> err.txt; then
+            echo "default build accepted an adversary config"; exit 1
+          fi
+          grep -q "adversary-sim feature" err.txt
 
   dependencies:
     runs-on: ubuntu-latest
@@ -66,12 +73,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with: { toolchain: 1.98.1 }
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build the Rust CLI for the JS/Rust differential verifier test
+        run: cargo build --locked -p cybermesh-cli
+        working-directory: .
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 22 }
       - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm test
-      - run: npm run build
+      - run: npm run build -- --dev-trust-root --no-zip
 
   secrets:
     runs-on: ubuntu-latest
@@ -80,7 +93,7 @@ jobs:
         with: { fetch-depth: 0, persist-credentials: false }
       - name: Scan full history for secrets (gitleaks)
         run: |
-          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.28.0 \
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854 \
             git /repo --redact --verbose --config /repo/.gitleaks.toml
 
   sbom:

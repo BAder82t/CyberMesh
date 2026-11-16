@@ -188,6 +188,7 @@ main[data-mode="none"] .pill {
 }
 
 main[data-mode="expired"] .pill,
+main[data-mode="degraded"] .pill,
 main[data-mode="error"] .pill {
   color: var(--danger);
   border-color: var(--danger);

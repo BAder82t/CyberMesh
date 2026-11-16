@@ -67,7 +67,9 @@ export function createFakeChrome(opts = {}) {
       async getDynamicRules() {
         return structuredClone(dynamicRules);
       },
+      failUpdates: false,
       async updateDynamicRules(u) {
+        if (this.failUpdates) throw new Error('internal error');
         if ((u.addRules ?? []).length + dynamicRules.length - (u.removeRuleIds ?? []).length > this.MAX_NUMBER_OF_DYNAMIC_RULES) {
           throw new Error('too many rules');
         }

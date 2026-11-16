@@ -85,6 +85,7 @@ pub struct Options {
     pub replication: usize,
     pub batch_size: usize,
     pub result_timeout: Duration,
+    pub abandon_after: Duration,
     pub domains: Vec<String>,
 }
 
@@ -96,6 +97,7 @@ impl Default for Options {
             replication: 3,
             batch_size: 4,
             result_timeout: Duration::from_secs(6),
+            abandon_after: Duration::from_secs(60),
             domains: domains(),
         }
     }
@@ -135,6 +137,7 @@ pub fn start_worker(
         clock,
         gossip_heartbeat: Duration::from_millis(100),
         adversary: adversary.map(str::to_owned),
+        manifest_source: None,
     };
     let (tx, rx) = watch::channel(false);
     let h = tokio::spawn(async move { run_worker(setup, rx).await.unwrap() });
@@ -169,9 +172,11 @@ impl Harness {
             liveness_secs: 30,
             max_inflight: 4,
             exit_when_done: true,
+            abandon_after: o.abandon_after,
             policy: Policy::default(),
             clock,
             gossip_heartbeat: Duration::from_millis(100),
+            manifest_source: None,
         };
         let (ctx, crx) = watch::channel(false);
         let coordinator = tokio::spawn(async move { run_coordinator(setup, crx).await.unwrap() });

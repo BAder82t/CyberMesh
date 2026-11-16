@@ -23,6 +23,12 @@ pub struct WorkerStanding {
     pub agreed: u64,
     pub unconfirmed: u64,
     pub faults: u64,
+    /// Assignments not answered before the deadline (not a fault: hosts go offline).
+    #[serde(default)]
+    pub missed: u64,
+    /// Consecutive missed assignments; reset by any accepted result.
+    #[serde(default)]
+    pub missed_streak: u64,
     pub last_fault: Option<FaultKind>,
     pub quarantined: bool,
     pub quarantine_reason: Option<String>,
@@ -60,6 +66,7 @@ impl ReputationBook {
         for a in &record.accepted {
             let s = self.workers.entry(a.worker.clone()).or_default();
             s.operator = Some(a.operator.clone());
+            s.missed_streak = 0;
             if a.agreed && record.status == TaskStatus::Verified {
                 s.agreed += 1;
             } else if record.status != TaskStatus::Verified {
@@ -83,6 +90,21 @@ impl ReputationBook {
                     .join(", ")
             ));
         }
+    }
+
+    /// Records assignees that did not answer before the deadline.
+    pub fn record_missed(&mut self, workers: &[KeyId]) {
+        for w in workers {
+            let s = self.workers.entry(w.clone()).or_default();
+            s.missed += 1;
+            s.missed_streak += 1;
+        }
+    }
+
+    /// Workers that missed several assignments in a row are avoided when alternatives exist.
+    #[must_use]
+    pub fn is_unresponsive(&self, kid: &KeyId) -> bool {
+        self.workers.get(kid).is_some_and(|s| s.missed_streak >= 3)
     }
 
     /// Records a provable fault established outside a verification record (e.g. an

@@ -136,6 +136,24 @@ function exactKeys(obj, keys, ordered) {
   return keys.every((k) => Object.prototype.hasOwnProperty.call(obj, k));
 }
 
+/**
+ * serde's derived `Deserialize` for a struct accepts either a JSON object with exactly the
+ * struct's fields (any order) or a JSON array with exactly one element per field, in
+ * declaration order. Returns the fields as an object, or null when neither form matches.
+ * (Used for the envelope and the trust root; canonical payloads are always objects.)
+ */
+function structFields(value, keys) {
+  if (Array.isArray(value)) {
+    if (value.length !== keys.length) return null;
+    const out = Object.create(null);
+    keys.forEach((k, i) => {
+      out[k] = value[i];
+    });
+    return out;
+  }
+  return exactKeys(value, keys, false) ? value : null;
+}
+
 function parseJsonText(text, what) {
   try {
     return parseStrictJson(text);
@@ -185,17 +203,15 @@ export async function parseTrustRoot(input) {
       throw err('trust-root', `trust root is not valid JSON: ${e.message}`);
     }
   }
-  if (!exactKeys(obj, ['network_id', 'threshold', 'signers'], false)) {
-    throw err('trust-root', 'trust root must have exactly network_id, threshold, signers');
-  }
+  obj = structFields(obj, ['network_id', 'threshold', 'signers']);
+  if (!obj) throw err('trust-root', 'trust root must have exactly network_id, threshold, signers');
   if (!isWellFormedString(obj.network_id)) throw err('trust-root', 'network_id must be a string');
   if (!isUint(obj.threshold, U8)) throw err('trust-root', 'threshold must be an integer 0..=255');
   if (!Array.isArray(obj.signers)) throw err('trust-root', 'signers must be an array');
   const signers = [];
-  for (const s of obj.signers) {
-    if (!exactKeys(s, ['label', 'operator', 'public_key'], false)) {
-      throw err('trust-root', 'signer must have exactly label, operator, public_key');
-    }
+  for (const entry of obj.signers) {
+    const s = structFields(entry, ['label', 'operator', 'public_key']);
+    if (!s) throw err('trust-root', 'signer must have exactly label, operator, public_key');
     if (!isWellFormedString(s.label)) throw err('trust-root', 'signer label must be a string');
     if (typeof s.operator !== 'string' || !OPERATOR_RE.test(s.operator)) {
       throw err('trust-root', 'operator id must be 2-32 chars of [a-z0-9-]');
@@ -259,22 +275,22 @@ function parseEnvelope(bytes) {
   } catch {
     throw err('envelope', 'envelope is not valid UTF-8');
   }
-  const env = parseJsonText(text, 'malformed envelope');
-  if (!exactKeys(env, ['payloadType', 'payload', 'signatures'], false)) {
-    throw err('envelope', 'envelope must have exactly payloadType, payload, signatures');
-  }
+  const env = structFields(parseJsonText(text, 'malformed envelope'), ['payloadType', 'payload', 'signatures']);
+  if (!env) throw err('envelope', 'envelope must have exactly payloadType, payload, signatures');
   if (!isWellFormedString(env.payloadType) || !isWellFormedString(env.payload) || !Array.isArray(env.signatures)) {
     throw err('envelope', 'envelope field has the wrong type');
   }
-  for (const s of env.signatures) {
-    if (!exactKeys(s, ['keyid', 'sig'], false) || !isWellFormedString(s.keyid) || !isWellFormedString(s.sig)) {
+  const signatures = env.signatures.map((entry) => {
+    const s = structFields(entry, ['keyid', 'sig']);
+    if (!s || !isWellFormedString(s.keyid) || !isWellFormedString(s.sig)) {
       throw err('envelope', 'signature must be {keyid, sig} strings');
     }
-  }
-  if (env.signatures.length === 0 || env.signatures.length > MAX_SIGNATURES) {
+    return s;
+  });
+  if (signatures.length === 0 || signatures.length > MAX_SIGNATURES) {
     throw err('envelope', `signature count must be 1..=${MAX_SIGNATURES}`);
   }
-  return env;
+  return { payloadType: env.payloadType, payload: env.payload, signatures };
 }
 
 /**

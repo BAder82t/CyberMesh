@@ -77,6 +77,12 @@ impl TaskVerifier {
         &self.task
     }
 
+    /// SHA-256 of the exact task payload this verifier binds results to.
+    #[must_use]
+    pub fn task_digest(&self) -> Digest {
+        self.task_digest
+    }
+
     fn reject(&mut self, worker: Option<KeyId>, digest: Digest, reason: &str) -> SubmitOutcome {
         if self.rejected.len() < MAX_REJECTED {
             self.rejected.push(RejectedResult {

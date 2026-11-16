@@ -72,6 +72,17 @@ impl ResourcePolicy {
         if !(self.cpu_percent > 0.0 && self.cpu_percent <= 100.0) {
             return Err(NodeError::Config("cpu_percent must be in (0, 100]".into()));
         }
+        if !(self.max_load_per_cpu.is_finite() && self.max_load_per_cpu > 0.0) {
+            return Err(NodeError::Config(
+                "max_load_per_cpu must be a positive number".into(),
+            ));
+        }
+        if self.memory_mb > 1 << 20
+            || self.outbound_kib_per_sec > 1 << 30
+            || self.cpu_window_secs > 86_400
+        {
+            return Err(NodeError::Config("resource limit out of range".into()));
+        }
         if self.cpu_window_secs == 0 || self.max_queue == 0 || self.memory_mb == 0 {
             return Err(NodeError::Config(
                 "cpu_window_secs, max_queue and memory_mb must be positive".into(),

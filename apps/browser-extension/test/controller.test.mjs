@@ -317,3 +317,68 @@ test('siteInfo for the popup', async () => {
   await assert.rejects(controller.handleMessage({ type: 'nope' }, {}));
   await assert.rejects(controller.handleMessage(null, {}));
 });
+
+test('failed rule installation is reported as degraded and retried on the next update', async () => {
+  const fake = createFakeChrome();
+  fake.chrome.declarativeNetRequest.failUpdates = true;
+  const { controller } = setup({ fake });
+  const status = await controller.update();
+  assert.equal(status.mode, 'degraded');
+  assert.ok(status.problems.some((p) => p.startsWith('could not install blocking rules')));
+  assert.equal(fake.badge.text, '!');
+  // The navigation check still catches listed hosts meanwhile.
+  await controller.onBeforeNavigate(nav(`http://${expected.block}/`));
+  assert.equal(fake.tabUpdates.length, 1);
+  fake.chrome.declarativeNetRequest.failUpdates = false;
+  assert.equal((await controller.update()).mode, 'active');
+  assert.equal(fake.dynamicRules.length, 2);
+  assert.equal(fake.badge.text, '');
+});
+
+test('a "Continue anyway" exception is revoked when a newer release changes the listing', async () => {
+  let body = fixtureText('release-valid.json');
+  const { fake, controller } = setup({ serve: () => body });
+  await controller.update();
+  await controller.onBeforeNavigate(nav(`http://${expected.warn}/`));
+  await controller.handleMessage({ type: 'continue', indicator: expected.warn }, sender(5));
+  assert.equal(fake.sessionRules.length, 1);
+  // Same listing in a newer release: the exception stays.
+  const same = validReleaseObject();
+  same.sequence = 8;
+  body = signedRelease(same);
+  await controller.update();
+  assert.equal(fake.sessionRules.length, 1);
+  // The warn entry is upgraded to block: the exception is dropped.
+  const upgraded = validReleaseObject();
+  upgraded.sequence = 9;
+  upgraded.entries[0].action = 'block';
+  upgraded.entries[0].confidence = 'high';
+  body = signedRelease(upgraded);
+  assert.equal((await controller.update()).release.sequence, 9);
+  assert.equal(fake.sessionRules.length, 0);
+  await controller.onBeforeNavigate(nav(`http://${expected.warn}/`, 6));
+  assert.deepEqual(fake.tabUpdates.at(-1), { tabId: 6, url: warningUrl(expected.warn) });
+});
+
+test('a "continue" exception for a host never covers a more specific listed host below it', async () => {
+  const rel = validReleaseObject();
+  const warnEntry = rel.entries.find((e) => e.action === 'warn');
+  const blockEntry = rel.entries.find((e) => e.action === 'block');
+  rel.entries = [
+    { ...blockEntry, indicator: 'bad.example.test' },
+    { ...warnEntry, indicator: 'example.test' },
+  ];
+  const text = signedRelease(rel);
+  const { fake, controller } = setup({ serve: () => text });
+  await controller.update();
+  await controller.onBeforeNavigate(nav('http://example.test/'));
+  await controller.handleMessage({ type: 'continue', indicator: 'example.test' }, sender(5));
+  const allow = fake.sessionRules.find((r) => r.action.type === 'allow');
+  assert.deepEqual(allow.condition.requestDomains, ['example.test']);
+  assert.deepEqual(allow.condition.excludedRequestDomains, ['bad.example.test']);
+  // The more specific block entry is still intercepted despite the parent exception.
+  const before = fake.tabUpdates.length;
+  await controller.onBeforeNavigate(nav('http://bad.example.test/login', 6));
+  assert.equal(fake.tabUpdates.length, before + 1, 'bad.example.test must still show the warning');
+  assert.match(fake.tabUpdates.at(-1).url, /warning\.html\?d=bad\.example\.test/);
+});

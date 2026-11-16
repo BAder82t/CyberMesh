@@ -8,8 +8,17 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "alarms", "declarativeNetRequest", "webNavigation", "tabs"],
-  "host_permissions": ["http://127.0.0.1:8088/*"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "declarativeNetRequest",
+    "webNavigation",
+    "activeTab",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8088/*"
+  ],
   "action": {
     "default_title": "CyberMesh",
     "default_popup": "popup.html"

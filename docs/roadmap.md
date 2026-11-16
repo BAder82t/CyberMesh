@@ -11,7 +11,7 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
 
 ## v0.2: harden the pilot
 - **Multiple verifiers.** Run verifiers at two or more organisations, require records from at least two verifiers for `block`, and persist manifest state, detecting manifest equivocation.
-- **Runtime manifest reload.** Drop revoked peers from the allowlist without a restart.
+- **Manifest state.** Persist the highest manifest sequence seen across restarts. Runtime reload with live revocation shipped in v0.1.0.
 - **Network.** Enable gossipsub peer scoring (invalid-message penalties), plus `/dns4` bootstrap and Kademlia discovery for more than 20 nodes.
 - **Witnessed transparency log.** Organisations co-sign log checkpoints using the C2SP `tlog-checkpoint` and `tlog-cosignature` formats. Consistency is checked before co-signing.
 - **Build integrity.** Signed, reproducible binary releases with attestations (SLSA provenance) and a published verification procedure.

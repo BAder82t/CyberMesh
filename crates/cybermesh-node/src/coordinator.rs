@@ -49,9 +49,14 @@ pub struct CoordinatorSetup {
     pub liveness_secs: u64,
     pub max_inflight: usize,
     pub exit_when_done: bool,
+    /// A batch that cannot be assigned to enough distinct operators for this long is
+    /// abandoned (counted in the report) so it never blocks the queue indefinitely.
+    pub abandon_after: Duration,
     pub policy: Policy,
     pub clock: Arc<dyn Clock>,
     pub gossip_heartbeat: Duration,
+    /// Reload the manifest from here every minute (None in tests).
+    pub manifest_source: Option<files::ManifestSource>,
 }
 
 /// Summary returned when the coordinator exits.
@@ -71,12 +76,16 @@ pub struct CoordinatorReport {
     pub insufficient: u64,
     pub domains_total: usize,
     pub domains_skipped: usize,
+    /// Domains in batches abandoned because too few distinct operators were available.
+    pub domains_abandoned: usize,
     /// Issue-to-settle latency per task, milliseconds.
     pub settle_latency_ms: Vec<u64>,
     #[serde(skip)]
     pub records: Vec<(Digest, VerificationRecord)>,
     pub net_bytes_in: u64,
     pub net_bytes_out: u64,
+    pub net_dropped_rate_limited: u64,
+    pub net_dropped_queue_full: u64,
 }
 
 /// Normalises, de-duplicates and sorts input domains. Returns (domains, skipped).
@@ -143,9 +152,14 @@ pub fn setup_from_config(
             liveness_secs: cfg.liveness_secs,
             max_inflight: cfg.max_inflight,
             exit_when_done: cfg.exit_when_done,
+            abandon_after: Duration::from_secs(cfg.result_timeout_secs.saturating_mul(10).max(30)),
             policy: cfg.policy.clone(),
             clock,
             gossip_heartbeat: Duration::from_millis(700),
+            manifest_source: Some(files::ManifestSource {
+                manifest: cfg.manifest.clone(),
+                governance_root: cfg.governance_root.clone(),
+            }),
         },
         skipped,
     ))
@@ -163,6 +177,7 @@ struct LiveWorker {
 struct Batch {
     domains: Vec<String>,
     attempt: u32,
+    queued_at: Instant,
     exclude: BTreeSet<KeyId>,
     first_issued: Option<Instant>,
 }
@@ -190,6 +205,17 @@ pub fn persist_record(
     Ok(Digest::of(&bytes))
 }
 
+/// What the coordinator remembers about a settled task to prove late equivocation.
+struct SettledTask {
+    forget_after: u64,
+    task_digest: Digest,
+    attempt: u32,
+    accepted: BTreeMap<KeyId, Digest>,
+}
+
+/// Late-equivocation faults kept in the report (further ones are only counted).
+const MAX_LATE_FAULTS: usize = 1000;
+
 struct Coordinator {
     s: CoordinatorSetup,
     topics: Topics,
@@ -202,10 +228,19 @@ struct Coordinator {
     report: CoordinatorReport,
     /// Settled tasks: task id -> (forget after, worker -> accepted result digest). Lets the
     /// coordinator prove equivocation even when the conflicting result arrives late.
-    settled: HashMap<String, (u64, BTreeMap<KeyId, Digest>)>,
+    settled: HashMap<String, SettledTask>,
 }
 
 impl Coordinator {
+    /// Writes the reputation book atomically so quarantines survive crashes.
+    fn persist_reputation(&self) {
+        if let Err(e) =
+            files::write_json(&self.s.state_dir.join("reputation.json"), &self.reputation)
+        {
+            warn!(error = %e, "failed to persist reputation");
+        }
+    }
+
     fn choose_assignees(&self, task_id: &str, exclude: &BTreeSet<KeyId>) -> Option<Vec<KeyId>> {
         let now = self.s.clock.now();
         let mut per_op: BTreeMap<&OperatorId, (Digest, &KeyId)> = BTreeMap::new();
@@ -253,7 +288,20 @@ impl Coordinator {
             return Err(batch);
         };
         let task_id = hex_lower(&task_bytes_id);
-        let Some(assignees) = self.choose_assignees(&task_id, &batch.exclude) else {
+        // Previous non-responders are avoided when possible, but exclusion is only a
+        // preference: if it leaves too few operators, fall back to every eligible worker
+        // (quarantined workers stay excluded through the reputation book).
+        let mut avoid = batch.exclude.clone();
+        avoid.extend(
+            self.workers
+                .keys()
+                .filter(|k| self.reputation.is_unresponsive(k))
+                .cloned(),
+        );
+        let Some(assignees) = self
+            .choose_assignees(&task_id, &avoid)
+            .or_else(|| self.choose_assignees(&task_id, &BTreeSet::new()))
+        else {
             return Err(batch);
         };
         let ops: BTreeSet<_> = assignees
@@ -318,10 +366,14 @@ impl Coordinator {
         };
         let missing = inf.verifier.missing();
         let assignees = inf.verifier.task().assignees.clone();
-        let forget_after = inf.verifier.task().expires_at + 3600;
+        let forget_after = inf.verifier.task().expires_at.saturating_add(3600);
+        let task_digest = inf.verifier.task_digest();
+        let attempt = inf.verifier.task().attempt;
         let now = self.s.clock.now();
         let record = inf.verifier.finalize(Some(&self.s.engine), now);
+        self.reputation.record_missed(&missing);
         self.reputation.apply(&record);
+        self.persist_reputation();
         self.report.faults += record.faults.len() as u64;
         match record.status {
             TaskStatus::Verified => self.report.verified += 1,
@@ -341,6 +393,7 @@ impl Coordinator {
         if retry {
             let mut b = inf.batch.clone();
             b.attempt += 1;
+            b.queued_at = Instant::now();
             // Exclude non-responders and faulted workers from the next attempt.
             b.exclude.extend(missing);
             b.exclude
@@ -354,18 +407,20 @@ impl Coordinator {
                 .push(u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX));
         }
         let _ = assignees;
-        self.settled.retain(|_, (t, _)| *t > now);
+        self.settled.retain(|_, s| s.forget_after > now);
         if self.settled.len() < 10_000 {
             self.settled.insert(
                 task_id.to_owned(),
-                (
+                SettledTask {
                     forget_after,
-                    record
+                    task_digest,
+                    attempt,
+                    accepted: record
                         .accepted
                         .iter()
                         .map(|a| (a.worker.clone(), a.result_digest))
                         .collect(),
-                ),
+                },
             );
         }
         info!(task = %task_id, status = ?record.status, recomputed = record.recomputed, published = record.publishable().count(), "task settled");
@@ -391,13 +446,23 @@ impl Coordinator {
         let Some(inf) = self.inflight.get_mut(&task_id) else {
             // Late result for a settled task: a different signed result from a worker whose
             // result was already accepted is provable equivocation.
+            // Only a second result for the *same* task payload and attempt proves
+            // equivocation; a result answering a different payload (e.g. another issuer
+            // re-using the task id) proves nothing about this worker.
             let prior = self
                 .settled
                 .get(&task_id)
-                .and_then(|(_, m)| m.get(&v.message.worker))
+                .filter(|s| {
+                    s.task_digest == v.message.task_digest && s.attempt == v.message.attempt
+                })
+                .and_then(|s| s.accepted.get(&v.message.worker))
                 .copied();
+            let _ = self
+                .replay
+                .check_and_insert(v.payload_digest, now.saturating_add(3600), now);
             if let Some(prior) = prior
                 && prior != v.payload_digest
+                && !self.reputation.is_quarantined(&v.message.worker)
             {
                 let fault = cybermesh_verifier::FaultRecord {
                     worker: v.message.worker.clone(),
@@ -422,8 +487,11 @@ impl Coordinator {
                         .join(format!("{task_id}-{}.envelope.json", fault.worker.short())),
                     &m.data,
                 );
+                self.persist_reputation();
                 self.report.faults += 1;
-                self.report.late_faults.push(fault);
+                if self.report.late_faults.len() < MAX_LATE_FAULTS {
+                    self.report.late_faults.push(fault);
+                }
                 net.report(m, Acceptance::Reject).await;
                 return;
             }
@@ -518,8 +586,11 @@ pub async fn run_coordinator(
         allowed_peers: allowed_peers(&setup.manifest, &me),
         subscribe: vec![topics.results.clone(), topics.presence.clone()],
         heartbeat: setup.gossip_heartbeat,
-        per_peer_burst: 200,
-        per_peer_refill_per_sec: 50,
+        // Per-author allowance (cost = 1 + KiB). Workers cap their own outbound traffic
+        // (64 KiB/s by default); the coordinator allows comfortably more than that so honest
+        // bursts of large results are never dropped, while still bounding each author.
+        per_peer_burst: 4096,
+        per_peer_refill_per_sec: 256,
         ..NetConfig::default()
     };
     let net = cybermesh_network::spawn(keypair, net_cfg)?;
@@ -537,6 +608,7 @@ pub async fn run_coordinator(
         .map(|c| Batch {
             domains: c.to_vec(),
             attempt: 0,
+            queued_at: Instant::now(),
             exclude: BTreeSet::new(),
             first_issued: None,
         })
@@ -558,6 +630,7 @@ pub async fn run_coordinator(
         settled: HashMap::new(),
     };
     let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -577,6 +650,29 @@ pub async fn run_coordinator(
                 Some(_) => {}
                 None => break,
             },
+            _ = manifest_tick.tick() => {
+                if let Some(src) = c.s.manifest_source.clone() {
+                    match files::reload_manifest(&src, &c.s.manifest, c.s.clock.now()) {
+                        files::Reload::Updated(m) => {
+                            info!(sequence = m.sequence, "loaded newer trust manifest");
+                            if m.key_with_role(&c.s.issuer.key_id(), Role::Issuer).is_none()
+                                || m.key_with_role(&c.s.verifier.key_id(), Role::Verifier).is_none()
+                            {
+                                warn!("coordinator keys revoked or roles removed; stopping");
+                                break;
+                            }
+                            net.set_allowed(allowed_peers(&m, &me)).await;
+                            // Revoked workers disappear from assignment immediately.
+                            c.workers.retain(|k, _| m.key_with_role(k, Role::Worker).is_some());
+                            c.s.manifest = m;
+                        }
+                        files::Reload::Equivocation => {
+                            warn!("manifest with the current sequence but different content; ignored");
+                        }
+                        files::Reload::Unchanged => {}
+                    }
+                }
+            }
             _ = tick.tick() => {
                 let expired: Vec<String> = c
                     .inflight
@@ -588,11 +684,21 @@ pub async fn run_coordinator(
                     info!(task = %t, "result deadline reached");
                     c.settle(&t);
                 }
-                while c.inflight.len() < c.s.max_inflight {
+                // Try each pending batch at most once per tick; a batch that cannot be
+                // assigned goes to the back so it never blocks the others, and is abandoned
+                // after `abandon_after`.
+                let mut attempts = c.pending.len();
+                let manifest_valid = c.s.clock.now() < c.s.manifest.expires_at;
+                while manifest_valid && c.inflight.len() < c.s.max_inflight && attempts > 0 {
+                    attempts -= 1;
                     let Some(b) = c.pending.pop_front() else { break };
                     if let Err(b) = c.issue(&net, b).await {
-                        c.pending.push_front(b);
-                        break;
+                        if b.queued_at.elapsed() >= c.s.abandon_after {
+                            warn!(domains = b.domains.len(), attempt = b.attempt, "abandoning batch: not enough distinct operators available");
+                            c.report.domains_abandoned += b.domains.len();
+                        } else {
+                            c.pending.push_back(b);
+                        }
                     }
                 }
                 if c.s.exit_when_done && c.pending.is_empty() && c.inflight.is_empty() {
@@ -605,6 +711,8 @@ pub async fn run_coordinator(
     let snap = net.stats.snapshot();
     c.report.net_bytes_in = snap.bytes_in;
     c.report.net_bytes_out = snap.bytes_out;
+    c.report.net_dropped_rate_limited = snap.dropped_rate_limited;
+    c.report.net_dropped_queue_full = snap.dropped_queue_full;
     let _ = files::write_json(&c.s.state_dir.join("coordinator-report.json"), &c.report);
     net.shutdown().await;
     Ok(c.report)

@@ -28,11 +28,16 @@ cybermesh-anchor.workspace = true
 cybermesh-crypto.workspace = true
 cybermesh-intelligence.workspace = true
 cybermesh-network.workspace = true
-cybermesh-node = { workspace = true, features = ["adversary-sim"] }
+cybermesh-node.workspace = true
 cybermesh-protocol = { workspace = true, features = ["testkit"] }
 cybermesh-verifier.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+# Only test targets enable the adversary simulation (dev-dependency features are not
+# unified into normal workspace builds such as the shipped CLI).
+cybermesh-node = { workspace = true, features = ["adversary-sim"] }
 
 [lints]
 workspace = true

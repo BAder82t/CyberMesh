@@ -10,8 +10,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=${OUT:-demo-out}
 ADVERSARY=${ADVERSARY:-flip-verdicts}
-cargo build -q --release -p cybermesh-cli --features adversary-sim
-BIN="$PWD/target/release/cybermesh"
+# The demo binary includes the adversary simulation; keep it out of target/release so it can
+# never be mistaken for a production build.
+cargo build -q --release -p cybermesh-cli --features adversary-sim --target-dir target/demo
+BIN="$PWD/target/demo/release/cybermesh"
+case "$OUT" in ""|/|.|..|/*) echo "refusing OUT=$OUT" >&2; exit 1;; esac
 rm -rf "$OUT"
 "$BIN" demo init --out "$OUT" --evidence datasets/demo/evidence --domains datasets/demo/domains.txt --adversary "$ADVERSARY"
 cd "$OUT"

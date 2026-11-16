@@ -43,7 +43,11 @@ fn content_type(p: &Path) -> &'static str {
     }
 }
 
-/// Resolves a URL path inside `root`, refusing traversal and hidden files.
+/// Extensions that may be served. Key files (`*.key.json`) are always refused.
+const SERVABLE: &[&str] = &["json", "txt", "html"];
+
+/// Resolves a URL path inside `root` (which must be canonical), refusing traversal, hidden
+/// files, key files, non-allowlisted extensions and symlinks that escape `root`.
 fn resolve(root: &Path, url: &str) -> Option<PathBuf> {
     let path = url.split(['?', '#']).next().unwrap_or("/");
     let rel = Path::new(path.trim_start_matches('/'));
@@ -54,10 +58,27 @@ fn resolve(root: &Path, url: &str) -> Option<PathBuf> {
             _ => return None,
         }
     }
-    out.is_file().then_some(out)
+    let name = out.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let ext_ok = out
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SERVABLE.contains(&e.to_ascii_lowercase().as_str()));
+    if !ext_ok || name.ends_with(".key.json") || name.contains("secret") {
+        return None;
+    }
+    let real = out.canonicalize().ok()?;
+    (real.starts_with(root) && real.is_file()).then_some(real)
 }
 
-pub fn serve(dir: &Path, addr: &str) -> Result<()> {
+pub fn serve(dir: &Path, addr: &str, allow_non_loopback: bool) -> Result<()> {
+    let sock: std::net::SocketAddr = addr
+        .parse()
+        .map_err(|e| anyhow!("bad address {addr}: {e}"))?;
+    if !sock.ip().is_loopback() && !allow_non_loopback {
+        return Err(anyhow!(
+            "refusing to bind {addr}: not a loopback address (pass --public to serve on the network)"
+        ));
+    }
     let server = tiny_http::Server::http(addr).map_err(|e| anyhow!("bind {addr}: {e}"))?;
     eprintln!(
         "serving {} on http://{addr} (phishing test page on *.phish.localhost)",
@@ -121,5 +142,30 @@ mod tests {
         assert!(resolve(&root, "/.secret").is_none());
         assert!(resolve(&root, "/").is_none());
         assert!(resolve(&root, "//etc/passwd").is_none());
+    }
+
+    #[test]
+    fn key_files_symlink_escapes_and_unknown_types_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("keys")).unwrap();
+        std::fs::write(dir.path().join("keys/gov-1.key.json"), b"{}").unwrap();
+        std::fs::write(dir.path().join("binary.bin"), b"x").unwrap();
+        std::fs::write(outside.path().join("leak.json"), b"{}").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            outside.path().join("leak.json"),
+            dir.path().join("link.json"),
+        )
+        .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        assert!(resolve(&root, "/keys/gov-1.key.json").is_none());
+        assert!(resolve(&root, "/KEYS/GOV-1.KEY.JSON").is_none());
+        assert!(resolve(&root, "/binary.bin").is_none());
+        #[cfg(unix)]
+        assert!(
+            resolve(&root, "/link.json").is_none(),
+            "symlink escaping the root"
+        );
     }
 }

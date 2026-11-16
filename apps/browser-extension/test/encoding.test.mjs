@@ -64,7 +64,7 @@ test('strict JSON parser follows serde_json rules', () => {
     'Infinity',
     "'a'",
     '[1] x',
-    '﻿{}',
+    '\ufeff{}',
     '"\\x41"',
     '{"a" 1}',
     '[' .repeat(129) + ']'.repeat(129),

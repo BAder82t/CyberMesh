@@ -22,7 +22,7 @@ const srcDir = path.join(pkgRoot, 'src');
 const defaultOut = path.join(pkgRoot, 'dist');
 const EXTENSION_NAME = 'CyberMesh Phishing Shield';
 
-const usage = `usage: node scripts/build.mjs [--trust-root <path>] [--release-url <url>] [--out <dir>] [--zip <path> | --no-zip]`;
+const usage = `usage: node scripts/build.mjs (--trust-root <path> | --dev-trust-root) [--release-url <url>] [--out <dir>] [--zip <path> | --no-zip]`;
 
 function fail(msg) {
   process.stderr.write(`build: ${msg}\n`);
@@ -32,6 +32,7 @@ function fail(msg) {
 const { values } = parseArgs({
   options: {
     'trust-root': { type: 'string' },
+    'dev-trust-root': { type: 'boolean' },
     'release-url': { type: 'string' },
     out: { type: 'string' },
     zip: { type: 'string' },
@@ -62,6 +63,10 @@ if (releaseUrl.protocol === 'http:' && !loopback) {
   );
 }
 
+if (!values['trust-root'] && !values['dev-trust-root']) {
+  fail('pass --trust-root <path> (or --dev-trust-root for the public test keys used in development)');
+}
+if (values['trust-root'] && values['dev-trust-root']) fail('use either --trust-root or --dev-trust-root');
 const trustRootPath = path.resolve(values['trust-root'] ?? path.join(srcDir, 'trust-root.json'));
 if (!existsSync(trustRootPath)) fail(`trust root not found: ${trustRootPath}`);
 const trustRootText = readFileSync(trustRootPath, 'utf8');
@@ -76,7 +81,13 @@ if (trustRoot.threshold < 1) fail('trust root threshold must be >= 1');
 if (operators.size < trustRoot.threshold) {
   fail(`trust root needs ${trustRoot.threshold} distinct operators but lists only ${operators.size}`);
 }
-if (!values['trust-root']) {
+if (trustRoot.threshold < 2 || operators.size < 2) {
+  process.stderr.write(
+    `build: warning: trust root accepts releases signed by ${trustRoot.threshold} of ${operators.size} operator(s); ` +
+      'a single compromised key could then publish releases. Use a threshold of at least 2.\n',
+  );
+}
+if (values['dev-trust-root']) {
   process.stderr.write(
     'build: warning: using the bundled development trust root (deterministic test keys from ' +
       '`cybermesh dev test-vectors`). Anyone can sign releases for it; pass --trust-root for real use.\n',

@@ -78,7 +78,7 @@ sudo systemctl stop cybermesh-worker                         # immediate shutdow
 ## 4. Leaving the network or reacting to compromise
 
 - **Leaving.** Stop the service and ask governance to remove the member from the next manifest.
-- **Suspected key compromise.** Stop the worker and ask governance to add the key id to `revocations`. Every node ignores a revoked key as soon as it loads the new manifest. Then generate a new key and re-enrol.
+- **Suspected key compromise.** Stop the worker and ask governance to add the key id to `revocations`. Nodes re-read and re-verify their manifest file every 60 seconds. Once the new manifest is deployed, they disconnect the revoked peer and reject its messages. A node whose own key is revoked stops. Then generate a new key and re-enrol.
 - **Quarantine.** If the verifier quarantines your worker for a provable fault, the verification record names the evidence: the signed result digests. Investigate, fix and ask governance to reinstate the worker. Reinstatement is the documented appeals path for operators.
 
 ## 5. Platform support

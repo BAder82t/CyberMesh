@@ -137,6 +137,16 @@ fn finish(
             "ttl must be between 1 and {MAX_RELEASE_TTL_SECS} seconds"
         )));
     }
+    // Refuse to produce a release that consumers would reject.
+    let printable =
+        |s: &str, max: usize| s.len() <= max && s.bytes().all(|b| (0x20..0x7f).contains(&b));
+    if corrections.iter().any(|c| {
+        !printable(&c.indicator, 253) || !printable(&c.reference, 128) || !printable(&c.note, 500)
+    }) {
+        return Err(ReleaseError::Invalid(
+            "correction fields must be printable ASCII within length limits".into(),
+        ));
+    }
     let expires_at = params
         .issued_at
         .checked_add(params.ttl_secs)

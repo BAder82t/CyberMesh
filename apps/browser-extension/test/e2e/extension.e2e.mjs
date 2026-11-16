@@ -232,6 +232,18 @@ test('CyberMesh extension end to end', { timeout: 600_000 }, async (t) => {
       await page.close();
     });
 
+    await t.test('(f0) trailing-dot and upper-case spellings of a listed host are blocked too', async () => {
+      for (const host of [`${BLOCK}.`, BLOCK.toUpperCase(), `deep.sub.${BLOCK}`]) {
+        const page = await context.newPage();
+        const before = pageSrv.log.length;
+        await gotoIntercepted(page, `http://${host}:${pageSrv.port}/`);
+        assert.equal(new URL(page.url()).searchParams.get('d'), BLOCK, host);
+        const leaked = pageSrv.log.slice(before).filter((r) => r.host.replace(/\.$/, '').endsWith(BLOCK));
+        assert.deepEqual(leaked, [], `${host}: the request must be blocked at the network layer`);
+        await page.close();
+      }
+    });
+
     await t.test('(f1) "Go back" returns to the previous page', async () => {
       const page = await context.newPage();
       const start = pageUrl(UNLISTED, '/start');
@@ -284,6 +296,10 @@ test('CyberMesh extension end to end', { timeout: 600_000 }, async (t) => {
       await page.waitForTimeout(1_000);
       assert.equal(page.url(), target);
       assert.match(await page.textContent('#test-page'), /examplebank\.test\.localhost/);
+      // Control for (f0): a trailing-dot host does reach the server when it is not listed,
+      // so the absence of requests for the listed trailing-dot host proves the block rule.
+      await page.goto(`http://${UNLISTED}.:${pageSrv.port}/dot`, { timeout: 15_000 });
+      assert.ok(pageSrv.log.some((r) => r.host === `${UNLISTED}.` && r.url === '/dot'));
       await page.close();
     });
 
@@ -347,7 +363,7 @@ test('CyberMesh extension end to end', { timeout: 600_000 }, async (t) => {
       assert.ok(releaseFetches.length >= 2, 'request recording works (initial download and "Update now")');
       assert.deepEqual(others, []);
       assert.ok(releaseSrv.log.every((r) => r.method === 'GET' && r.url === '/release.json'), 'release server saw only GET /release.json');
-      const unexpected = pageSrv.log.filter((r) => ![BLOCK, WARN, UNLISTED].includes(r.host) || r.host === BLOCK);
+      const unexpected = pageSrv.log.filter((r) => ![WARN, UNLISTED, `${UNLISTED}.`].includes(r.host));
       assert.deepEqual(unexpected, [], 'test-page server saw only the navigations made by the test (never the blocked host)');
       // Defence in depth: the CSP stops the extension (worker and pages) from contacting
       // any other origin.

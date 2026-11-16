@@ -8,6 +8,7 @@ const MODES = {
   active: ['Protected', 'A verified release is in use.'],
   offline: ['Offline (cached)', 'The release server could not be reached; the cached release is still valid and in use.'],
   cached: ['Cached', 'The latest download was rejected; the previous verified release is still in use.'],
+  degraded: ['Degraded', 'The release is verified, but its blocking rules could not be installed. Listed sites are only caught by the navigation check. Retrying on the next update.'],
   expired: ['Intelligence expired', 'The last verified release has expired. No sites are blocked until a new release is verified.'],
   none: ['No intelligence', 'No verified release has been downloaded yet.'],
   error: ['Error', 'The extension is misconfigured.'],

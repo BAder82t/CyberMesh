@@ -9,7 +9,7 @@ site. It never sends their browsing history anywhere.
 
 Concretely, in the current MVP:
 
-- **Organisations run small workers.** A worker is an opt-in process capped at about 1 % of one CPU core. In our measurements a worker used 0.08–0.25 % CPU and 9–13 MiB of memory. Workers analyse domains with a deterministic, explainable engine and sign their results.
+- **Organisations run small workers.** A worker is an opt-in process capped at about 1 % of one CPU core. In our measurements a worker used 0.03–0.28 % CPU and 9–14 MiB of memory. Workers analyse domains with a deterministic, explainable engine and sign their results.
 - **Results are checked, not voted on.** The verifier recomputes every result. A worker whose signed answer differs has provably misbehaved and is quarantined. Colluding workers cannot cause a block.
 - **Releases are co-signed.** Two organisations rebuild each release independently and co-sign it only if they get byte-identical output. A single stolen signing key cannot publish a release.
 - **Browsers verify offline.** The browser extension checks signatures against a pinned trust root and keeps protecting users from the cached list during an outage.
@@ -106,8 +106,8 @@ not created as separate crates; see [docs/architecture.md](docs/architecture.md#
 
 ## Security
 
-Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Two independent internal
-reviews (security and correctness) were performed and their findings fixed; they are summarised in
+Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Three independent internal
+reviews (two security passes and one correctness review) were performed and their findings fixed; they are summarised in
 [docs/security-review.md](docs/security-review.md). No external audit has been performed.
 
 ## Licence

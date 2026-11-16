@@ -21,7 +21,7 @@
 
 - **Workers** keep a status file and, optionally, logs. They hold no user data.
 - **The coordinator** keeps signed verification records and results. These are public-domain information plus pseudonymous worker keys.
-- **The extension** keeps the current release, the anti-rollback state, the strict-mode setting, and the last attempted URL *per tab, in memory only, so that "continue" works*. That URL is discarded with the tab and is never written to persistent storage or transmitted.
+- **The extension** keeps the current release, the anti-rollback state, the strict-mode setting, and the attempted URL *of a listed host only*, per tab, in memory and `chrome.storage.session` (memory-backed, cleared when the browser closes) so that "Continue anyway" works. URLs of unlisted sites leave no trace, and nothing is transmitted.
 
 ## Residual risks
 

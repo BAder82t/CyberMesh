@@ -63,6 +63,13 @@ deploy/docker/demo.sh up     # build image, start 6 workers, run coordinator, re
 deploy/docker/demo.sh down   # remove containers and the demo volume
 ```
 
+Each container mounts:
+- the shared, non-secret files read-only;
+- **only its own key**, read-only;
+- only its own state directory, read-write.
+
+The two release signers run as separate containers, each holding one organisation's key. The web container sees only the published files. Docker Engine 26 or later is required, for volume subpaths.
+
 The containers run as a non-root user with:
 - a read-only root filesystem;
 - all capabilities dropped and `no-new-privileges`;

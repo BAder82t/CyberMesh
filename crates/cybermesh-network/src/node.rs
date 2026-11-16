@@ -117,6 +117,7 @@ enum Command {
         source: PeerId,
         acceptance: Acceptance,
     },
+    SetAllowed(Vec<PeerId>),
     Shutdown,
 }
 
@@ -205,6 +206,12 @@ impl NetworkHandle {
     /// Next network event (`None` once the node stopped).
     pub async fn next_event(&self) -> Option<NetEvent> {
         self.events.lock().await.recv().await
+    }
+
+    /// Replaces the set of allowed peers (e.g. after a manifest update). Peers that are no
+    /// longer allowed are disconnected immediately and their messages rejected.
+    pub async fn set_allowed(&self, peers: Vec<PeerId>) {
+        let _ = self.commands.send(Command::SetAllowed(peers)).await;
     }
 
     pub async fn shutdown(&self) {
@@ -310,7 +317,7 @@ pub fn spawn(keypair: identity::Keypair, cfg: NetConfig) -> Result<NetworkHandle
     let (ev_tx, ev_rx) = mpsc::channel::<NetEvent>(cfg.inbound_queue.max(1));
     let stats = Arc::new(NetStats::default());
     let task_stats = Arc::clone(&stats);
-    let allowed: HashSet<PeerId> = cfg.allowed_peers.iter().copied().collect();
+    let mut allowed: HashSet<PeerId> = cfg.allowed_peers.iter().copied().collect();
     let bootstrap = cfg.bootstrap.clone();
     let redial = cfg.redial_interval;
     let mut limiter: RateLimiter<PeerId> = RateLimiter::new(
@@ -343,6 +350,17 @@ pub fn spawn(keypair: identity::Keypair, cfg: NetConfig) -> Result<NetworkHandle
                                 NetStats::add(&task_stats.publish_failures, 1);
                             }
                             let _ = reply.send(res);
+                        }
+                        Some(Command::SetAllowed(peers)) => {
+                            let new: HashSet<PeerId> = peers.into_iter().collect();
+                            for p in allowed.difference(&new) {
+                                swarm.behaviour_mut().allowed.disallow_peer(*p);
+                                info!(peer = %p, "peer no longer allowed; disconnected");
+                            }
+                            for p in new.difference(&allowed) {
+                                swarm.behaviour_mut().allowed.allow_peer(*p);
+                            }
+                            allowed = new;
                         }
                         Some(Command::Report { id, source, acceptance }) => {
                             if acceptance == Acceptance::Reject {

@@ -75,6 +75,9 @@ enum Cmd {
         dir: PathBuf,
         #[arg(long, default_value = "127.0.0.1:8088")]
         addr: String,
+        /// Allow binding a non-loopback address.
+        #[arg(long)]
+        public: bool,
     },
     /// Local demonstration helpers.
     #[command(subcommand)]
@@ -226,7 +229,7 @@ async fn main() -> Result<()> {
         Cmd::Release(c) => release_cmd::run(c),
         Cmd::Appeal(c) => release_cmd::appeal(c),
         Cmd::Anchor(c) => anchor_cmd::run(c),
-        Cmd::Serve { dir, addr } => serve::serve(&dir, &addr),
+        Cmd::Serve { dir, addr, public } => serve::serve(&dir, &addr, public),
         Cmd::Demo(c) => demo::run(c),
         Cmd::Eval(a) => eval::eval(&a),
         Cmd::Bench { evidence, n } => eval::bench(&evidence, n),

@@ -37,6 +37,7 @@ function buildCorpus() {
     t3: JSON.stringify({ ...tr, threshold: 3 }),
     t0: JSON.stringify({ ...tr, threshold: 0 }),
     t1: JSON.stringify({ ...tr, threshold: 1 }),
+    array: JSON.stringify([tr.network_id, tr.threshold, tr.signers.map((x) => [x.label, x.operator, x.public_key])]),
   };
   const cases = [];
   const add = (name, envelope, opts = {}) =>
@@ -97,7 +98,7 @@ function buildCorpus() {
   text('unknown', canonical.replace('{"v":1,', '{"v":1,"x":1,'));
   text('missing-previous', canonical.replace('"previous":null,', ''));
   text('lone-surrogate', canonical.replace('"generator":"cybermesh-intelligence/0.1.0"', '"generator":"\\ud800"'));
-  text('bom', `﻿${canonical}`);
+  text('bom', `\ufeff${canonical}`);
   text('enum-object', canonical.replace('"action":"warn"', '"action":{"warn":null}'));
 
   const env = JSON.parse(valid);
@@ -109,7 +110,13 @@ function buildCorpus() {
   add('env/unpadded', JSON.stringify({ ...env, payload: env.payload.replace(/=+$/, '') }));
   add('env/bad-keyids', JSON.stringify({ ...env, signatures: [{ keyid: 'zz', sig: '!' }, { keyid: ORG_C.keyId.toUpperCase(), sig: env.signatures[0].sig }, ...env.signatures] }));
   add('env/three-ops-t3', signedRelease(validReleaseObject(), [ORG_A, ORG_B, ORG_C]), { root: 't3' });
-  add('env/bom', `﻿${valid}`);
+  add('env/array-form', JSON.stringify([env.payloadType, env.payload, env.signatures]));
+  add('env/array-signatures', JSON.stringify({ ...env, signatures: env.signatures.map((x) => [x.keyid, x.sig]) }));
+  add('env/array-4', JSON.stringify([env.payloadType, env.payload, env.signatures, 1]));
+  add('env/array-2', JSON.stringify([env.payloadType, env.payload]));
+  add('env/array-sig-3', JSON.stringify({ ...env, signatures: env.signatures.map((x) => [x.keyid, x.sig, 'x']) }));
+  add('env/array-root', valid, { root: 'array' });
+  add('env/bom', `\ufeff${valid}`);
   add('env/trailing', `${valid}\n`);
 
   // Random edits of the canonical payload, re-signed so that only parsing/validation decides.

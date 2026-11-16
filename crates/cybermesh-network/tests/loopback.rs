@@ -174,3 +174,23 @@ async fn reconnects_after_peer_restart() {
         .expect("delivery after restart");
     assert_eq!(m.data, b"after");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_peer_is_disconnected_and_ignored() {
+    let (ka, kb) = (key(11), key(12));
+    let (pa, pb) = (ka.public().to_peer_id(), kb.public().to_peer_id());
+    let a = spawn(ka, cfg(vec![pb], vec![])).unwrap();
+    let addr_a = listening_addr(&a).await;
+    let b = spawn(kb, cfg(vec![pa], vec![addr_a])).unwrap();
+    publish_until_ok(&b, b"before revocation".to_vec()).await;
+    assert!(next_message(&a, Duration::from_secs(10)).await.is_some());
+    // A loads a manifest in which B is revoked.
+    a.set_allowed(vec![]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    for _ in 0..10 {
+        let _ = b.publish(TOPIC, b"after revocation".to_vec()).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let got = next_message(&a, Duration::from_secs(2)).await;
+    assert!(got.is_none(), "message from a revoked peer was delivered");
+}

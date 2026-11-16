@@ -45,10 +45,33 @@ Findings from the end-to-end adversarial tests (same session):
 | Replays were dropped but not counted. | Counted (`results_replayed`). Transport-level deduplication documented. | `replayed_results_are_rejected` |
 | Phishing on user-content hosts (`*.weebly.com`) was exempted by the platform's popularity. | `hosting-platforms` evidence kind (engine 0.3.0). | `customer_sites_on_hosting_platforms_are_not_exempted` |
 
+## Second pass: node runtimes, CLI, browser extension, deployment
+
+A second independent internal review covered code written after the first pass. It found no CRITICAL or HIGH issues, and the fixes below address its findings.
+
+| Severity | Finding | Fix | Test or evidence |
+|---|---|---|---|
+| MEDIUM (confirmed) | `adversary-sim` was unified into ordinary workspace builds through the tests crate, so a root `cargo build` produced a CLI that honoured adversary configs. | The feature moved to a dev-dependency. The demo builds into `target/demo`. CI asserts that the default build refuses adversary configs. | CI step; `cargo tree` shows no `adversary-sim` in the normal graph |
+| MEDIUM (confirmed) | Nodes never reloaded the trust manifest, so revoked keys stayed trusted until restart. | The manifest is re-verified every 60 s and only a strictly newer sequence is accepted. Same-sequence equivocation is flagged. The live allowlist update disconnects revoked peers. A node whose own key is revoked stops. Expired manifests stop task processing. | `reload_accepts_only_newer_manifests_and_flags_equivocation`, `revoked_peer_is_disconnected_and_ignored` |
+| MEDIUM (confirmed) | Quarantines were persisted only on clean shutdown. | `reputation.json` is written atomically after every change. | — |
+| MEDIUM | The late-equivocation proof ignored the task digest, so another issuer reusing a task id could frame an honest worker. | The proof requires the same task digest and attempt. | `equivocation_is_proven_with_both_signed_results` |
+| MEDIUM | The late-equivocation path could be flooded. | Replay-cached, skipped for workers that are already quarantined, list capped. | — |
+| MEDIUM (confirmed) | `cybermesh serve` returned `*.key.json` files and followed symlinks out of the served directory. | Extension allowlist, key files refused, path canonicalised and prefix-checked, non-loopback binds need `--public`. | `key_files_symlink_escapes_and_unknown_types_are_refused` |
+| MEDIUM (confirmed) | The extension build silently fell back to the public test trust root. | `--trust-root` or an explicit `--dev-trust-root` is required. The build warns about thresholds below 2. | build script |
+| MEDIUM | A "Continue anyway" exception for a host could override a more specific listed host beneath it. | The DNR allow rule excludes more specific indicators. Exceptions must match the same entry and are revoked when the listing set changes. | extension test `a "continue" exception ... never covers a more specific listed host` |
+| MEDIUM | All Compose containers mounted the whole key volume. | Volume subpaths: each service gets only its own key (read-only) and its own state. The web container sees only `public/`. | Verified in a running demo (`ls /demo/keys` inside `worker-m1`) |
+| LOW | `appeal decide` accepted non-ASCII text, producing releases that consumers rejected. | Validated in the CLI and in the release builder. | — |
+| LOW | Governor accepted NaN or overflowing limits. | Validated. | — |
+| LOW | Unresponsive workers were never deprioritised. | Missed-assignment counters. Workers with 3 or more consecutive misses are avoided when alternatives exist. | — |
+| LOW | `tabs` permission was broader than needed. | `activeTab`. | extension end-to-end test (14/14) |
+| LOW | Supply chain: base images, gitleaks image and the nightly fuzz toolchain were unpinned, the gitleaks allowlist was broad, and evaluation inputs were unverified. | Digests and versions pinned, allowlist narrowed, phishing snapshots verified against pinned SHA-256. | CI files |
+| LOW | `.dockerignore` missed `fuzz/target` and other outputs, giving a 642 MB build context. | Excluded. | — |
+
 ## Accepted or deferred (documented residual risk)
 
-- **Manifest equivocation at equal sequence.** This is not detected. Nodes load the manifest at start-up; persisting manifest state is on the roadmap.
-- **Revoked peers stay connected** until the node restarts with the new manifest. Their messages are already rejected at the application layer.
+- **Manifest state on restart.** A node that restarts loads whatever manifest file is on disk; it does not persist the highest sequence it has seen across restarts.
+- **Extension trust root.** The extension's trust root is bundled, so a revoked release key is removed only by shipping an extension update.
+- **Synchronous analysis.** `assess_task` runs on the worker's async loop. It costs about 1 ms per 32-domain task.
 - **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced.
 - **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It is a compile-time proc-macro reached through libp2p.
 - **Single verifier per network in the MVP.** Run verifiers at two or more organisations (roadmap).

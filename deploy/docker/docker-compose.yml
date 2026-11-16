@@ -1,27 +1,23 @@
 # Local CyberMesh demonstration: one coordinator (org-a) and six workers from five
 # organisations, one of them simulating a compromised operator (org-m). Run via
-# deploy/docker/demo.sh. Each worker is capped with cgroup limits in addition to the
-# worker's own cooperative 1 % CPU budget.
+# deploy/docker/demo.sh. Requires Docker Engine >= 26 (volume subpaths).
+#
+# Isolation: every service mounts the shared, non-secret material read-only, ONLY its own
+# key directory read-only, and ONLY its own state directory read-write. No container can
+# read another participant's key. Workers are additionally capped with cgroup limits on top
+# of the worker's own cooperative 1 % CPU budget.
 name: cybermesh-demo
 
-x-node: &node
+x-hardening: &hardening
   image: cybermesh:demo
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
-  volumes: [demo:/demo]
   environment:
     RUST_LOG: info,libp2p=warn
   depends_on:
     init:
       condition: service_completed_successfully
-
-x-worker: &worker
-  <<: *node
-  restart: unless-stopped
-  cpus: "0.10"
-  mem_limit: 200m
-  pids_limit: 64
 
 services:
   init:
@@ -31,59 +27,276 @@ services:
       dockerfile: deploy/docker/Dockerfile
       args:
         FEATURES: adversary-sim
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     volumes: [demo:/demo]
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - >-
-        test -f /demo/manifest.json ||
-        cybermesh demo init --out /demo --mode docker --adversary flip-verdicts
-        --evidence /opt/cybermesh/datasets/demo/evidence
-        --domains /opt/cybermesh/datasets/demo/domains.txt
+      - |
+        set -e
+        test -f /demo/shared/manifest.json && exit 0
+        cybermesh demo init --out /demo/shared --mode docker --adversary flip-verdicts \
+          --evidence /opt/cybermesh/datasets/demo/evidence --domains /opt/cybermesh/datasets/demo/domains.txt
+        for f in /demo/shared/keys/*.key.json; do
+          n=$$(basename "$$f" .key.json); mkdir -p "/demo/secrets/$$n"; mv "$$f" "/demo/secrets/$$n/"
+        done
+        # Per-node state (mounted read-write only into that node) plus empty mount points
+        # inside the read-only shared tree.
+        for s in coordinator a1 b1 b2 c1 d1 m1; do mkdir -p "/demo/state/$$s" "/demo/shared/state/$$s"; done
     networks: {mesh: {}}
 
   coordinator:
-    <<: *node
+    <<: *hardening
     command: ["coordinator", "run", "--config", "/demo/coordinator.toml"]
     restart: "no"
     profiles: [run]
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/coordinator }
+      - type: volume
+        source: demo
+        target: /demo/state/coordinator
+        read_only: false
+        volume: { subpath: state/coordinator }
     networks: {mesh: {ipv4_address: 172.28.0.10}}
 
   worker-a1:
-    <<: *worker
+    <<: *hardening
     command: ["worker", "run", "--config", "/demo/worker-a1.toml"]
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 200m
+    pids_limit: 64
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/worker-a1 }
+      - type: volume
+        source: demo
+        target: /demo/state/a1
+        read_only: false
+        volume: { subpath: state/a1 }
     networks: {mesh: {ipv4_address: 172.28.0.11}}
+
   worker-b1:
-    <<: *worker
+    <<: *hardening
     command: ["worker", "run", "--config", "/demo/worker-b1.toml"]
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 200m
+    pids_limit: 64
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/worker-b1 }
+      - type: volume
+        source: demo
+        target: /demo/state/b1
+        read_only: false
+        volume: { subpath: state/b1 }
     networks: {mesh: {ipv4_address: 172.28.0.12}}
+
   worker-b2:
-    <<: *worker
+    <<: *hardening
     command: ["worker", "run", "--config", "/demo/worker-b2.toml"]
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 200m
+    pids_limit: 64
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/worker-b2 }
+      - type: volume
+        source: demo
+        target: /demo/state/b2
+        read_only: false
+        volume: { subpath: state/b2 }
     networks: {mesh: {ipv4_address: 172.28.0.13}}
+
   worker-c1:
-    <<: *worker
+    <<: *hardening
     command: ["worker", "run", "--config", "/demo/worker-c1.toml"]
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 200m
+    pids_limit: 64
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/worker-c1 }
+      - type: volume
+        source: demo
+        target: /demo/state/c1
+        read_only: false
+        volume: { subpath: state/c1 }
     networks: {mesh: {ipv4_address: 172.28.0.14}}
+
   worker-d1:
-    <<: *worker
+    <<: *hardening
     command: ["worker", "run", "--config", "/demo/worker-d1.toml"]
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 200m
+    pids_limit: 64
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/worker-d1 }
+      - type: volume
+        source: demo
+        target: /demo/state/d1
+        read_only: false
+        volume: { subpath: state/d1 }
     networks: {mesh: {ipv4_address: 172.28.0.15}}
+
   worker-m1:
-    <<: *worker
+    <<: *hardening
     command: ["worker", "run", "--config", "/demo/worker-m1.toml"]
+    restart: unless-stopped
+    cpus: "0.10"
+    mem_limit: 200m
+    pids_limit: 64
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/worker-m1 }
+      - type: volume
+        source: demo
+        target: /demo/state/m1
+        read_only: false
+        volume: { subpath: state/m1 }
     networks: {mesh: {ipv4_address: 172.28.0.16}}
 
-  cli:
-    <<: *node
+  release-org-a:
+    <<: *hardening
     profiles: [tools]
     entrypoint: ["/bin/sh", "-c"]
-    networks: {mesh: {}}
+    working_dir: /demo/public
+    network_mode: none
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/release-org-a }
+      - type: volume
+        source: demo
+        target: /demo/state/coordinator
+        read_only: true
+        volume: { subpath: state/coordinator }
+      - type: volume
+        source: demo
+        target: /demo/public
+        read_only: false
+        volume: { subpath: shared/public }
+
+  release-org-b:
+    <<: *hardening
+    profiles: [tools]
+    entrypoint: ["/bin/sh", "-c"]
+    working_dir: /demo/public
+    network_mode: none
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/release-org-b }
+      - type: volume
+        source: demo
+        target: /demo/state/coordinator
+        read_only: true
+        volume: { subpath: state/coordinator }
+      - type: volume
+        source: demo
+        target: /demo/public
+        read_only: false
+        volume: { subpath: shared/public }
+
+  status:
+    <<: *hardening
+    profiles: [tools]
+    entrypoint: ["/bin/sh", "-c"]
+    network_mode: none
+    volumes:
+      - type: volume
+        source: demo
+        target: /state
+        read_only: true
+        volume: { subpath: state }
 
   web:
-    <<: *node
+    <<: *hardening
     profiles: [web]
-    command: ["serve", "--dir", "/demo/public", "--addr", "0.0.0.0:8088"]
+    command: ["serve", "--dir", "/srv", "--addr", "0.0.0.0:8088", "--public"]
     ports: ["127.0.0.1:8088:8088"]
+    volumes:
+      - type: volume
+        source: demo
+        target: /srv
+        read_only: true
+        volume: { subpath: shared/public }
     networks: {mesh: {}}
 
 networks:
