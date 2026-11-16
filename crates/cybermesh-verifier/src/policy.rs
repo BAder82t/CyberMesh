@@ -21,9 +21,6 @@ pub enum Classification {
 pub struct Policy {
     /// Distinct operators that must agree before anything is published.
     pub min_operators: usize,
-    /// Probability (per mille) of recomputing a unanimous task. Disagreement always
-    /// triggers recomputation when the verifier has matching evidence.
-    pub recompute_per_mille: u16,
     /// Seconds after task expiry during which results are still accepted.
     pub result_grace_secs: u64,
     /// Minimum score for an advisory warning.
@@ -36,7 +33,6 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             min_operators: 3,
-            recompute_per_mille: 250,
             result_grace_secs: 60,
             warn_min_score_bp: 4000,
             block_min_score_bp: 7000,
@@ -45,6 +41,20 @@ impl Default for Policy {
 }
 
 impl Policy {
+    /// Rejects unsafe or inconsistent settings.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.min_operators == 0 {
+            return Err("min_operators must be at least 1".into());
+        }
+        if self.warn_min_score_bp == 0
+            || self.warn_min_score_bp > self.block_min_score_bp
+            || self.block_min_score_bp > 10_000
+        {
+            return Err("require 0 < warn_min_score_bp <= block_min_score_bp <= 10000".into());
+        }
+        Ok(())
+    }
+
     /// Classifies an assessment that `agreeing_operators` operators produced identically.
     ///
     /// `feed_corroborated` must come from the verifier's own evidence, never from the

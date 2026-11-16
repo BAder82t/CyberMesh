@@ -43,11 +43,20 @@ impl WorkerStanding {
 #[serde(deny_unknown_fields)]
 pub struct ReputationBook {
     pub workers: BTreeMap<KeyId, WorkerStanding>,
+    /// `task_id/attempt` of records already applied (makes `apply` idempotent).
+    #[serde(default)]
+    pub applied: std::collections::BTreeSet<String>,
 }
 
 impl ReputationBook {
     /// Applies one verification record.
     pub fn apply(&mut self, record: &VerificationRecord) {
+        if !self
+            .applied
+            .insert(format!("{}/{}", record.task_id, record.attempt))
+        {
+            return;
+        }
         for a in &record.accepted {
             let s = self.workers.entry(a.worker.clone()).or_default();
             s.operator = Some(a.operator.clone());

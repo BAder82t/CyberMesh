@@ -271,9 +271,11 @@ mod tests {
         assert_eq!(log2_q16(1), 0);
         assert_eq!(log2_q16(2), 1 << 16);
         assert_eq!(log2_q16(1024), 10 << 16);
-        // log2(3) = 1.58496 -> 103872.6 in Q16; truncation gives 103872 or one ulp below.
-        let l3 = log2_q16(3);
-        assert!((103_871..=103_873).contains(&l3), "{l3}");
+        // Exact pinned values (integer algorithm, identical on every platform).
+        assert_eq!(log2_q16(3), 103_872);
+        assert_eq!(log2_q16(5), 152_169);
+        assert_eq!(log2_q16(63), 391_727);
+        assert_eq!(entropy_q16("paypal-login"), 202_176);
     }
 
     #[test]

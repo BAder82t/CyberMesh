@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::policy::Classification;
 
+/// Rejections stored per task; further ones are only counted (bounds memory under flooding).
+pub const MAX_REJECTED: usize = 64;
+
 /// Overall status of a task after verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -96,6 +99,8 @@ pub struct VerificationRecord {
     pub accepted_assessments_digest: Option<Digest>,
     pub accepted: Vec<AcceptedResult>,
     pub rejected: Vec<RejectedResult>,
+    /// Rejections beyond the per-task cap of [`MAX_REJECTED`] (counted, not stored).
+    pub rejected_overflow: u64,
     pub faults: Vec<FaultRecord>,
     pub outcomes: Vec<DomainOutcome>,
     pub verified_at: u64,

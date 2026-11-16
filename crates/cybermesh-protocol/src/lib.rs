@@ -19,6 +19,7 @@ pub mod manifest;
 pub mod messages;
 pub mod ratelimit;
 pub mod replay;
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod validate;
 

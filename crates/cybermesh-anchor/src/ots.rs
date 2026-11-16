@@ -16,6 +16,11 @@ use crate::anchor::{AnchorError, AnchorStatus};
 
 const MAX_MSG: usize = 4096;
 const MAX_DEPTH: usize = 256;
+/// Total nodes in one proof (bounds breadth; depth is bounded by `MAX_DEPTH`).
+const MAX_NODES: usize = 4096;
+/// Total message bytes stored across all nodes of one proof (bounds amplification from
+/// cheap ops such as `reverse` on a 4 KiB message).
+const MAX_TOTAL_MSG_BYTES: usize = 2 * 1024 * 1024;
 const MAJOR_VERSION: u64 = 1;
 const TAG_PENDING: [u8; 8] = [0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e];
 const TAG_BITCOIN: [u8; 8] = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
@@ -117,6 +122,28 @@ fn write_varbytes(out: &mut Vec<u8>, b: &[u8]) {
 struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
+    nodes: usize,
+    msg_bytes: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(buf: &'a [u8], pos: usize) -> Self {
+        Self {
+            buf,
+            pos,
+            nodes: 0,
+            msg_bytes: 0,
+        }
+    }
+
+    fn charge(&mut self, msg_len: usize) -> Result<(), AnchorError> {
+        self.nodes += 1;
+        self.msg_bytes += msg_len;
+        if self.nodes > MAX_NODES || self.msg_bytes > MAX_TOTAL_MSG_BYTES {
+            return Err(AnchorError::InvalidReceipt("proof exceeds size budget".into()));
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Reader<'a> {
@@ -139,6 +166,9 @@ impl<'a> Reader<'a> {
         let mut v: u64 = 0;
         for shift in (0..64).step_by(7) {
             let b = self.byte()?;
+            if shift == 63 && (b & 0x7f) > 1 {
+                return Err(AnchorError::InvalidReceipt("varuint overflows u64".into()));
+            }
             v |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
                 return Ok(v);
@@ -182,11 +212,8 @@ impl Attestation {
         let mut tag = [0u8; 8];
         tag.copy_from_slice(r.bytes(8)?);
         let payload = r.varbytes(8192)?;
-        let mut pr = Reader {
-            buf: payload,
-            pos: 0,
-        };
-        Ok(match tag {
+        let mut pr = Reader::new(payload, 0);
+        let att = match tag {
             TAG_PENDING => {
                 let uri = pr.varbytes(1000)?;
                 let uri = std::str::from_utf8(uri)
@@ -201,11 +228,17 @@ impl Attestation {
             TAG_BITCOIN => Attestation::Bitcoin {
                 height: pr.varuint()?,
             },
-            _ => Attestation::Unknown {
-                tag,
-                payload: payload.to_vec(),
-            },
-        })
+            _ => {
+                return Ok(Attestation::Unknown {
+                    tag,
+                    payload: payload.to_vec(),
+                });
+            }
+        };
+        if pr.pos != payload.len() {
+            return Err(AnchorError::InvalidReceipt("trailing bytes in attestation".into()));
+        }
+        Ok(att)
     }
 }
 
@@ -258,7 +291,7 @@ impl Timestamp {
 
     /// Parses a timestamp whose root message is `msg`.
     pub fn deserialize(buf: &[u8], msg: Vec<u8>) -> Result<Self, AnchorError> {
-        let mut r = Reader { buf, pos: 0 };
+        let mut r = Reader::new(buf, 0);
         let t = Self::read(&mut r, msg, 0)?;
         if r.pos != buf.len() {
             return Err(AnchorError::InvalidReceipt("trailing bytes after timestamp".into()));
@@ -270,6 +303,7 @@ impl Timestamp {
         if depth > MAX_DEPTH {
             return Err(AnchorError::InvalidReceipt("timestamp too deep".into()));
         }
+        r.charge(msg.len())?;
         let mut t = Timestamp {
             msg,
             ..Timestamp::default()
@@ -337,10 +371,7 @@ impl DetachedTimestamp {
         if bytes.len() < magic.len() || bytes[..magic.len()] != magic[..] {
             return Err(AnchorError::InvalidReceipt("not an OpenTimestamps proof".into()));
         }
-        let mut r = Reader {
-            buf: bytes,
-            pos: magic.len(),
-        };
+        let mut r = Reader::new(bytes, magic.len());
         if r.varuint()? != MAJOR_VERSION {
             return Err(AnchorError::InvalidReceipt("unsupported ots version".into()));
         }
@@ -505,35 +536,71 @@ mod client {
         Ok(dt)
     }
 
+    /// Maximum calendar requests made by one `upgrade` call.
+    const MAX_UPGRADE_REQUESTS: usize = 16;
+
     /// Asks calendars for completed (Bitcoin) attestations of pending branches.
-    pub fn upgrade(dt: &mut DetachedTimestamp, timeout: Duration) -> Result<usize, AnchorError> {
-        fn visit(t: &mut Timestamp, agent: &ureq::Agent, upgraded: &mut usize) {
-            let pending: Vec<String> = t
-                .attestations
-                .iter()
-                .filter_map(|a| match a {
-                    super::Attestation::Pending { uri } => Some(uri.clone()),
-                    _ => None,
-                })
-                .collect();
-            for uri in pending {
-                let url = format!("{}/timestamp/{}", uri.trim_end_matches('/'), hex::encode(&t.msg));
-                if let Ok(resp) = agent.get(&url).set("Accept", "application/vnd.opentimestamps.v1").call()
-                    && let Ok(body) = read_limited(resp)
-                    && let Ok(up) = Timestamp::deserialize(&body, t.msg.clone())
-                {
-                    t.attestations.extend(up.attestations);
-                    t.ops.extend(up.ops);
-                    *upgraded += 1;
+    ///
+    /// Only calendars in `allowed` are contacted (a proof's own URIs are untrusted input),
+    /// at most [`MAX_UPGRADE_REQUESTS`] requests are made, fetched data is never traversed
+    /// again in the same call, and an upgraded pending attestation is replaced by the
+    /// calendar's answer.
+    pub fn upgrade(
+        dt: &mut DetachedTimestamp,
+        allowed: &[String],
+        timeout: Duration,
+    ) -> Result<usize, AnchorError> {
+        fn norm(u: &str) -> &str {
+            u.trim_end_matches('/')
+        }
+        fn visit(
+            t: &mut Timestamp,
+            agent: &ureq::Agent,
+            allowed: &[String],
+            budget: &mut usize,
+            upgraded: &mut usize,
+        ) {
+            let existing_children = t.ops.len();
+            let mut i = 0;
+            while i < t.attestations.len() {
+                let uri = match &t.attestations[i] {
+                    super::Attestation::Pending { uri } => uri.clone(),
+                    _ => {
+                        i += 1;
+                        continue;
+                    }
+                };
+                if *budget == 0 || !allowed.iter().any(|a| norm(a) == norm(&uri)) {
+                    i += 1;
+                    continue;
+                }
+                *budget -= 1;
+                let url = format!("{}/timestamp/{}", norm(&uri), hex::encode(&t.msg));
+                let fetched = agent
+                    .get(&url)
+                    .set("Accept", "application/vnd.opentimestamps.v1")
+                    .call()
+                    .ok()
+                    .and_then(|resp| read_limited(resp).ok())
+                    .and_then(|body| Timestamp::deserialize(&body, t.msg.clone()).ok());
+                match fetched {
+                    Some(up) => {
+                        t.attestations.remove(i);
+                        t.attestations.extend(up.attestations);
+                        t.ops.extend(up.ops);
+                        *upgraded += 1;
+                    }
+                    None => i += 1,
                 }
             }
-            for (_, child) in &mut t.ops {
-                visit(child, agent, upgraded);
+            for (_, child) in t.ops.iter_mut().take(existing_children) {
+                visit(child, agent, allowed, budget, upgraded);
             }
         }
         let agent = agent(timeout);
         let mut n = 0;
-        visit(&mut dt.timestamp, &agent, &mut n);
+        let mut budget = MAX_UPGRADE_REQUESTS;
+        visit(&mut dt.timestamp, &agent, allowed, &mut budget, &mut n);
         Ok(n)
     }
 
@@ -641,11 +708,41 @@ mod tests {
     }
 
     #[test]
+    fn breadth_amplification_is_bounded() {
+        // Append(4064 zero bytes) then thousands of cheap Reverse forks, each storing 4 KiB.
+        let mut b = header_magic();
+        b.push(1);
+        b.push(0x08);
+        b.extend_from_slice(&[0u8; 32]);
+        b.push(0xf0);
+        write_varuint(&mut b, 4064);
+        b.extend(std::iter::repeat_n(0u8, 4064));
+        for _ in 0..5000 {
+            b.extend_from_slice(&[0xff, 0xf2, 0x00]);
+            b.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+            b.push(0);
+        }
+        b.extend_from_slice(&[0xf2, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 0]);
+        assert!(DetachedTimestamp::parse(&b).is_err());
+    }
+
+    #[test]
+    fn varuint_overflow_and_trailing_attestation_bytes_are_rejected() {
+        let mut r = Reader::new(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f], 0);
+        assert!(r.varuint().is_err());
+        let mut out = Vec::new();
+        out.extend_from_slice(&TAG_BITCOIN);
+        write_varbytes(&mut out, &[0x05, 0x99]); // height 5 plus a trailing byte
+        let mut r = Reader::new(&out, 0);
+        assert!(Attestation::deserialize(&mut r).is_err());
+    }
+
+    #[test]
     fn varuint_roundtrip() {
         for v in [0u64, 1, 127, 128, 300, 840_000, u64::from(u32::MAX), u64::MAX] {
             let mut out = Vec::new();
             write_varuint(&mut out, v);
-            let mut r = Reader { buf: &out, pos: 0 };
+            let mut r = Reader::new(&out, 0);
             assert_eq!(r.varuint().unwrap(), v);
         }
     }

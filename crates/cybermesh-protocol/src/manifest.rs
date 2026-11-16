@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 use crate::messages::OperatorId;
 use crate::{PROTOCOL_VERSION, ProtocolError, payload_type};
 
+/// Allowed clock skew for a manifest's `issued_at`.
+pub const MAX_MANIFEST_SKEW_SECS: u64 = 300;
+/// Maximum manifest lifetime (forces periodic re-signing by governance).
+pub const MAX_MANIFEST_LIFETIME_SECS: u64 = 400 * 86_400;
+
 /// Roles a member key can hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -149,6 +154,12 @@ impl TrustManifest {
         }
         if now >= m.expires_at {
             return Err(ProtocolError::Expired);
+        }
+        if m.issued_at > now.saturating_add(MAX_MANIFEST_SKEW_SECS) {
+            return Err(ProtocolError::NotYetValid);
+        }
+        if m.expires_at <= m.issued_at || m.expires_at - m.issued_at > MAX_MANIFEST_LIFETIME_SECS {
+            return Err(ProtocolError::TtlTooLong);
         }
         m.validate()?;
         Ok(m)

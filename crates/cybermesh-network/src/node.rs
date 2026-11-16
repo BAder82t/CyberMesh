@@ -233,8 +233,16 @@ fn build_swarm(keypair: identity::Keypair, cfg: &NetConfig) -> Result<Swarm<Beha
                 .heartbeat_interval(heartbeat)
                 .validation_mode(gossipsub::ValidationMode::Strict)
                 .validate_messages()
+                // Bind the id to the authenticated author as well as the content, so another
+                // peer cannot pre-claim (and get rejected under) an honest message's id.
                 .message_id_fn(|m: &gossipsub::Message| {
-                    MessageId::from(Sha256::digest(&m.data).to_vec())
+                    let mut h = Sha256::new();
+                    if let Some(src) = &m.source {
+                        h.update(src.to_bytes());
+                    }
+                    h.update([0u8]);
+                    h.update(&m.data);
+                    MessageId::from(h.finalize().to_vec())
                 })
                 .max_transmit_size(max)
                 .duplicate_cache_time(Duration::from_secs(600))
@@ -254,7 +262,8 @@ fn build_swarm(keypair: identity::Keypair, cfg: &NetConfig) -> Result<Swarm<Beha
                 connection_limits::ConnectionLimits::default()
                     .with_max_established_per_peer(Some(2))
                     .with_max_established(Some(128))
-                    .with_max_pending_incoming(Some(32)),
+                    .with_max_pending_incoming(Some(32))
+                    .with_max_pending_outgoing(Some(32)),
             );
             Ok(Behaviour {
                 allowed: allow_block_list::Behaviour::default(),
@@ -285,6 +294,14 @@ fn build_swarm(keypair: identity::Keypair, cfg: &NetConfig) -> Result<Swarm<Beha
 
 /// Starts the network node on the current tokio runtime.
 pub fn spawn(keypair: identity::Keypair, cfg: NetConfig) -> Result<NetworkHandle, NetError> {
+    if cfg.outbound_bytes_per_sec == Some(0) {
+        return Err(NetError::Setup(
+            "outbound_bytes_per_sec must be positive (use None for unlimited)".into(),
+        ));
+    }
+    if cfg.per_peer_burst == 0 {
+        return Err(NetError::Setup("per_peer_burst must be positive".into()));
+    }
     let local_peer_id = keypair.public().to_peer_id();
     let mut swarm = build_swarm(keypair, &cfg)?;
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(cfg.command_queue.max(1));
@@ -384,9 +401,12 @@ pub fn spawn(keypair: identity::Keypair, cfg: NetConfig) -> Result<NetworkHandle
                                 let _ = gs.report_message_validation_result(&message_id, &propagation_source, MessageAcceptance::Reject);
                                 continue;
                             }
+                            // Rate-limit the authenticated *author*, not the relaying peer, so a
+                            // throttled relay cannot cause honest authors' messages to be dropped.
+                            let author = message.source.unwrap_or(propagation_source);
                             let now_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                             let cost = 1 + u32::try_from(len / 1024).unwrap_or(u32::MAX);
-                            if !limiter.allow(&propagation_source, cost, now_ms) {
+                            if !limiter.allow(&author, cost, now_ms) {
                                 NetStats::add(&task_stats.dropped_rate_limited, 1);
                                 let _ = gs.report_message_validation_result(&message_id, &propagation_source, MessageAcceptance::Ignore);
                                 continue;

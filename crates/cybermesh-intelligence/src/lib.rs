@@ -30,3 +30,8 @@ pub const GENERATOR: &str = concat!("cybermesh-intelligence/", env!("CARGO_PKG_V
 pub const MAX_RELEASE_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum number of entries in one release.
 pub const MAX_ENTRIES: usize = 200_000;
+/// Maximum release lifetime (consumers stop using a release after this, even offline).
+pub const MAX_RELEASE_TTL_SECS: u64 = 30 * 86_400;
+/// Largest sequence increase a consumer accepts in one step (prevents a signed huge
+/// sequence from permanently ratcheting consumers).
+pub const MAX_SEQUENCE_JUMP: u64 = 1_000_000;

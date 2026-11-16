@@ -1,0 +1,45 @@
+[package]
+name = "cybermesh-cli"
+description = "Command-line interface for CyberMesh nodes, releases, anchoring and demonstrations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "cybermesh"
+path = "src/main.rs"
+
+[features]
+default = ["ots"]
+ots = ["cybermesh-anchor/ots"]
+adversary-sim = ["cybermesh-node/adversary-sim"]
+# Developer commands that use deterministic test keys (test-vector generation).
+dev-tools = ["cybermesh-protocol/testkit"]
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+clap.workspace = true
+cybermesh-analysis.workspace = true
+cybermesh-anchor.workspace = true
+cybermesh-crypto.workspace = true
+cybermesh-intelligence.workspace = true
+cybermesh-network.workspace = true
+cybermesh-node.workspace = true
+cybermesh-protocol.workspace = true
+cybermesh-verifier.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tiny_http.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

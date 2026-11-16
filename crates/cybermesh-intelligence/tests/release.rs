@@ -50,6 +50,7 @@ fn record(task: &str, outcomes: Vec<DomainOutcome>, at: u64) -> (Digest, Verific
         accepted_assessments_digest: Some(Digest::of(b"a")),
         accepted: vec![],
         rejected: vec![],
+        rejected_overflow: 0,
         faults: vec![],
         outcomes,
         verified_at: at,
@@ -288,4 +289,93 @@ fn stale_records_are_excluded() {
     p.max_record_age_secs = 60;
     let rel = build_release(&records(), &[], &p).unwrap();
     assert_eq!(rel.entries.len(), 1, "only the record from NOW-50 is fresh enough");
+}
+
+#[test]
+fn newest_record_wins_and_can_delist() {
+    let d = "examplebank-account-verify.phish.localhost";
+    let old = record("00000000000000000000000000000010", vec![outcome(d, Classification::Warn, 4900)], NOW - 100);
+    let new = record("00000000000000000000000000000011", vec![outcome(d, Classification::None, 100)], NOW - 10);
+    let rel = build_release(&[old.clone(), new], &[], &params(1)).unwrap();
+    assert!(rel.lookup(d).is_none(), "a newer no-risk verdict de-lists the domain");
+    let rel = build_release(&[old], &[], &params(1)).unwrap();
+    assert!(rel.lookup(d).is_some());
+}
+
+#[test]
+fn caller_supplied_record_digest_must_match() {
+    let mut recs = records();
+    recs[0].0 = Digest::of(b"forged digest");
+    assert!(build_release(&recs, &[], &params(1)).is_err());
+}
+
+#[test]
+fn appeal_covers_subdomains_and_only_fresh_block_relists() {
+    let parent = "phish.localhost";
+    let decision = AppealDecision {
+        v: 1,
+        network_id: "cybermesh-test".into(),
+        appeal_id: "appeal-0003".into(),
+        indicator: parent.into(),
+        outcome: AppealOutcome::Upheld,
+        rationale: "whole zone is a test zone".into(),
+        decided_at: NOW - 75,
+    };
+    // Records: block verified before the decision (NOW-100), warn after it (NOW-50).
+    let rel = build_release(&records(), std::slice::from_ref(&decision), &params(2)).unwrap();
+    assert!(rel.entries.is_empty(), "subdomains of the appealed indicator are removed");
+    // A block from fresh feed-corroborated evidence after the decision re-lists.
+    let fresh = record(
+        "00000000000000000000000000000020",
+        vec![outcome("examplebank-secure-login.phish.localhost", Classification::Block, 10_000)],
+        NOW - 5,
+    );
+    let mut recs = records();
+    recs.push(fresh);
+    let rel = build_release(&recs, &[decision], &params(2)).unwrap();
+    assert_eq!(rel.entries.len(), 1);
+    assert_eq!(rel.entries[0].action, Action::Block);
+}
+
+#[test]
+fn hostile_parameters_are_rejected_not_wrapped() {
+    let mut p = params(1);
+    p.issued_at = u64::MAX - 1;
+    p.ttl_secs = 10;
+    assert!(build_release(&[], &[], &p).is_err());
+    let mut p = params(1);
+    p.ttl_secs = 365 * 86_400;
+    assert!(build_release(&[], &[], &p).is_err(), "ttl above the cap");
+    let mut p = params(1);
+    p.max_record_age_secs = u64::MAX;
+    assert!(build_release(&records(), &[], &p).is_ok());
+}
+
+#[test]
+fn consumer_detects_forks_and_bad_text() {
+    let net = net();
+    let root = TrustRoot::from_manifest(&net.manifest);
+    let r1 = build_release(&records(), &[], &params(1)).unwrap();
+    let v1 = verify_release(&signed(&net, &r1, &[0, 1]), &root, NOW, None).unwrap();
+    let state = ConsumerState { sequence: 1, digest: v1.digest };
+    // Successor whose previous link points elsewhere: a fork.
+    let mut p2 = params(2);
+    p2.previous = Some(ReleaseRef { sequence: 1, digest: Digest::of(b"other branch") });
+    let r2 = build_release(&records(), &[], &p2).unwrap();
+    assert!(matches!(
+        verify_release(&signed(&net, &r2, &[0, 1]), &root, NOW, Some(&state)),
+        Err(ReleaseError::Invalid(_))
+    ));
+    // Correct link is accepted.
+    p2.previous = Some(ReleaseRef { sequence: 1, digest: v1.digest });
+    let r2 = build_release(&records(), &[], &p2).unwrap();
+    verify_release(&signed(&net, &r2, &[0, 1]), &root, NOW, Some(&state)).unwrap();
+    // Huge sequence jump is refused.
+    let r_big = build_release(&records(), &[], &params(10_000_000)).unwrap();
+    assert!(verify_release(&signed(&net, &r_big, &[0, 1]), &root, NOW, Some(&state)).is_err());
+    // Control characters in a reason are refused even when properly signed.
+    let mut bad = build_release(&records(), &[], &params(2)).unwrap();
+    bad.entries[0].reasons[0].detail = "click <here>\u{7}".replace("\\u{7}", "\u{7}");
+    bad.entries[0].reasons[0].detail.push('\u{7}');
+    assert!(verify_release(&signed(&net, &bad, &[0, 1]), &root, NOW, None).is_err());
 }

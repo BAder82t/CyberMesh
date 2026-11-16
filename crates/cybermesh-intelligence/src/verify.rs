@@ -6,7 +6,18 @@ use cybermesh_protocol::{OperatorId, PROTOCOL_VERSION, SignerEntry, TrustManifes
 use serde::{Deserialize, Serialize};
 
 use crate::model::ThreatRelease;
-use crate::{MAX_ENTRIES, MAX_RELEASE_BYTES};
+use crate::{MAX_ENTRIES, MAX_RELEASE_BYTES, MAX_RELEASE_TTL_SECS, MAX_SEQUENCE_JUMP};
+
+/// Limits on free-text and list fields (consumers render these to users).
+const MAX_REASONS: usize = 16;
+const MAX_EVIDENCE: usize = 16;
+const MAX_DETAIL: usize = 200;
+const MAX_NOTE: usize = 500;
+const MAX_REFERENCE: usize = 128;
+
+fn printable(s: &str, max: usize) -> bool {
+    s.len() <= max && s.bytes().all(|b| (0x20..0x7f).contains(&b))
+}
 
 /// Allowed clock skew for `issued_at`.
 pub const MAX_RELEASE_SKEW_SECS: u64 = 300;
@@ -138,6 +149,11 @@ pub fn verify_release(
     if now >= release.expires_at {
         return Err(ReleaseError::Expired);
     }
+    if release.expires_at <= release.issued_at
+        || release.expires_at - release.issued_at > MAX_RELEASE_TTL_SECS
+    {
+        return Err(ReleaseError::Invalid("release lifetime out of range".into()));
+    }
     if release.entries.len() > MAX_ENTRIES {
         return Err(ReleaseError::Invalid("too many entries".into()));
     }
@@ -152,7 +168,27 @@ pub fn verify_release(
         if e.risk_score_bp > 10_000 {
             return Err(ReleaseError::Invalid("score out of range".into()));
         }
+        if e.reasons.len() > MAX_REASONS
+            || e.evidence.len() > MAX_EVIDENCE
+            || e.reasons.iter().any(|r| !printable(&r.detail, MAX_DETAIL))
+            || e.evidence.iter().any(|r| !printable(&r.id, MAX_REFERENCE))
+        {
+            return Err(ReleaseError::Invalid(format!(
+                "entry {} has oversized or non-printable fields",
+                e.indicator
+            )));
+        }
         prev = Some(&e.indicator);
+    }
+    for w in release.corrections.windows(2) {
+        if w[0] >= w[1] {
+            return Err(ReleaseError::Invalid("corrections not sorted/unique".into()));
+        }
+    }
+    if release.corrections.iter().any(|c| {
+        !printable(&c.indicator, 253) || !printable(&c.reference, MAX_REFERENCE) || !printable(&c.note, MAX_NOTE)
+    }) {
+        return Err(ReleaseError::Invalid("correction has oversized or non-printable fields".into()));
     }
     let digest = Digest::of(&v.payload);
     if let Some(s) = state {
@@ -164,6 +200,18 @@ pub fn verify_release(
         }
         if release.sequence == s.sequence && digest != s.digest {
             return Err(ReleaseError::Equivocation(release.sequence));
+        }
+        if release.sequence - s.sequence > MAX_SEQUENCE_JUMP {
+            return Err(ReleaseError::Invalid("sequence jump too large".into()));
+        }
+        // The immediate successor must chain to the release the consumer holds.
+        if release.sequence == s.sequence + 1
+            && let Some(p) = &release.previous
+            && (p.sequence != s.sequence || p.digest != s.digest)
+        {
+            return Err(ReleaseError::Invalid(
+                "previous-release link does not match the accepted release (fork)".into(),
+            ));
         }
     }
     Ok(VerifiedRelease {

@@ -10,8 +10,8 @@ use cybermesh_protocol::{
 
 use crate::policy::{Classification, Policy};
 use crate::record::{
-    AcceptedResult, DomainOutcome, FaultKind, FaultRecord, RejectedResult, TaskStatus,
-    VerificationRecord,
+    AcceptedResult, DomainOutcome, FaultKind, FaultRecord, MAX_REJECTED, RejectedResult,
+    TaskStatus, VerificationRecord,
 };
 
 /// What happened to a submitted result.
@@ -41,6 +41,7 @@ pub struct TaskVerifier {
     limits: Limits,
     held: BTreeMap<KeyId, Held>,
     rejected: Vec<RejectedResult>,
+    rejected_overflow: u64,
     faults: Vec<FaultRecord>,
     faulted: BTreeSet<KeyId>,
 }
@@ -53,6 +54,9 @@ impl TaskVerifier {
         policy: Policy,
         limits: Limits,
     ) -> Result<Self, cybermesh_protocol::ProtocolError> {
+        policy
+            .validate()
+            .map_err(cybermesh_protocol::ProtocolError::Invalid)?;
         let input_digest = task.input_digest()?;
         Ok(Self {
             task,
@@ -62,6 +66,7 @@ impl TaskVerifier {
             limits,
             held: BTreeMap::new(),
             rejected: Vec::new(),
+            rejected_overflow: 0,
             faults: Vec::new(),
             faulted: BTreeSet::new(),
         })
@@ -73,11 +78,15 @@ impl TaskVerifier {
     }
 
     fn reject(&mut self, worker: Option<KeyId>, digest: Digest, reason: &str) -> SubmitOutcome {
-        self.rejected.push(RejectedResult {
-            worker,
-            result_digest: digest,
-            reason: reason.to_owned(),
-        });
+        if self.rejected.len() < MAX_REJECTED {
+            self.rejected.push(RejectedResult {
+                worker,
+                result_digest: digest,
+                reason: reason.to_owned(),
+            });
+        } else {
+            self.rejected_overflow += 1;
+        }
         SubmitOutcome::Rejected(reason.to_owned())
     }
 
@@ -123,7 +132,7 @@ impl TaskVerifier {
         if !self.task.assignees.contains(&worker) {
             return self.reject(Some(worker), digest, "worker was not assigned this task");
         }
-        if now > self.task.expires_at + self.policy.result_grace_secs {
+        if now > self.task.expires_at.saturating_add(self.policy.result_grace_secs) {
             return self.reject(Some(worker), digest, "result arrived after the deadline");
         }
         if self.faulted.contains(&worker) {
@@ -198,16 +207,12 @@ impl TaskVerifier {
 
     /// Settles the task.
     ///
-    /// * `engine`: the verifier's own engine. Used to recompute on disagreement or when
-    ///   sampled, and for independent feed corroboration. If `None`, or its evidence does not
-    ///   match the task pins, the verifier cannot recompute and never classifies as `block`.
-    /// * `sample_seed`: verifier-secret bytes making the sampling decision unpredictable.
-    pub fn finalize(
-        mut self,
-        engine: Option<&Engine>,
-        sample_seed: &[u8],
-        now: u64,
-    ) -> VerificationRecord {
+    /// `engine` is the verifier's own engine. When it is present and its evidence matches
+    /// the task pins, the verifier recomputes every domain and classifies **only** from its
+    /// own result; workers whose signed assessments differ are recorded as provable faults.
+    /// Without a matching engine the verifier cannot recompute, never classifies `block`,
+    /// and records disagreement as `disputed`.
+    pub fn finalize(mut self, engine: Option<&Engine>, now: u64) -> VerificationRecord {
         let engine = engine.filter(|e| e.check_task(&self.task).is_ok());
 
         // Per operator, the set of distinct assessment digests its workers signed.
@@ -219,52 +224,38 @@ impl TaskVerifier {
                 .insert(h.assessments_digest);
         }
         let distinct: BTreeSet<Digest> = by_operator.values().flatten().copied().collect();
-        let sample = {
-            let d = Digest::tagged(
-                "cybermesh/recompute-sample/v1",
-                &[sample_seed, self.task.task_id.as_bytes()],
-            );
-            u16::from_be_bytes([d.0[0], d.0[1]]) % 1000 < self.policy.recompute_per_mille
-        };
-        let must_recompute = distinct.len() > 1 || sample;
 
         let mut recomputed = false;
         let mut accepted_digest: Option<Digest> = None;
         let mut accepted_assessments: Option<Vec<DomainAssessment>> = None;
         let mut status;
 
-        if must_recompute && let Some(e) = engine {
-            match e.assess_task(&self.task) {
-                Ok(local) => {
-                    recomputed = true;
-                    let local_digest = canonical::to_vec(&local)
-                        .map(|b| Digest::tagged("cybermesh/assessments/v1", &[&b]))
-                        .ok();
-                    accepted_digest = local_digest;
-                    accepted_assessments = Some(local);
-                    // Every worker whose signed assessments differ has provably faulted.
-                    let wrong: Vec<(KeyId, OperatorId, Digest)> = self
-                        .held
-                        .iter()
-                        .filter(|(_, h)| Some(h.assessments_digest) != local_digest)
-                        .map(|(k, h)| (k.clone(), h.result.operator.clone(), h.result_digest))
-                        .collect();
-                    for (k, op, d) in wrong {
-                        self.faults.push(FaultRecord {
-                            worker: k.clone(),
-                            operator: op,
-                            kind: FaultKind::IncorrectResult,
-                            evidence: vec![d],
-                        });
-                        self.faulted.insert(k);
-                    }
-                }
-                Err(_) => {
-                    // Engine refused the task (should not happen after check_task).
-                }
+        let local = engine.and_then(|e| {
+            let list = e.assess_task(&self.task).ok()?;
+            let bytes = canonical::to_vec(&list).ok()?;
+            Some((Digest::tagged("cybermesh/assessments/v1", &[&bytes]), list))
+        });
+        if let Some((local_digest, list)) = local {
+            recomputed = true;
+            accepted_digest = Some(local_digest);
+            accepted_assessments = Some(list);
+            // Every worker whose signed assessments differ has provably faulted.
+            let wrong: Vec<(KeyId, OperatorId, Digest)> = self
+                .held
+                .iter()
+                .filter(|(_, h)| h.assessments_digest != local_digest)
+                .map(|(k, h)| (k.clone(), h.result.operator.clone(), h.result_digest))
+                .collect();
+            for (k, op, d) in wrong {
+                self.faults.push(FaultRecord {
+                    worker: k.clone(),
+                    operator: op,
+                    kind: FaultKind::IncorrectResult,
+                    evidence: vec![d],
+                });
+                self.faulted.insert(k);
             }
-        }
-        if !recomputed && distinct.len() == 1 {
+        } else if distinct.len() == 1 {
             accepted_digest = distinct.iter().next().copied();
             accepted_assessments = self
                 .held
@@ -298,7 +289,9 @@ impl TaskVerifier {
             (Some(list), TaskStatus::Verified) => list
                 .iter()
                 .map(|a| {
-                    let corroborated = engine.is_some_and(|e| {
+                    // Corroboration comes from the verifier's own evidence; when the engine
+                    // is present `a` is also the verifier's own assessment.
+                    let corroborated = recomputed && engine.is_some_and(|e| {
                         cybermesh_analysis::features::host_parts(&a.domain).is_some_and(|p| {
                             !e.evidence().blocklist_hits(p.host, p.registrable).is_empty()
                         })
@@ -347,6 +340,7 @@ impl TaskVerifier {
             accepted_assessments_digest: accepted_digest,
             accepted,
             rejected: self.rejected,
+            rejected_overflow: self.rejected_overflow,
             faults: self.faults,
             outcomes,
             verified_at: now,

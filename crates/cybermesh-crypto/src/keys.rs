@@ -223,18 +223,39 @@ impl SecretKey {
         let mut f = opts
             .open(path)
             .map_err(|e| CryptoError::KeyFile(format!("{}: {e}", path.display())))?;
-        f.write_all(&json)
-            .and_then(|()| f.sync_all())
-            .map_err(|e| CryptoError::KeyFile(e.to_string()))
+        if let Err(e) = f.write_all(&json).and_then(|()| f.sync_all()) {
+            // Do not leave a truncated key file behind (it would block regeneration).
+            drop(f);
+            let _ = fs::remove_file(path);
+            return Err(CryptoError::KeyFile(e.to_string()));
+        }
+        Ok(())
     }
 
-    /// Loads a key file. On Unix, rejects files readable by group or others.
+    /// Loads a key file. On Unix the file is opened without following symlinks and its
+    /// permissions are checked on the opened handle (no check/use race); files readable by
+    /// group or others are refused.
     pub fn read_from_file(path: &Path) -> Result<Self, CryptoError> {
+        use std::io::Read as _;
+        let err = |e: std::io::Error| CryptoError::KeyFile(format!("{}: {e}", path.display()));
+        let mut opts = fs::OpenOptions::new();
+        opts.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let f = opts.open(path).map_err(err)?;
+        let meta = f.metadata().map_err(err)?;
+        if !meta.is_file() || meta.len() > 4096 {
+            return Err(CryptoError::KeyFile(format!(
+                "{} is not a regular key file",
+                path.display()
+            )));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let meta =
-                fs::metadata(path).map_err(|e| CryptoError::KeyFile(format!("{}: {e}", path.display())))?;
             if meta.permissions().mode() & 0o077 != 0 {
                 return Err(CryptoError::KeyFile(format!(
                     "{} is accessible by group/others; run `chmod 600` on it",
@@ -242,9 +263,9 @@ impl SecretKey {
                 )));
             }
         }
-        let bytes = Zeroizing::new(
-            fs::read(path).map_err(|e| CryptoError::KeyFile(format!("{}: {e}", path.display())))?,
-        );
+        let mut raw = Vec::new();
+        f.take(4096).read_to_end(&mut raw).map_err(err)?;
+        let bytes = Zeroizing::new(raw);
         let mut file: KeyFile =
             serde_json::from_slice(&bytes).map_err(|e| CryptoError::KeyFile(e.to_string()))?;
         if file.kind != KEY_FILE_KIND || file.algorithm != "ed25519" {
@@ -333,6 +354,10 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
             assert!(SecretKey::read_from_file(&path).is_err());
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            let link = dir.path().join("link.json");
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(SecretKey::read_from_file(&link).is_err(), "symlinks are not followed");
         }
     }
 

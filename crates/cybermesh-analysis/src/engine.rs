@@ -11,8 +11,10 @@ use crate::AnalysisError;
 
 /// Engine identifier carried in tasks and results.
 pub const ENGINE_NAME: &str = "cybermesh-lexical";
-/// Bumped on any change that can alter output for the same input.
-pub const ENGINE_VERSION: &str = "0.1.0";
+/// Bumped on any change that can alter output for the same input. The suffix records the
+/// exact Public Suffix List and IDNA table versions compiled in (pinned with `=` in
+/// `Cargo.toml`), because they also determine output.
+pub const ENGINE_VERSION: &str = "0.2.0+psl.2.1.255+idna.1.1.0";
 
 /// The engine spec of this build.
 #[must_use]
@@ -319,7 +321,13 @@ impl Engine {
             });
         }
 
-        let hyphens = p.host.bytes().filter(|b| *b == b'-').count();
+        // Hyphens inside punycode (xn--) labels are encoding artefacts, not signals.
+        let hyphens: usize = p
+            .host
+            .split('.')
+            .filter(|l| !l.starts_with("xn--"))
+            .map(|l| l.bytes().filter(|b| *b == b'-').count())
+            .sum();
         if hyphens >= scoring::HYPHEN_THRESHOLD {
             out.push(Finding {
                 code: FindingCode::ManyHyphens,
@@ -357,7 +365,7 @@ impl Engine {
             }
         }
         let digits = label.bytes().filter(u8::is_ascii_digit).count();
-        if digits >= 4 && digits * 10 >= label.len() * 3 {
+        if !label.starts_with("xn--") && digits >= 4 && digits * 10 >= label.len() * 3 {
             out.push(Finding {
                 code: FindingCode::DigitHeavy,
                 points: scoring::DIGIT_HEAVY,
@@ -547,6 +555,74 @@ mod tests {
             assert_eq!(a, b);
         }
     }
+
+    #[test]
+    fn legitimate_idns_get_no_structural_findings() {
+        let e = test_engine();
+        for d in ["xn--bcher-kva.de", "xn--e1afmkfd.xn--p1ai", "xn--mnchen-3ya.de", "xn--80aswg.xn--p1ai"] {
+            let a = e.assess(d).unwrap();
+            assert!(
+                a.findings.is_empty(),
+                "{d}: {:?}",
+                a.findings.iter().map(|f| f.code).collect::<Vec<_>>()
+            );
+            assert_eq!(a.verdict, Verdict::NoSignal);
+        }
+    }
+
+    #[test]
+    fn whole_script_homograph_of_apple_is_detected() {
+        // "аррӏе.com" written entirely in Cyrillic: the classic homograph demonstration.
+        let e = test_engine();
+        let a = e.assess("xn--80ak6aa92e.com").unwrap();
+        assert!(a.findings.iter().any(|f| f.code == FindingCode::IdnHomograph));
+        assert!(!a.findings.iter().any(|f| f.code == FindingCode::DigitHeavy));
+    }
+
+    /// Golden vectors: the exact canonical output for a fixed corpus. Any change to scoring,
+    /// tables (PSL/IDNA) or encoding changes this digest and must bump ENGINE_VERSION.
+    #[test]
+    fn golden_vectors() {
+        let e = test_engine();
+        let corpus = [
+            "examplebank-secure-login.phish.localhost",
+            "examplebank-account-verify.phish.localhost",
+            "drive.google.com",
+            "xn--pypal-4ve.com",
+            "xn--bcher-kva.de",
+            "paypa1-secure.com",
+            "x7kq9zr2mw4tplv.top",
+            "a.b.c.d.e.example.com",
+            "secure-login-account-update.example.com",
+            "evil.github.io",
+            "www.example.co.uk",
+            "apple-pie-recipes.com",
+        ];
+        let out: Vec<_> = corpus.iter().map(|d| e.assess(d).unwrap()).collect();
+        let bytes = cybermesh_crypto::canonical::to_vec(&out).unwrap();
+        let summary: Vec<(u16, Verdict)> = out.iter().map(|a| (a.risk_score_bp, a.verdict)).collect();
+        assert_eq!(
+            summary,
+            vec![
+                (10_000, Verdict::Malicious),
+                (4900, Verdict::Suspicious),
+                (0, Verdict::KnownBenign),
+                (8500, Verdict::Malicious),
+                (0, Verdict::NoSignal),
+                (5200, Verdict::Suspicious),
+                (2700, Verdict::NoSignal),
+                (800, Verdict::NoSignal),
+                (3000, Verdict::NoSignal),
+                (0, Verdict::NoSignal),
+                (0, Verdict::NoSignal),
+                (3500, Verdict::NoSignal),
+            ]
+        );
+        assert_eq!(Digest::of(&bytes).to_string(), GOLDEN_DIGEST);
+    }
+
+    const GOLDEN_DIGEST: &str =
+        "sha256:f81c8096736b55f8d8c54bd1ddfe9128b7936d169d85326a988b176e72405a7e";
 
     #[test]
     fn rejects_unnormalised_input() {

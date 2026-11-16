@@ -17,6 +17,25 @@ use crate::normalize::normalize_domain;
 
 /// Upper bound on any single evidence file (bounds memory on load).
 pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+/// Upper bound on all evidence files of one bundle together.
+pub const MAX_BUNDLE_BYTES: u64 = 256 * 1024 * 1024;
+/// Upper bound on the number of sources in one bundle.
+pub const MAX_SOURCES: usize = 16;
+
+/// The pin for one source binds its id, kind and file digest, so re-labelling a blocklist as
+/// a popularity list (or vice versa) changes the pin.
+#[must_use]
+pub fn source_pin(id: &str, kind: SourceKind, file_digest: &Digest) -> Digest {
+    let kind = match kind {
+        SourceKind::Blocklist => "blocklist",
+        SourceKind::Popularity => "popularity",
+        SourceKind::Brands => "brands",
+    };
+    Digest::tagged(
+        "cybermesh/evidence-source/v1",
+        &[id.as_bytes(), kind.as_bytes(), file_digest.as_bytes()],
+    )
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EvidenceError {
@@ -96,18 +115,28 @@ pub struct EvidenceBundle {
     pub skipped_lines: usize,
 }
 
+/// Reads a regular, non-symlink file with a hard size cap. The cap is enforced on the bytes
+/// actually read (not on metadata), so special files and races cannot bypass it.
 fn read_limited(path: &Path, id: &str) -> Result<Vec<u8>, EvidenceError> {
-    let meta = fs::metadata(path).map_err(|e| EvidenceError::Io {
+    use std::io::Read as _;
+    let io = |e: std::io::Error| EvidenceError::Io {
         path: path.display().to_string(),
         source: e,
-    })?;
-    if meta.len() > MAX_SOURCE_BYTES {
+    };
+    let meta = fs::symlink_metadata(path).map_err(io)?;
+    if !meta.file_type().is_file() {
+        return Err(EvidenceError::Manifest(format!(
+            "{} is not a regular file (symlinks and special files are refused)",
+            path.display()
+        )));
+    }
+    let f = fs::File::open(path).map_err(io)?;
+    let mut buf = Vec::new();
+    f.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut buf).map_err(io)?;
+    if buf.len() as u64 > MAX_SOURCE_BYTES {
         return Err(EvidenceError::TooLarge(id.to_owned()));
     }
-    fs::read(path).map_err(|e| EvidenceError::Io {
-        path: path.display().to_string(),
-        source: e,
-    })
+    Ok(buf)
 }
 
 /// Parses a newline-separated domain list. Accepts bare domains or URLs, ignores `#`
@@ -140,15 +169,28 @@ impl EvidenceBundle {
         let mbytes = read_limited(&mpath, "bundle.json")?;
         let manifest: BundleManifest = serde_json::from_slice(&mbytes)
             .map_err(|e| EvidenceError::Manifest(e.to_string()))?;
+        if manifest.sources.len() > MAX_SOURCES {
+            return Err(EvidenceError::Manifest("too many sources".into()));
+        }
         let mut files = BTreeMap::new();
+        let mut total: u64 = 0;
         for s in &manifest.sources {
-            if s.file.contains('/') || s.file.contains('\\') || s.file.starts_with('.') {
+            let plain = !s.file.is_empty()
+                && !s.file.starts_with('.')
+                && s.file
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+            if !plain {
                 return Err(EvidenceError::Manifest(format!(
                     "source file name {} must be a plain file name in the bundle directory",
                     s.file
                 )));
             }
             let bytes = read_limited(&dir.join(&s.file), &s.id)?;
+            total += bytes.len() as u64;
+            if total > MAX_BUNDLE_BYTES {
+                return Err(EvidenceError::TooLarge("bundle".into()));
+            }
             files.insert(s.id.clone(), bytes);
         }
         Self::from_manifest_and_files(manifest, &files)
@@ -212,7 +254,7 @@ impl EvidenceBundle {
                     bundle.brands.extend(brands);
                 }
             }
-            bundle.pins.insert(s.id.clone(), s.sha256);
+            bundle.pins.insert(s.id.clone(), source_pin(&s.id, s.kind, &s.sha256));
         }
         bundle.sources = sources;
         Ok(bundle)
@@ -287,6 +329,25 @@ mod tests {
             EvidenceBundle::from_manifest_and_files(manifest, &tampered),
             Err(EvidenceError::DigestMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn relabelling_a_source_changes_its_pin() {
+        let d = Digest::of(b"same bytes");
+        assert_ne!(
+            source_pin("x", SourceKind::Blocklist, &d),
+            source_pin("x", SourceKind::Popularity, &d)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlinked_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/dev/zero", dir.path().join("feed.txt")).unwrap();
+        let m = r#"{"v":1,"sources":[{"id":"x","kind":"blocklist","file":"feed.txt","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000","version":"1","license":"x","origin":"x"}]}"#;
+        fs::write(dir.path().join("bundle.json"), m).unwrap();
+        assert!(matches!(EvidenceBundle::load(dir.path()), Err(EvidenceError::Manifest(_))));
     }
 
     #[test]

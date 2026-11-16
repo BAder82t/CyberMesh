@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Deterministic, label-derived test keys and fixtures. Never enable in production builds.
+testkit = []
+
 [dependencies]
 cybermesh-crypto.workspace = true
 hex.workspace = true
@@ -16,6 +20,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+cybermesh-protocol = { path = ".", features = ["testkit"] }
 base64.workspace = true
 proptest.workspace = true
 

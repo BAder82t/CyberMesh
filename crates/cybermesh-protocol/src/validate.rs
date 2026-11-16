@@ -171,7 +171,7 @@ pub fn verify_task(
     if !is_hex_id(&t.task_id) || !is_hex_id(&t.nonce) {
         return Err(ProtocolError::invalid("task_id and nonce must be 32 hex chars"));
     }
-    if t.issued_at > now + limits.max_clock_skew_secs {
+    if t.issued_at > now.saturating_add(limits.max_clock_skew_secs) {
         return Err(ProtocolError::NotYetValid);
     }
     if t.expires_at <= now {
@@ -232,7 +232,7 @@ pub fn verify_result(
     if !is_hex_id(&r.task_id) || !is_hex_id(&r.nonce) {
         return Err(ProtocolError::invalid("task_id and nonce must be 32 hex chars"));
     }
-    if r.completed_at > now + limits.max_clock_skew_secs {
+    if r.completed_at > now.saturating_add(limits.max_clock_skew_secs) {
         return Err(ProtocolError::NotYetValid);
     }
     check_engine_strings(&r.engine.name, &r.engine.version)?;
@@ -272,10 +272,10 @@ pub fn verify_heartbeat(
     if !is_hex_id(&h.nonce) {
         return Err(ProtocolError::invalid("nonce must be 32 hex chars"));
     }
-    if h.sent_at > now + limits.max_clock_skew_secs {
+    if h.sent_at > now.saturating_add(limits.max_clock_skew_secs) {
         return Err(ProtocolError::NotYetValid);
     }
-    if h.sent_at + limits.max_heartbeat_age_secs < now {
+    if h.sent_at.saturating_add(limits.max_heartbeat_age_secs) < now {
         return Err(ProtocolError::Expired);
     }
     check_engine_strings(&h.engine.name, &h.engine.version)?;

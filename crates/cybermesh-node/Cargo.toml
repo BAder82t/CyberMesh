@@ -1,0 +1,36 @@
+[package]
+name = "cybermesh-node"
+description = "CyberMesh node runtimes: resource-governed worker and coordinator (issuer + verifier)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Misbehaving-worker modes for adversarial demonstrations and tests. Never enable in
+# production builds.
+adversary-sim = []
+
+[dependencies]
+cpu-time = "1.0"
+cybermesh-analysis.workspace = true
+cybermesh-crypto.workspace = true
+cybermesh-network.workspace = true
+cybermesh-protocol.workspace = true
+cybermesh-verifier.workspace = true
+memory-stats = "1.2"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

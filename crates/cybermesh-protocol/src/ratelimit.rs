@@ -40,8 +40,9 @@ impl<K: Hash + Eq + Clone> RateLimiter<K> {
                 let burst = self.burst;
                 let rate = self.refill_per_sec;
                 self.buckets.retain(|_, b| {
-                    let refilled =
-                        b.milli_tokens + now_ms.saturating_sub(b.last_ms) * rate;
+                    let refilled = b
+                        .milli_tokens
+                        .saturating_add(now_ms.saturating_sub(b.last_ms).saturating_mul(rate));
                     refilled < burst * 1000
                 });
                 if self.buckets.len() >= self.max_keys {
@@ -60,9 +61,14 @@ impl<K: Hash + Eq + Clone> RateLimiter<K> {
             return false;
         };
         let elapsed = now_ms.saturating_sub(b.last_ms);
-        b.milli_tokens = (b.milli_tokens + elapsed * self.refill_per_sec).min(cap);
+        b.milli_tokens = b
+            .milli_tokens
+            .saturating_add(elapsed.saturating_mul(self.refill_per_sec))
+            .min(cap);
         b.last_ms = now_ms.max(b.last_ms);
-        let need = u64::from(cost) * 1000;
+        // A single message never costs more than a full bucket, so large-but-valid messages
+        // are delayed by the refill rate instead of being refused forever.
+        let need = u64::from(cost).min(self.burst) * 1000;
         if b.milli_tokens >= need {
             b.milli_tokens -= need;
             true
@@ -88,6 +94,16 @@ mod tests {
         assert!(rl.allow(&k, 1, 1000));
         // Other keys are independent.
         assert!(rl.allow(&"peer-b", 3, 1000));
+    }
+
+    #[test]
+    fn oversized_cost_is_clamped_not_refused_forever() {
+        let mut rl = RateLimiter::new(50, 10, 10);
+        assert!(rl.allow(&"p", 257, 0), "idle bucket admits a max-size message");
+        assert!(!rl.allow(&"p", 257, 1000));
+        assert!(rl.allow(&"p", 257, 5000));
+        // Huge time jumps do not overflow.
+        assert!(rl.allow(&"p", 1, u64::MAX));
     }
 
     #[test]

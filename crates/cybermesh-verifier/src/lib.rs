@@ -7,11 +7,14 @@
 //! 1. every result is authenticated and bound to the exact task (digest, assignment,
 //!    deadline, input digest, domain list);
 //! 2. results are grouped by *operator* (organisation), never by worker or peer id;
-//! 3. if operators disagree, or a sampling rule fires, the verifier recomputes the task
-//!    with its own engine and evidence. Any worker whose signed assessment differs from the
-//!    recomputation has committed a provable fault (the signed result is the proof);
-//! 4. without recomputation, disagreement is recorded as `disputed` and nothing is
-//!    published: consensus is never manufactured.
+//! 3. whenever the verifier holds the pinned engine and evidence it **always** recomputes
+//!    the task and classifies from its own result only. Any worker whose signed assessment
+//!    differs has committed a provable fault (the signed result is the proof). Lexical
+//!    analysis is cheap, so this costs microseconds per domain; it also means worker
+//!    compute is redundant for this task type (see `docs/evaluation.md`);
+//! 4. a verifier without matching evidence cannot recompute: disagreement is recorded as
+//!    `disputed` and nothing is published (consensus is never manufactured), and unanimous
+//!    results can at most produce advisory warnings.
 //!
 //! Classification is evidence-based (see [`policy`]): worker agreement can at most produce an
 //! advisory `warn`. `block` additionally requires the verifier's *own* reference-feed check,

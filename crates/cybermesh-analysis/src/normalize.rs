@@ -39,11 +39,20 @@ pub fn normalize_domain(input: &str) -> Result<String, NormalizeError> {
     }
 }
 
-/// Extracts the host from `scheme://user@host:port/path?q#f`, or returns the input.
+/// True when `s` is a URL scheme per RFC 3986: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
+fn is_scheme(s: &str) -> bool {
+    let mut b = s.bytes();
+    b.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && b.all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+}
+
+/// Extracts the host from `scheme://user@host:port/path?q#f`, or returns the input. A `://`
+/// only starts an authority when everything before it is a valid scheme, so inputs such as
+/// `evil.example/redirect?u=http://good.example` resolve to `evil.example`.
 fn extract_host(s: &str) -> &str {
     let rest = match s.find("://") {
-        Some(i) => &s[i + 3..],
-        None => s,
+        Some(i) if is_scheme(&s[..i]) => &s[i + 3..],
+        _ => s,
     };
     let end = rest
         .find(['/', '?', '#', '\\'])
@@ -79,6 +88,21 @@ mod tests {
         // Cyrillic 'а' (U+0430) in "pаypal" becomes punycode.
         assert_eq!(normalize_domain("pаypal.com").unwrap(), "xn--pypal-4ve.com");
         assert_eq!(normalize_domain("  www.example.org  ").unwrap(), "www.example.org");
+    }
+
+    #[test]
+    fn embedded_urls_do_not_change_the_host() {
+        for (input, host) in [
+            ("evil.example.com/redirect?u=http://good.example.com", "evil.example.com"),
+            ("evil.example.com?next=https://good.example.com", "evil.example.com"),
+            ("evil.example.com#http://good.example.com", "evil.example.com"),
+            ("hxxp://evil.example.com", "evil.example.com"),
+            ("HTTPS://Evil.Example.com/x", "evil.example.com"),
+        ] {
+            assert_eq!(normalize_domain(input).unwrap(), host, "{input}");
+        }
+        // Not a scheme: the part before :// contains a dot-free path character.
+        assert!(normalize_domain("evil.example.com/a://b").is_ok_and(|h| h == "evil.example.com"));
     }
 
     #[test]

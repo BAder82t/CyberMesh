@@ -168,11 +168,10 @@ impl LocalChain {
 
     fn persist(&self) -> Result<(), AnchorError> {
         if let Some(p) = &self.path {
-            let tmp = p.with_extension("tmp");
             let bytes = serde_json::to_vec_pretty(self)
                 .map_err(|e| AnchorError::Unavailable(e.to_string()))?;
-            fs::write(&tmp, bytes).map_err(|e| AnchorError::Unavailable(e.to_string()))?;
-            fs::rename(&tmp, p).map_err(|e| AnchorError::Unavailable(e.to_string()))?;
+            crate::log::write_atomic(p, &bytes)
+                .map_err(|e| AnchorError::Unavailable(e.to_string()))?;
         }
         Ok(())
     }

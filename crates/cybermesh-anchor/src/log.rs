@@ -89,15 +89,10 @@ impl TransparencyLog {
         Ok(log)
     }
 
-    /// Writes atomically (temp file + rename).
+    /// Writes atomically (exclusive temp file + fsync + rename).
     pub fn save(&self, path: &Path) -> Result<(), AnchorError> {
-        let tmp = path.with_extension("tmp");
         let bytes = serde_json::to_vec_pretty(self).map_err(|e| AnchorError::Log(e.to_string()))?;
-        let mut f = fs::File::create(&tmp).map_err(|e| AnchorError::Log(e.to_string()))?;
-        f.write_all(&bytes)
-            .and_then(|()| f.sync_all())
-            .map_err(|e| AnchorError::Log(e.to_string()))?;
-        fs::rename(&tmp, path).map_err(|e| AnchorError::Log(e.to_string()))
+        write_atomic(path, &bytes).map_err(|e| AnchorError::Log(e.to_string()))
     }
 
     fn validate(&self) -> Result<(), AnchorError> {
@@ -105,6 +100,11 @@ impl TransparencyLog {
             if w[1].sequence <= w[0].sequence {
                 return Err(AnchorError::Log("log sequences must strictly increase".into()));
             }
+        }
+        let digests: std::collections::BTreeSet<_> =
+            self.entries.iter().map(|e| e.release_digest).collect();
+        if digests.len() != self.entries.len() {
+            return Err(AnchorError::Log("duplicate release digest in log".into()));
         }
         Ok(())
     }
@@ -192,6 +192,25 @@ impl TransparencyLog {
             .map(Digest)
             .collect())
     }
+}
+
+/// Atomic file replacement: write to a fresh, exclusively created temp file in the same
+/// directory (never following an existing path), fsync, then rename over the target.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let nonce = cybermesh_crypto::random_bytes::<8>()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", hex::encode(nonce)));
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let res = f.write_all(bytes).and_then(|()| f.sync_all());
+    if let Err(e) = res {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    fs::rename(&tmp, path)
 }
 
 /// Verifies that checkpoint `old` is a prefix of checkpoint `new` (append-only history).

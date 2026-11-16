@@ -13,10 +13,11 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> u64 {
+        // A clock before the epoch is broken; fail closed (everything looks expired) rather
+        // than open (nothing ever expires).
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+            .map_or(u64::MAX / 2, |d| d.as_secs())
     }
 }
 

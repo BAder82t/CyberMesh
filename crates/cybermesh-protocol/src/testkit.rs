@@ -17,15 +17,17 @@ pub fn test_key(label: &str) -> SecretKey {
     SecretKey::from_seed(Digest::tagged("cybermesh/testkit/key", &[label.as_bytes()]).as_bytes())
 }
 
-/// Signs a canonical payload into an envelope.
+/// Signs a canonical payload into an envelope. Panics on encoding failure (test code).
+#[allow(clippy::expect_used)]
 pub fn sign<T: Serialize>(ptype: &str, value: &T, key: &SecretKey) -> Envelope {
-    let bytes = canonical::to_vec(value).unwrap_or_default();
+    let bytes = canonical::to_vec(value).expect("test fixture must encode");
     Envelope::sign(ptype, &bytes, key)
 }
 
-/// Envelope bytes for a signed payload.
+/// Envelope bytes for a signed payload. Panics on encoding failure (test code).
+#[allow(clippy::expect_used)]
 pub fn sign_bytes<T: Serialize>(ptype: &str, value: &T, key: &SecretKey) -> Vec<u8> {
-    sign(ptype, value, key).to_vec().unwrap_or_default()
+    sign(ptype, value, key).to_vec().expect("test envelope must encode")
 }
 
 /// One enrolled worker.
