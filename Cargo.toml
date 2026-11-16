@@ -1,0 +1,69 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/cybermesh-crypto",
+    "crates/cybermesh-protocol",
+    "crates/cybermesh-analysis",
+    "crates/cybermesh-verifier",
+    "crates/cybermesh-intelligence",
+    "crates/cybermesh-anchor",
+    "crates/cybermesh-network",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/BAder82t/CyberMesh"
+authors = ["CyberMesh contributors"]
+
+[workspace.dependencies]
+cybermesh-crypto = { path = "crates/cybermesh-crypto", version = "0.1.0" }
+cybermesh-protocol = { path = "crates/cybermesh-protocol", version = "0.1.0" }
+cybermesh-analysis = { path = "crates/cybermesh-analysis", version = "0.1.0" }
+cybermesh-verifier = { path = "crates/cybermesh-verifier", version = "0.1.0" }
+cybermesh-intelligence = { path = "crates/cybermesh-intelligence", version = "0.1.0" }
+cybermesh-anchor = { path = "crates/cybermesh-anchor", version = "0.1.0" }
+cybermesh-network = { path = "crates/cybermesh-network", version = "0.1.0" }
+cybermesh-node = { path = "crates/cybermesh-node", version = "0.1.0" }
+
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize", "fast"] }
+getrandom = "0.3"
+hex = "0.4"
+idna = "1.1"
+libc = "0.2"
+libp2p = { version = "0.57.1", default-features = false, features = ["tokio", "tcp", "noise", "yamux", "gossipsub", "macros", "ed25519"] }
+proptest = "1.6"
+psl = "2.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tiny_http = "0.12"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+zeroize = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+dbg_macro = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

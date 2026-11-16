@@ -1,0 +1,24 @@
+[package]
+name = "cybermesh-intelligence"
+description = "Deterministic, multi-signed, offline-verifiable CyberMesh threat-intelligence releases"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cybermesh-crypto.workspace = true
+cybermesh-protocol.workspace = true
+cybermesh-verifier.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

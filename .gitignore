@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+*.tmp
+/demo-out/
+/state/
+/eval-data/
+node_modules/
+apps/browser-extension/dist/
+*.key.json
+*.secret.json
+.DS_Store
+.env

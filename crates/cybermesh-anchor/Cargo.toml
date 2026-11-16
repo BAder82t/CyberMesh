@@ -1,0 +1,34 @@
+[package]
+name = "cybermesh-anchor"
+description = "Merkle transparency log of CyberMesh releases with pluggable, optional timestamp anchoring (local test chain, OpenTimestamps)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# OpenTimestamps calendar client (HTTPS). Off by default; nothing in the protection path
+# depends on it.
+ots = ["dep:ureq"]
+
+[dependencies]
+base64.workspace = true
+cybermesh-crypto.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+ureq = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+tiny_http.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

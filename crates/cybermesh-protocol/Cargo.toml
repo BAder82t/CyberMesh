@@ -1,0 +1,23 @@
+[package]
+name = "cybermesh-protocol"
+description = "Versioned CyberMesh wire messages, trust manifest, validation, replay protection and rate limiting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cybermesh-crypto.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
