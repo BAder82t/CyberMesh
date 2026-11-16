@@ -10,6 +10,7 @@ members = [
     "crates/cybermesh-network",
     "crates/cybermesh-node",
     "apps/cybermesh-cli",
+    "tests",
 ]
 
 [workspace.package]

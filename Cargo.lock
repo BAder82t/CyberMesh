@@ -847,6 +847,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-tests"
+version = "0.1.0"
+dependencies = [
+ "cybermesh-analysis",
+ "cybermesh-anchor",
+ "cybermesh-crypto",
+ "cybermesh-intelligence",
+ "cybermesh-network",
+ "cybermesh-node",
+ "cybermesh-protocol",
+ "cybermesh-verifier",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cybermesh-verifier"
 version = "0.1.0"
 dependencies = [

@@ -55,7 +55,11 @@ pub struct CoordinatorReport {
     pub reassignments: u64,
     pub results_accepted: u64,
     pub results_rejected: u64,
+    /// Byte-identical re-deliveries of results already seen (replays), dropped.
+    pub results_replayed: u64,
     pub faults: u64,
+    /// Provable faults detected after a task was settled (e.g. late equivocation).
+    pub late_faults: Vec<cybermesh_verifier::FaultRecord>,
     pub verified: u64,
     pub disputed: u64,
     pub insufficient: u64,
@@ -182,6 +186,9 @@ struct Coordinator {
     reputation: ReputationBook,
     replay: ReplayCache,
     report: CoordinatorReport,
+    /// Settled tasks: task id -> (forget after, worker -> accepted result digest). Lets the
+    /// coordinator prove equivocation even when the conflicting result arrives late.
+    settled: HashMap<String, (u64, BTreeMap<KeyId, Digest>)>,
 }
 
 impl Coordinator {
@@ -297,6 +304,7 @@ impl Coordinator {
         };
         let missing = inf.verifier.missing();
         let assignees = inf.verifier.task().assignees.clone();
+        let forget_after = inf.verifier.task().expires_at + 3600;
         let now = self.s.clock.now();
         let record = inf.verifier.finalize(Some(&self.s.engine), now);
         self.reputation.apply(&record);
@@ -332,6 +340,20 @@ impl Coordinator {
                 .push(u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX));
         }
         let _ = assignees;
+        self.settled.retain(|_, (t, _)| *t > now);
+        if self.settled.len() < 10_000 {
+            self.settled.insert(
+                task_id.to_owned(),
+                (
+                    forget_after,
+                    record
+                        .accepted
+                        .iter()
+                        .map(|a| (a.worker.clone(), a.result_digest))
+                        .collect(),
+                ),
+            );
+        }
         info!(task = %task_id, status = ?record.status, recomputed = record.recomputed, published = record.publishable().count(), "task settled");
     }
 
@@ -347,11 +369,45 @@ impl Coordinator {
             }
         };
         if self.replay.contains(&v.payload_digest) {
+            self.report.results_replayed += 1;
             net.report(m, Acceptance::Ignore).await;
             return;
         }
         let task_id = v.message.task_id.clone();
         let Some(inf) = self.inflight.get_mut(&task_id) else {
+            // Late result for a settled task: a different signed result from a worker whose
+            // result was already accepted is provable equivocation.
+            let prior = self
+                .settled
+                .get(&task_id)
+                .and_then(|(_, m)| m.get(&v.message.worker))
+                .copied();
+            if let Some(prior) = prior
+                && prior != v.payload_digest
+            {
+                let fault = cybermesh_verifier::FaultRecord {
+                    worker: v.message.worker.clone(),
+                    operator: v.message.operator.clone(),
+                    kind: cybermesh_verifier::FaultKind::Equivocation,
+                    evidence: vec![prior, v.payload_digest],
+                };
+                warn!(worker = %fault.worker.short(), task = %task_id, "late equivocation proven; worker quarantined");
+                self.reputation.record_fault(&fault, &format!("task {task_id}"));
+                let path = self
+                    .s
+                    .state_dir
+                    .join("faults")
+                    .join(format!("{task_id}-{}.json", fault.worker.short()));
+                let _ = files::write_json(&path, &fault);
+                let _ = files::write_atomic(
+                    &self.s.state_dir.join("faults").join(format!("{task_id}-{}.envelope.json", fault.worker.short())),
+                    &m.data,
+                );
+                self.report.faults += 1;
+                self.report.late_faults.push(fault);
+                net.report(m, Acceptance::Reject).await;
+                return;
+            }
             net.report(m, Acceptance::Ignore).await;
             return;
         };
@@ -474,6 +530,7 @@ pub async fn run_coordinator(
         inflight: BTreeMap::new(),
         reputation,
         replay: ReplayCache::new(200_000),
+        settled: HashMap::new(),
     };
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     loop {

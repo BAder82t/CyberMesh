@@ -85,6 +85,17 @@ impl ReputationBook {
         }
     }
 
+    /// Records a provable fault established outside a verification record (e.g. an
+    /// equivocating result that arrived after the task was settled).
+    pub fn record_fault(&mut self, f: &crate::record::FaultRecord, context: &str) {
+        let s = self.workers.entry(f.worker.clone()).or_default();
+        s.operator = Some(f.operator.clone());
+        s.faults += 1;
+        s.last_fault = Some(f.kind);
+        s.quarantined = true;
+        s.quarantine_reason = Some(format!("{:?} ({context})", f.kind));
+    }
+
     #[must_use]
     pub fn is_quarantined(&self, kid: &KeyId) -> bool {
         self.workers.get(kid).is_some_and(|s| s.quarantined)

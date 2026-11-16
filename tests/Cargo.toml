@@ -1,0 +1,38 @@
+[package]
+name = "cybermesh-tests"
+description = "End-to-end, adversarial and performance tests for CyberMesh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "support/lib.rs"
+
+[[test]]
+name = "integration"
+path = "integration/e2e.rs"
+
+[[test]]
+name = "adversarial"
+path = "adversarial/network_adversaries.rs"
+
+[[test]]
+name = "performance"
+path = "performance/scale.rs"
+
+[dependencies]
+cybermesh-analysis.workspace = true
+cybermesh-anchor.workspace = true
+cybermesh-crypto.workspace = true
+cybermesh-intelligence.workspace = true
+cybermesh-network.workspace = true
+cybermesh-node = { workspace = true, features = ["adversary-sim"] }
+cybermesh-protocol = { workspace = true, features = ["testkit"] }
+cybermesh-verifier.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
