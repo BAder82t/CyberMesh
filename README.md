@@ -1,19 +1,25 @@
 # CyberMesh
 
-**Community-verified phishing and malicious-domain intelligence that browsers can check offline.**
+**A community-powered cyber-defence network. Organisations donate a small slice of spare computing capacity to analyse public security signals together and check each other's findings. The result is signed protection for ordinary internet users that does not depend on a single commercial provider.**
 
-CyberMesh lets several independent organisations jointly produce a list of phishing and
-malicious domains, and lets anyone verify that list without trusting a single provider. A
-browser extension uses the signed list to warn people before they open a known phishing
-site. It never sends their browsing history anywhere.
+Today, protection against phishing and malicious websites mostly comes from a few commercial
+services that everyone has to trust. CyberMesh explores an alternative: an open network that
+organisations join, where computation is contributed, results are independently verified,
+and protection is delivered in a form anyone can audit.
 
-Concretely, in the current MVP:
+How the network works:
 
-- **Organisations run small workers.** A worker is an opt-in process capped at about 1 % of one CPU core. In our measurements a worker used 0.03–0.28 % CPU and 9–14 MiB of memory. Workers analyse domains with a deterministic, explainable engine and sign their results.
-- **Results are checked, not voted on.** The verifier recomputes every result. A worker whose signed answer differs has provably misbehaved and is quarantined. Colluding workers cannot cause a block.
-- **Releases are co-signed.** Two organisations rebuild each release independently and co-sign it only if they get byte-identical output. A single stolen signing key cannot publish a release.
-- **Browsers verify offline.** The browser extension checks signatures against a pinned trust root and keeps protecting users from the cached list during an outage.
-- **Anchoring is optional.** Release digests go into a Merkle transparency log, which can be anchored to a timestamping chain (local test chain or OpenTimestamps). Anchoring is never needed to enforce protection.
+1. **Contribute.** Each organisation runs an opt-in worker, capped at about 1 % of one CPU core. It only accepts signed, allow-listed analysis tasks, never runs code from the network, and never touches internal data. Measured usage was 0.03–0.28 % CPU and 9–14 MiB of memory.
+2. **Analyse.** Workers run a deterministic, explainable engine over public signals and sign their findings.
+3. **Verify.** Findings from independent organisations are checked by recomputation, not by voting. A participant that submits a wrong signed answer is caught with proof and quarantined. Colluding organisations cannot force a site to be blocked.
+4. **Protect.** Verified findings are published as signed intelligence that several organisations co-sign. Users' browsers verify it offline and warn before a dangerous site opens. No browsing data leaves the device, and protection continues during outages.
+5. **Audit.** Every published release is recorded in a Merkle transparency log. The log can optionally be anchored to a public timestamping chain, but anchoring is never needed for protection.
+
+**First application: phishing and malicious-domain protection.** The analysis tasks assess
+domain names, and the signed release is the delivery format that browsers consume. The task
+system, verification and distribution layers are general. Further task types are planned on
+the [roadmap](docs/roadmap.md). The most promising is certificate-transparency monitoring,
+where donated capacity clearly matters.
 
 > **Status: research MVP (v0.1.0). Not production-ready.** The evaluation in [docs/evaluation.md](docs/evaluation.md) shows two things.
 >
