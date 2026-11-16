@@ -32,7 +32,12 @@ pub fn forge_malicious(r: &mut TaskResult) {
 
 /// Returns the envelopes a misbehaving worker publishes instead of the honest one.
 #[must_use]
-pub fn apply(mode: &str, honest: &TaskResult, key: &SecretKey, last: Option<&[u8]>) -> Vec<Vec<u8>> {
+pub fn apply(
+    mode: &str,
+    honest: &TaskResult,
+    key: &SecretKey,
+    last: Option<&[u8]>,
+) -> Vec<Vec<u8>> {
     match mode {
         "flip-verdicts" => {
             let mut r = honest.clone();

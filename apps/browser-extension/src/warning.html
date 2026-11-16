@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>CyberMesh warning</title>
+  <link rel="stylesheet" href="ui.css">
+  <script type="module" src="warning.js"></script>
+</head>
+<body class="warning-page">
+  <main id="main" data-state="loading">
+    <p class="brand">CyberMesh</p>
+    <h1 id="heading">Checking this site&hellip;</h1>
+    <p id="summary" class="lead"></p>
+
+    <dl id="details" class="facts" hidden>
+      <dt>Site you tried to open</dt><dd id="host"></dd>
+      <dt>Matched indicator</dt><dd id="indicator"></dd>
+      <dt>Classification</dt><dd id="classification"></dd>
+      <dt>Confidence</dt><dd id="confidence"></dd>
+      <dt>Risk score</dt><dd id="risk"></dd>
+      <dt>Operators that agreed</dt><dd id="entry-operators"></dd>
+      <dt>Release</dt><dd id="release"></dd>
+      <dt>Release signed by</dt><dd id="signers"></dd>
+    </dl>
+
+    <section id="reasons-section" hidden>
+      <h2>Why this site is listed</h2>
+      <ul id="reasons"></ul>
+    </section>
+
+    <p id="policy-note" class="note" hidden></p>
+
+    <div class="actions">
+      <button id="back" type="button" class="primary">Go back</button>
+      <button id="continue" type="button" hidden>Continue anyway</button>
+      <button id="report" type="button" class="link" hidden>Report a false positive</button>
+    </div>
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <p class="privacy">
+      This check ran entirely in your browser against a signed release that was verified
+      offline. CyberMesh never sends the sites you visit anywhere. &ldquo;Report a false
+      positive&rdquo; only opens a pre-filled GitHub issue that you can review before submitting.
+    </p>
+  </main>
+</body>
+</html>

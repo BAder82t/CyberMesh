@@ -1,5 +1,10 @@
 //! Shared harness: runs a real CyberMesh network (libp2p over 127.0.0.1) inside one process.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_debug_implementations)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    missing_debug_implementations
+)]
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -8,7 +13,9 @@ use std::time::Duration;
 use cybermesh_analysis::{Brand, Engine, EvidenceBundle};
 use cybermesh_crypto::Digest;
 use cybermesh_network::Multiaddr;
-use cybermesh_node::coordinator::{CoordinatorReport, CoordinatorSetup, prepare_domains, run_coordinator};
+use cybermesh_node::coordinator::{
+    CoordinatorReport, CoordinatorSetup, prepare_domains, run_coordinator,
+};
 use cybermesh_node::governor::ResourcePolicy;
 use cybermesh_node::worker::{WorkerSetup, WorkerStatus, run_worker};
 use cybermesh_protocol::testkit::TestNetwork;
@@ -141,7 +148,9 @@ impl Harness {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port();
         let peer = cybermesh_network::peer_id_of(&net.issuer.public_key()).unwrap();
-        let addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}").parse().unwrap();
+        let addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}")
+            .parse()
+            .unwrap();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let setup = CoordinatorSetup {
             issuer: cybermesh_crypto::SecretKey::from_seed(&net.issuer.seed()),
@@ -182,7 +191,15 @@ impl Harness {
     }
 
     /// Waits for the coordinator to settle everything, then stops all workers.
-    pub async fn finish(self, within: Duration) -> (TestNetwork, CoordinatorReport, Vec<WorkerStatus>, tempfile::TempDir) {
+    pub async fn finish(
+        self,
+        within: Duration,
+    ) -> (
+        TestNetwork,
+        CoordinatorReport,
+        Vec<WorkerStatus>,
+        tempfile::TempDir,
+    ) {
         let report = tokio::time::timeout(within, self.coordinator)
             .await
             .expect("coordinator did not finish in time")

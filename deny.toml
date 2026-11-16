@@ -1,0 +1,40 @@
+# cargo-deny configuration: vulnerability advisories, licence policy, bans and sources.
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # `paste` is unmaintained (no known vulnerability). It is a compile-time proc-macro
+  # reached only via libp2p-tcp -> if-watch -> netlink-packet-core. Revisit when libp2p
+  # drops it; tracked in docs/roadmap.md.
+  { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time proc-macro via libp2p; no runtime code" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+  "MPL-2.0",
+  "0BSD",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,50 @@
+[package]
+name = "cybermesh-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cybermesh-crypto = { path = "../crates/cybermesh-crypto" }
+cybermesh-protocol = { path = "../crates/cybermesh-protocol", features = ["testkit"] }
+cybermesh-analysis = { path = "../crates/cybermesh-analysis" }
+cybermesh-intelligence = { path = "../crates/cybermesh-intelligence" }
+cybermesh-anchor = { path = "../crates/cybermesh-anchor" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "task"
+path = "fuzz_targets/task.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "release"
+path = "fuzz_targets/release.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ots"
+path = "fuzz_targets/ots.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "domain"
+path = "fuzz_targets/domain.rs"
+test = false
+doc = false

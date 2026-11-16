@@ -25,13 +25,21 @@ pub enum DevCmd {
     },
 }
 
-
 #[allow(non_snake_case)]
-fn outcome(d: &str, c: Classification, score: u16, codes: &[(FindingCode, i32, &str)]) -> DomainOutcome {
+fn outcome(
+    d: &str,
+    c: Classification,
+    score: u16,
+    codes: &[(FindingCode, i32, &str)],
+) -> DomainOutcome {
     DomainOutcome {
         domain: d.into(),
         classification: c,
-        verdict: if c == Classification::Block { Verdict::Malicious } else { Verdict::Suspicious },
+        verdict: if c == Classification::Block {
+            Verdict::Malicious
+        } else {
+            Verdict::Suspicious
+        },
         risk_score_bp: score,
         confidence_bp: 9000,
         findings: codes
@@ -80,15 +88,27 @@ pub fn run(c: DevCmd) -> Result<()> {
                 Classification::Block,
                 10_000,
                 &[
-                    (FindingCode::FeedMatch, 9000, "listed in reference feed: reference-feed"),
-                    (FindingCode::BrandImpersonation, 3500, "brand name outside its legitimate domains: examplebank"),
+                    (
+                        FindingCode::FeedMatch,
+                        9000,
+                        "listed in reference feed: reference-feed",
+                    ),
+                    (
+                        FindingCode::BrandImpersonation,
+                        3500,
+                        "brand name outside its legitimate domains: examplebank",
+                    ),
                 ],
             ),
             outcome(
                 "examplebank-account-verify.phish.localhost",
                 Classification::Warn,
                 4900,
-                &[(FindingCode::BrandImpersonation, 3500, "brand name outside its legitimate domains: examplebank")],
+                &[(
+                    FindingCode::BrandImpersonation,
+                    3500,
+                    "brand name outside its legitimate domains: examplebank",
+                )],
             ),
         ],
         verified_at: NOW - 60,
@@ -129,7 +149,10 @@ pub fn run(c: DevCmd) -> Result<()> {
 
     let mut duplicated = single.clone();
     duplicated.signatures.push(duplicated.signatures[0].clone());
-    write(&out.join("release-duplicate-signature.json"), &duplicated.to_vec()?)?;
+    write(
+        &out.join("release-duplicate-signature.json"),
+        &duplicated.to_vec()?,
+    )?;
 
     let mut same_op_root = root.clone();
     same_op_root.signers[1].operator = same_op_root.signers[0].operator.clone();

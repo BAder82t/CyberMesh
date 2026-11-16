@@ -101,10 +101,7 @@ mod tests {
 
     #[test]
     fn tagged_is_domain_separated() {
-        assert_ne!(
-            Digest::tagged("a", &[b"bc"]),
-            Digest::tagged("ab", &[b"c"])
-        );
+        assert_ne!(Digest::tagged("a", &[b"bc"]), Digest::tagged("ab", &[b"c"]));
         assert_ne!(
             Digest::tagged("t", &[b"ab", b"c"]),
             Digest::tagged("t", &[b"a", b"bc"])

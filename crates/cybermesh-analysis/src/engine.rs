@@ -3,11 +3,11 @@ use cybermesh_protocol::{
     DomainAssessment, EngineSpec, Finding, FindingCode, TaskAnnouncement, TaskKind, Verdict,
 };
 
+use crate::AnalysisError;
 use crate::evidence::{Brand, EvidenceBundle};
 use crate::features::{
     HostParts, deleet, edit_distance, entropy_q16, host_parts, is_mixed_script, skeleton,
 };
-use crate::AnalysisError;
 
 /// Engine identifier carried in tasks and results.
 pub const ENGINE_NAME: &str = "cybermesh-lexical";
@@ -53,17 +53,36 @@ pub mod scoring {
 
     /// Credential-phishing vocabulary (substring match, distinct words counted).
     pub const KEYWORDS: &[&str] = &[
-        "account", "alert", "authenticate", "banking", "billing", "confirm", "credential",
-        "invoice", "login", "logon", "password", "recover", "reset", "secure", "signin",
-        "support", "suspend", "unlock", "update", "validate", "verify", "wallet", "webscr",
+        "account",
+        "alert",
+        "authenticate",
+        "banking",
+        "billing",
+        "confirm",
+        "credential",
+        "invoice",
+        "login",
+        "logon",
+        "password",
+        "recover",
+        "reset",
+        "secure",
+        "signin",
+        "support",
+        "suspend",
+        "unlock",
+        "update",
+        "validate",
+        "verify",
+        "wallet",
+        "webscr",
     ];
 
     /// TLDs repeatedly reported as disproportionately abused (e.g. Spamhaus and Interisle
     /// annual reports). A weak signal on its own.
     pub const SUSPICIOUS_TLDS: &[&str] = &[
-        "bond", "buzz", "cf", "cfd", "click", "country", "cyou", "ga", "gq", "icu", "link",
-        "lol", "ml", "monster", "mov", "quest", "rest", "sbs", "tk", "top", "work", "xyz",
-        "zip",
+        "bond", "buzz", "cf", "cfd", "click", "country", "cyou", "ga", "gq", "icu", "link", "lol",
+        "ml", "monster", "mov", "quest", "rest", "sbs", "tk", "top", "work", "xyz", "zip",
     ];
 }
 
@@ -129,7 +148,9 @@ impl Engine {
                 .find(|k| !task.evidence.contains_key(*k))
                 .cloned()
                 .unwrap_or_default();
-            return Err(AnalysisError::UnknownEvidence(format!("{missing} (not pinned by task)")));
+            return Err(AnalysisError::UnknownEvidence(format!(
+                "{missing} (not pinned by task)"
+            )));
         }
         Ok(())
     }
@@ -164,7 +185,10 @@ impl Engine {
             findings.push(Finding {
                 code: FindingCode::FeedMatch,
                 points: scoring::FEED_MATCH,
-                detail: truncate(format!("listed in reference feed: {}", feed_hits.join(", "))),
+                detail: truncate(format!(
+                    "listed in reference feed: {}",
+                    feed_hits.join(", ")
+                )),
             });
         }
         // On user-content hosting platforms each subdomain is a separately controlled site:
@@ -261,7 +285,10 @@ impl Engine {
             out.push(Finding {
                 code: FindingCode::BrandLookalike,
                 points: scoring::BRAND_LOOKALIKE,
-                detail: truncate(format!("near-miss spelling of brand: {}", lookalikes.join(", "))),
+                detail: truncate(format!(
+                    "near-miss spelling of brand: {}",
+                    lookalikes.join(", ")
+                )),
             });
         }
 
@@ -292,7 +319,9 @@ impl Engine {
                         continue;
                     }
                     if brand_tokens_in(brand, &skel_refs, &skel_parts)
-                        || skel_parts.iter().any(|s| brand.tokens.iter().any(|t| deleet(s) == *t))
+                        || skel_parts
+                            .iter()
+                            .any(|s| brand.tokens.iter().any(|t| deleet(s) == *t))
                     {
                         homographs.push(brand.name.as_str());
                     }
@@ -395,7 +424,8 @@ fn is_legitimate(brand: &Brand, registrable: &str) -> bool {
 /// Whole hyphen-separated part equals a token, or (for tokens of 6+ chars) a label contains it.
 fn brand_tokens_in(brand: &Brand, labels: &[&str], parts: &[&str]) -> bool {
     brand.tokens.iter().any(|t| {
-        parts.iter().any(|p| p == t) || (t.len() >= 6 && labels.iter().any(|l| l.contains(t.as_str())))
+        parts.iter().any(|p| p == t)
+            || (t.len() >= 6 && labels.iter().any(|l| l.contains(t.as_str())))
     })
 }
 
@@ -485,7 +515,9 @@ mod tests {
     #[test]
     fn feed_listed_phishing_domain_is_malicious_with_high_confidence() {
         let e = test_engine();
-        let a = e.assess("examplebank-secure-login.phish.localhost").unwrap();
+        let a = e
+            .assess("examplebank-secure-login.phish.localhost")
+            .unwrap();
         assert_eq!(a.verdict, Verdict::Malicious);
         assert_eq!(a.risk_score_bp, 10_000);
         assert!(a.confidence_bp >= 9500);
@@ -514,7 +546,10 @@ mod tests {
         assert_eq!(a.verdict, Verdict::KnownBenign);
         assert_eq!(a.confidence_bp, 3000);
         let codes: Vec<_> = a.findings.iter().map(|f| f.code).collect();
-        assert_eq!(codes, vec![FindingCode::FeedMatch, FindingCode::PopularDomain]);
+        assert_eq!(
+            codes,
+            vec![FindingCode::FeedMatch, FindingCode::PopularDomain]
+        );
     }
 
     #[test]
@@ -522,11 +557,21 @@ mod tests {
         let e = test_engine();
         let a = e.assess("evil-login.weebly.com").unwrap();
         assert_eq!(a.verdict, Verdict::Malicious);
-        assert!(!a.findings.iter().any(|f| f.code == FindingCode::PopularDomain));
+        assert!(
+            !a.findings
+                .iter()
+                .any(|f| f.code == FindingCode::PopularDomain)
+        );
         // The platform itself stays exempt, and non-platform popular domains keep the
         // exemption for their subdomains.
-        assert_eq!(e.assess("www.weebly.com").unwrap().verdict, Verdict::KnownBenign);
-        assert_eq!(e.assess("drive.google.com").unwrap().verdict, Verdict::KnownBenign);
+        assert_eq!(
+            e.assess("www.weebly.com").unwrap().verdict,
+            Verdict::KnownBenign
+        );
+        assert_eq!(
+            e.assess("drive.google.com").unwrap().verdict,
+            Verdict::KnownBenign
+        );
     }
 
     #[test]
@@ -582,7 +627,12 @@ mod tests {
     #[test]
     fn legitimate_idns_get_no_structural_findings() {
         let e = test_engine();
-        for d in ["xn--bcher-kva.de", "xn--e1afmkfd.xn--p1ai", "xn--mnchen-3ya.de", "xn--80aswg.xn--p1ai"] {
+        for d in [
+            "xn--bcher-kva.de",
+            "xn--e1afmkfd.xn--p1ai",
+            "xn--mnchen-3ya.de",
+            "xn--80aswg.xn--p1ai",
+        ] {
             let a = e.assess(d).unwrap();
             assert!(
                 a.findings.is_empty(),
@@ -598,7 +648,11 @@ mod tests {
         // "аррӏе.com" written entirely in Cyrillic: the classic homograph demonstration.
         let e = test_engine();
         let a = e.assess("xn--80ak6aa92e.com").unwrap();
-        assert!(a.findings.iter().any(|f| f.code == FindingCode::IdnHomograph));
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.code == FindingCode::IdnHomograph)
+        );
         assert!(!a.findings.iter().any(|f| f.code == FindingCode::DigitHeavy));
     }
 
@@ -624,7 +678,8 @@ mod tests {
         ];
         let out: Vec<_> = corpus.iter().map(|d| e.assess(d).unwrap()).collect();
         let bytes = cybermesh_crypto::canonical::to_vec(&out).unwrap();
-        let summary: Vec<(u16, Verdict)> = out.iter().map(|a| (a.risk_score_bp, a.verdict)).collect();
+        let summary: Vec<(u16, Verdict)> =
+            out.iter().map(|a| (a.risk_score_bp, a.verdict)).collect();
         assert_eq!(
             summary,
             vec![

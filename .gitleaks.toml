@@ -1,0 +1,11 @@
+# gitleaks configuration: default rules plus an allowlist for deterministic test vectors
+# (public keys and signatures generated from test seeds; no secret material).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public test vectors"
+paths = [
+  '''apps/browser-extension/test/fixtures/.*\.json''',
+  '''docs/evaluation-results/.*''',
+]

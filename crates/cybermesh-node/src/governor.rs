@@ -89,13 +89,16 @@ impl ResourcePolicy {
     #[must_use]
     pub fn within_hours(&self, unix_secs: u64) -> bool {
         let t = unix_secs % 86_400;
-        self.active_hours_utc.iter().filter_map(|w| parse_window(w)).any(|(a, b)| {
-            if a <= b {
-                t >= a && t < b
-            } else {
-                t >= a || t < b
-            }
-        })
+        self.active_hours_utc
+            .iter()
+            .filter_map(|w| parse_window(w))
+            .any(|(a, b)| {
+                if a <= b {
+                    t >= a && t < b
+                } else {
+                    t >= a || t < b
+                }
+            })
     }
 }
 
@@ -252,7 +255,10 @@ impl Governor {
         if rss_bytes() > self.policy.memory_mb * 1024 * 1024 {
             return Decision::Pause(PauseReason::MemoryBudget);
         }
-        if self.load().is_some_and(|l| l > self.policy.max_load_per_cpu) {
+        if self
+            .load()
+            .is_some_and(|l| l > self.policy.max_load_per_cpu)
+        {
             return Decision::Pause(PauseReason::SystemLoad);
         }
         Decision::Run
@@ -260,7 +266,9 @@ impl Governor {
 
     #[must_use]
     pub fn snapshot(&self) -> ResourceSnapshot {
-        let cpu = process_cpu().saturating_sub(self.cpu_at_start).as_secs_f64();
+        let cpu = process_cpu()
+            .saturating_sub(self.cpu_at_start)
+            .as_secs_f64();
         let wall = self.started.elapsed().as_secs_f64();
         ResourceSnapshot {
             cpu_seconds: cpu,
@@ -314,7 +322,10 @@ mod tests {
         );
         assert_eq!(g.decide(12 * 3600), Decision::Run);
         std::fs::write(dir.path().join("PAUSE"), b"").unwrap();
-        assert_eq!(g.decide(12 * 3600), Decision::Pause(PauseReason::Administrator));
+        assert_eq!(
+            g.decide(12 * 3600),
+            Decision::Pause(PauseReason::Administrator)
+        );
         std::fs::write(dir.path().join("STOP"), b"").unwrap();
         assert_eq!(g.decide(12 * 3600), Decision::Stop);
     }

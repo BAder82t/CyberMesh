@@ -137,7 +137,9 @@ fn read_limited(path: &Path, id: &str) -> Result<Vec<u8>, EvidenceError> {
     }
     let f = fs::File::open(path).map_err(io)?;
     let mut buf = Vec::new();
-    f.take(MAX_SOURCE_BYTES + 1).read_to_end(&mut buf).map_err(io)?;
+    f.take(MAX_SOURCE_BYTES + 1)
+        .read_to_end(&mut buf)
+        .map_err(io)?;
     if buf.len() as u64 > MAX_SOURCE_BYTES {
         return Err(EvidenceError::TooLarge(id.to_owned()));
     }
@@ -172,8 +174,8 @@ impl EvidenceBundle {
     pub fn load(dir: &Path) -> Result<Self, EvidenceError> {
         let mpath = dir.join("bundle.json");
         let mbytes = read_limited(&mpath, "bundle.json")?;
-        let manifest: BundleManifest = serde_json::from_slice(&mbytes)
-            .map_err(|e| EvidenceError::Manifest(e.to_string()))?;
+        let manifest: BundleManifest =
+            serde_json::from_slice(&mbytes).map_err(|e| EvidenceError::Manifest(e.to_string()))?;
         if manifest.sources.len() > MAX_SOURCES {
             return Err(EvidenceError::Manifest("too many sources".into()));
         }
@@ -215,7 +217,10 @@ impl EvidenceBundle {
         sources.sort_by(|a, b| a.id.cmp(&b.id));
         for s in &sources {
             if !ids.insert(s.id.clone()) {
-                return Err(EvidenceError::Manifest(format!("duplicate source id {}", s.id)));
+                return Err(EvidenceError::Manifest(format!(
+                    "duplicate source id {}",
+                    s.id
+                )));
             }
             let bytes = files
                 .get(&s.id)
@@ -250,7 +255,9 @@ impl EvidenceBundle {
                     for b in &mut brands {
                         if b.tokens.iter().any(|t| {
                             t.len() < 3
-                                || !t.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                                || !t
+                                    .bytes()
+                                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
                         }) {
                             return Err(EvidenceError::Brands(format!(
                                 "brand {} has an invalid token (need >=3 chars of [a-z0-9])",
@@ -264,7 +271,9 @@ impl EvidenceBundle {
                     bundle.brands.extend(brands);
                 }
             }
-            bundle.pins.insert(s.id.clone(), source_pin(&s.id, s.kind, &s.sha256));
+            bundle
+                .pins
+                .insert(s.id.clone(), source_pin(&s.id, s.kind, &s.sha256));
         }
         bundle.sources = sources;
         Ok(bundle)
@@ -324,11 +333,17 @@ mod tests {
                 meta("popularity", SourceKind::Popularity, &pop),
             ],
         };
-        let files = BTreeMap::from([("feed".to_owned(), feed.clone()), ("popularity".to_owned(), pop)]);
+        let files = BTreeMap::from([
+            ("feed".to_owned(), feed.clone()),
+            ("popularity".to_owned(), pop),
+        ]);
         let b = EvidenceBundle::from_manifest_and_files(manifest.clone(), &files).unwrap();
         assert_eq!(b.skipped_lines, 1);
         assert!(b.blocklists[0].1.contains("bad.test"));
-        assert_eq!(b.blocklist_hits("a.evil.example.com", "example.com"), vec!["feed"]);
+        assert_eq!(
+            b.blocklist_hits("a.evil.example.com", "example.com"),
+            vec!["feed"]
+        );
         assert!(b.blocklist_hits("example.com", "example.com").is_empty());
         assert_eq!(b.pins.len(), 2);
 
@@ -357,7 +372,10 @@ mod tests {
         std::os::unix::fs::symlink("/dev/zero", dir.path().join("feed.txt")).unwrap();
         let m = r#"{"v":1,"sources":[{"id":"x","kind":"blocklist","file":"feed.txt","sha256":"sha256:0000000000000000000000000000000000000000000000000000000000000000","version":"1","license":"x","origin":"x"}]}"#;
         fs::write(dir.path().join("bundle.json"), m).unwrap();
-        assert!(matches!(EvidenceBundle::load(dir.path()), Err(EvidenceError::Manifest(_))));
+        assert!(matches!(
+            EvidenceBundle::load(dir.path()),
+            Err(EvidenceError::Manifest(_))
+        ));
     }
 
     #[test]

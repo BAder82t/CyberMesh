@@ -102,8 +102,8 @@ impl WorkerConfig {
     pub fn load(path: &Path) -> Result<Self, NodeError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
-        let mut c: Self =
-            toml::from_str(&text).map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
+        let mut c: Self = toml::from_str(&text)
+            .map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
         let base = path.parent().unwrap_or(Path::new("."));
         for p in [
             &mut c.key,
@@ -124,8 +124,8 @@ impl CoordinatorConfig {
     pub fn load(path: &Path) -> Result<Self, NodeError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
-        let mut c: Self =
-            toml::from_str(&text).map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
+        let mut c: Self = toml::from_str(&text)
+            .map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
         let base = path.parent().unwrap_or(Path::new("."));
         for p in [
             &mut c.issuer_key,

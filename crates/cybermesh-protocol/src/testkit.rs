@@ -27,7 +27,9 @@ pub fn sign<T: Serialize>(ptype: &str, value: &T, key: &SecretKey) -> Envelope {
 /// Envelope bytes for a signed payload. Panics on encoding failure (test code).
 #[allow(clippy::expect_used)]
 pub fn sign_bytes<T: Serialize>(ptype: &str, value: &T, key: &SecretKey) -> Vec<u8> {
-    sign(ptype, value, key).to_vec().expect("test envelope must encode")
+    sign(ptype, value, key)
+        .to_vec()
+        .expect("test envelope must encode")
 }
 
 /// One enrolled worker.
@@ -179,9 +181,14 @@ impl TestNetwork {
         let mut ds: Vec<String> = domains.iter().map(|s| (*s).to_owned()).collect();
         ds.sort();
         ds.dedup();
-        let ops: std::collections::BTreeSet<_> =
-            assignees.iter().map(|i| &self.workers[*i].operator).collect();
-        let task_id = Digest::tagged("testkit/task", &[ds.join(",").as_bytes(), &now.to_be_bytes()]);
+        let ops: std::collections::BTreeSet<_> = assignees
+            .iter()
+            .map(|i| &self.workers[*i].operator)
+            .collect();
+        let task_id = Digest::tagged(
+            "testkit/task",
+            &[ds.join(",").as_bytes(), &now.to_be_bytes()],
+        );
         TaskAnnouncement {
             v: PROTOCOL_VERSION,
             network_id: self.network_id.clone(),
@@ -195,7 +202,10 @@ impl TestNetwork {
             engine,
             evidence,
             domains: ds,
-            assignees: assignees.iter().map(|i| self.workers[*i].key.key_id()).collect(),
+            assignees: assignees
+                .iter()
+                .map(|i| self.workers[*i].key.key_id())
+                .collect(),
             min_operators: u8::try_from(ops.len().min(3)).unwrap_or(1),
         }
     }

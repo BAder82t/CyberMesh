@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "CyberMesh Phishing Shield",
+  "version": "0.1.0",
+  "description": "Warns before you open hosts listed in a signed, offline-verified CyberMesh threat-intelligence release. Never uploads your browsing history.",
+  "minimum_chrome_version": "137",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "alarms", "declarativeNetRequest", "webNavigation", "tabs"],
+  "host_permissions": ["http://127.0.0.1:8088/*"],
+  "action": {
+    "default_title": "CyberMesh",
+    "default_popup": "popup.html"
+  },
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; connect-src 'self' http://127.0.0.1:8088"
+  }
+}

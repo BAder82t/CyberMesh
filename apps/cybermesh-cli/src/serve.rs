@@ -59,7 +59,10 @@ fn resolve(root: &Path, url: &str) -> Option<PathBuf> {
 
 pub fn serve(dir: &Path, addr: &str) -> Result<()> {
     let server = tiny_http::Server::http(addr).map_err(|e| anyhow!("bind {addr}: {e}"))?;
-    eprintln!("serving {} on http://{addr} (phishing test page on *.phish.localhost)", dir.display());
+    eprintln!(
+        "serving {} on http://{addr} (phishing test page on *.phish.localhost)",
+        dir.display()
+    );
     let root = dir.canonicalize()?;
     let header = |k: &str, v: &str| tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).ok();
     for req in server.incoming_requests() {

@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use cybermesh_network::{Acceptance, Multiaddr, NetConfig, NetEvent, NetworkHandle, keypair_from_seed, spawn};
+use cybermesh_network::{
+    Acceptance, Multiaddr, NetConfig, NetEvent, NetworkHandle, keypair_from_seed, spawn,
+};
 use libp2p::PeerId;
 use libp2p::multiaddr::Protocol;
 
@@ -40,12 +42,18 @@ fn cfg(allowed: Vec<PeerId>, bootstrap: Vec<Multiaddr>) -> NetConfig {
 async fn publish_until_ok(h: &NetworkHandle, data: Vec<u8>) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while h.publish(TOPIC, data.clone()).await.is_err() {
-        assert!(tokio::time::Instant::now() < deadline, "no subscribed peers in time");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no subscribed peers in time"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-async fn next_message(h: &NetworkHandle, within: Duration) -> Option<cybermesh_network::InboundMessage> {
+async fn next_message(
+    h: &NetworkHandle,
+    within: Duration,
+) -> Option<cybermesh_network::InboundMessage> {
     tokio::time::timeout(within, async {
         loop {
             match h.next_event().await {
@@ -68,7 +76,9 @@ async fn allowlisted_peers_exchange_messages() {
     let b = spawn(kb, cfg(vec![pa], vec![addr_a])).unwrap();
 
     publish_until_ok(&a, b"hello from a".to_vec()).await;
-    let m = next_message(&b, Duration::from_secs(10)).await.expect("delivery");
+    let m = next_message(&b, Duration::from_secs(10))
+        .await
+        .expect("delivery");
     assert_eq!(m.data, b"hello from a");
     assert_eq!(m.author, Some(pa));
     b.report(&m, Acceptance::Accept).await;
@@ -101,8 +111,14 @@ async fn unenrolled_peer_cannot_connect_or_inject() {
         }
     })
     .await;
-    assert!(!matches!(got, Ok(Some(_))), "message from unenrolled peer delivered");
-    assert!(!matches!(got, Ok(None)), "unenrolled peer connection was accepted");
+    assert!(
+        !matches!(got, Ok(Some(_))),
+        "message from unenrolled peer delivered"
+    );
+    assert!(
+        !matches!(got, Ok(None)),
+        "unenrolled peer connection was accepted"
+    );
     assert_eq!(a.stats.snapshot().messages_in, 0);
 }
 
@@ -135,7 +151,9 @@ async fn reconnects_after_peer_restart() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
     };
-    let addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{port}/p2p/{pa}").parse().unwrap();
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{port}/p2p/{pa}")
+        .parse()
+        .unwrap();
     let mk_a = || {
         let mut c = cfg(vec![pb], vec![]);
         c.listen = vec![format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap()];
@@ -151,6 +169,8 @@ async fn reconnects_after_peer_restart() {
     let a2 = mk_a();
     // B redials the bootstrap address and delivery resumes.
     publish_until_ok(&b, b"after".to_vec()).await;
-    let m = next_message(&a2, Duration::from_secs(15)).await.expect("delivery after restart");
+    let m = next_message(&a2, Duration::from_secs(15))
+        .await
+        .expect("delivery after restart");
     assert_eq!(m.data, b"after");
 }

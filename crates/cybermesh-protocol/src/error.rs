@@ -41,9 +41,9 @@ impl ProtocolError {
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Crypto(CryptoError::BadSignature | CryptoError::InsufficientSignatures { .. }) => {
-                "bad-signature"
-            }
+            Self::Crypto(
+                CryptoError::BadSignature | CryptoError::InsufficientSignatures { .. },
+            ) => "bad-signature",
             Self::Crypto(CryptoError::TooLarge { .. }) => "too-large",
             Self::Crypto(CryptoError::WrongPayloadType { .. }) => "wrong-type",
             Self::Crypto(CryptoError::NonCanonical) => "non-canonical",

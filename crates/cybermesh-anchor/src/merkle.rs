@@ -73,7 +73,11 @@ pub fn inclusion_proof(m: usize, leaves: &[Hash]) -> Vec<Hash> {
 fn subproof(m: usize, leaves: &[Hash], complete: bool) -> Vec<Hash> {
     let n = leaves.len();
     if m == n {
-        return if complete { Vec::new() } else { vec![root(leaves)] };
+        return if complete {
+            Vec::new()
+        } else {
+            vec![root(leaves)]
+        };
     }
     let k = split(n);
     if m <= k {
@@ -194,7 +198,9 @@ mod tests {
     use super::*;
 
     fn leaves(n: usize) -> Vec<Hash> {
-        (0..n).map(|i| leaf_hash(&(i as u64).to_be_bytes())).collect()
+        (0..n)
+            .map(|i| leaf_hash(&(i as u64).to_be_bytes()))
+            .collect()
     }
 
     #[test]
@@ -212,28 +218,70 @@ mod tests {
             let r = root(&l);
             for m in 0..n {
                 let p = inclusion_proof(m, &l);
-                assert!(verify_inclusion(m as u64, n as u64, &l[m], &p, &r), "n={n} m={m}");
+                assert!(
+                    verify_inclusion(m as u64, n as u64, &l[m], &p, &r),
+                    "n={n} m={m}"
+                );
                 // Wrong index, wrong leaf, wrong size, truncated proof must all fail.
                 if n > 1 {
-                    assert!(!verify_inclusion(((m + 1) % n) as u64, n as u64, &l[m], &p, &r));
+                    assert!(!verify_inclusion(
+                        ((m + 1) % n) as u64,
+                        n as u64,
+                        &l[m],
+                        &p,
+                        &r
+                    ));
                     // Note: a claimed size of n+1 against the size-n root can verify for
                     // some (m, n) (e.g. n=3, m=0). Size and root are bound together by the
                     // checkpoint, so the check that matters is against the size-(n+1) root.
                     let l2 = leaves(n + 1);
-                    assert!(!verify_inclusion(m as u64, n as u64 + 1, &l[m], &p, &root(&l2)));
+                    assert!(!verify_inclusion(
+                        m as u64,
+                        n as u64 + 1,
+                        &l[m],
+                        &p,
+                        &root(&l2)
+                    ));
                     if !p.is_empty() {
-                        assert!(!verify_inclusion(m as u64, n as u64, &l[m], &p[..p.len() - 1], &r));
+                        assert!(!verify_inclusion(
+                            m as u64,
+                            n as u64,
+                            &l[m],
+                            &p[..p.len() - 1],
+                            &r
+                        ));
                     }
                 }
-                assert!(!verify_inclusion(m as u64, n as u64, &leaf_hash(b"x"), &p, &r));
+                assert!(!verify_inclusion(
+                    m as u64,
+                    n as u64,
+                    &leaf_hash(b"x"),
+                    &p,
+                    &r
+                ));
             }
             for m in 1..=n {
                 let p = consistency_proof(m, &l);
                 let r1 = root(&l[..m]);
-                assert!(verify_consistency(m as u64, n as u64, &r1, &r, &p), "n={n} m={m}");
+                assert!(
+                    verify_consistency(m as u64, n as u64, &r1, &r, &p),
+                    "n={n} m={m}"
+                );
                 if m < n {
-                    assert!(!verify_consistency(m as u64, n as u64, &leaf_hash(b"x"), &r, &p));
-                    assert!(!verify_consistency(m as u64, n as u64, &r1, &leaf_hash(b"x"), &p));
+                    assert!(!verify_consistency(
+                        m as u64,
+                        n as u64,
+                        &leaf_hash(b"x"),
+                        &r,
+                        &p
+                    ));
+                    assert!(!verify_consistency(
+                        m as u64,
+                        n as u64,
+                        &r1,
+                        &leaf_hash(b"x"),
+                        &p
+                    ));
                 }
             }
         }
@@ -245,7 +293,13 @@ mod tests {
         let mut forged = l.clone();
         forged[3] = leaf_hash(b"rewritten");
         let p = consistency_proof(5, &forged);
-        assert!(!verify_consistency(5, 10, &root(&l[..5]), &root(&forged), &p));
+        assert!(!verify_consistency(
+            5,
+            10,
+            &root(&l[..5]),
+            &root(&forged),
+            &p
+        ));
     }
 
     proptest! {

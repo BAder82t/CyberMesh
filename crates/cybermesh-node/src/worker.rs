@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec};
 use cybermesh_crypto::{Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce};
-use cybermesh_network::{Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed, peer_id_of};
+use cybermesh_network::{
+    Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed, peer_id_of,
+};
 use cybermesh_protocol::replay::ReplayCache;
 use cybermesh_protocol::validate::verify_task;
 use cybermesh_protocol::{
@@ -21,7 +23,9 @@ use tracing::{debug, info, warn};
 use crate::NodeError;
 use crate::config::WorkerConfig;
 use crate::files;
-use crate::governor::{Decision, Governor, PauseReason, ResourcePolicy, ResourceSnapshot, process_cpu};
+use crate::governor::{
+    Decision, Governor, PauseReason, ResourcePolicy, ResourceSnapshot, process_cpu,
+};
 
 /// Everything a worker needs, already loaded and verified.
 #[derive(Debug)]
@@ -73,11 +77,16 @@ pub fn parse_addrs(v: &[String]) -> Result<Vec<cybermesh_network::Multiaddr>, No
 }
 
 /// Loads a worker from its configuration file.
-pub fn setup_from_config(cfg: &WorkerConfig, clock: Arc<dyn Clock>) -> Result<WorkerSetup, NodeError> {
+pub fn setup_from_config(
+    cfg: &WorkerConfig,
+    clock: Arc<dyn Clock>,
+) -> Result<WorkerSetup, NodeError> {
     let key = SecretKey::read_from_file(&cfg.key)?;
     let (manifest, _root) = files::load_manifest(&cfg.manifest, &cfg.governance_root, clock.now())?;
     if manifest.network_id != cfg.network_id {
-        return Err(NodeError::Config("manifest is for a different network".into()));
+        return Err(NodeError::Config(
+            "manifest is for a different network".into(),
+        ));
     }
     if manifest
         .key_with_role(&key.key_id(), cybermesh_protocol::Role::Worker)
@@ -142,7 +151,11 @@ struct Worker {
 }
 
 impl Worker {
-    async fn on_task_message(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
+    async fn on_task_message(
+        &mut self,
+        net: &NetworkHandle,
+        m: &cybermesh_network::InboundMessage,
+    ) {
         let now = self.s.clock.now();
         let v = match verify_task(&m.data, &self.s.manifest, now, &self.limits) {
             Ok(v) => v,
@@ -158,7 +171,11 @@ impl Worker {
             }
         };
         let forget = v.message.expires_at + self.limits.max_clock_skew_secs;
-        if self.replay.check_and_insert(v.payload_digest, forget, now).is_err() {
+        if self
+            .replay
+            .check_and_insert(v.payload_digest, forget, now)
+            .is_err()
+        {
             net.report(m, Acceptance::Ignore).await;
             return;
         }
@@ -175,16 +192,17 @@ impl Worker {
         self.queue.push_back((v.message, v.payload_digest));
     }
 
-    fn build_result(&mut self, task: &TaskAnnouncement, digest: Digest) -> Result<TaskResult, String> {
+    fn build_result(
+        &mut self,
+        task: &TaskAnnouncement,
+        digest: Digest,
+    ) -> Result<TaskResult, String> {
         let cpu0 = process_cpu();
         let t0 = Instant::now();
-        let assessments = self
-            .s
-            .engine
-            .assess_task(task)
-            .map_err(|e| e.to_string())?;
+        let assessments = self.s.engine.assess_task(task).map_err(|e| e.to_string())?;
         let usage = ResourceUsage {
-            cpu_micros: u64::try_from(process_cpu().saturating_sub(cpu0).as_micros()).unwrap_or(u64::MAX),
+            cpu_micros: u64::try_from(process_cpu().saturating_sub(cpu0).as_micros())
+                .unwrap_or(u64::MAX),
             wall_micros: u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
         };
         Ok(TaskResult {
@@ -226,7 +244,12 @@ impl Worker {
                 let mut messages = vec![self.sign(&result)];
                 #[cfg(feature = "adversary-sim")]
                 if let Some(mode) = &self.s.adversary {
-                    messages = crate::adversary::apply(mode, &result, &self.s.key, self.last_result.as_deref());
+                    messages = crate::adversary::apply(
+                        mode,
+                        &result,
+                        &self.s.key,
+                        self.last_result.as_deref(),
+                    );
                 }
                 self.last_result = messages.first().cloned();
                 for bytes in messages {
@@ -243,7 +266,12 @@ impl Worker {
     }
 
     async fn send(&mut self, net: &NetworkHandle, bytes: Vec<u8>, deadline: u64) {
-        if net.publish(&self.topics.results, bytes.clone()).await.is_err() && self.outbox.len() < 64 {
+        if net
+            .publish(&self.topics.results, bytes.clone())
+            .await
+            .is_err()
+            && self.outbox.len() < 64
+        {
             self.outbox.push_back(Outgoing {
                 bytes,
                 deadline,
@@ -263,7 +291,11 @@ impl Worker {
                 keep.push_back(o);
                 continue;
             }
-            if net.publish(&self.topics.results, o.bytes.clone()).await.is_err() {
+            if net
+                .publish(&self.topics.results, o.bytes.clone())
+                .await
+                .is_err()
+            {
                 o.next_try = Instant::now() + Duration::from_secs(2);
                 keep.push_back(o);
             }
@@ -290,7 +322,9 @@ impl Worker {
             evidence: self.s.engine.evidence().pins.clone(),
             queue_depth: u16::try_from(self.queue.len()).unwrap_or(u16::MAX),
         };
-        let Ok(bytes) = canonical::to_vec(&hb) else { return };
+        let Ok(bytes) = canonical::to_vec(&hb) else {
+            return;
+        };
         let env = Envelope::sign(payload_type::HEARTBEAT, &bytes, &self.s.key);
         if let Ok(b) = env.to_vec() {
             let _ = net.publish(&self.topics.presence, b).await;

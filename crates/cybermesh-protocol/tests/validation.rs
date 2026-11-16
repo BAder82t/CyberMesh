@@ -84,7 +84,13 @@ fn manifest_requires_governance_threshold_and_rejects_rollback() {
 #[test]
 fn valid_task_is_accepted() {
     let n = net();
-    let t = n.task(&["b.example.com", "a.example.com"], &[0, 2, 3], engine(), pins(), NOW);
+    let t = n.task(
+        &["b.example.com", "a.example.com"],
+        &[0, 2, 3],
+        engine(),
+        pins(),
+        NOW,
+    );
     let bytes = sign_bytes(payload_type::TASK, &t, &n.issuer);
     let v = verify_task(&bytes, &n.manifest, NOW, &Limits::default()).unwrap();
     assert_eq!(v.message.domains, vec!["a.example.com", "b.example.com"]);
@@ -150,7 +156,12 @@ fn task_time_and_shape_rules() {
     let limits = Limits::default();
     let base = n.task(&["a.example.com"], &[0, 2, 3], engine(), pins(), NOW);
     let check = |t: &TaskAnnouncement| {
-        verify_task(&sign_bytes(payload_type::TASK, t, &n.issuer), &n.manifest, NOW, &limits)
+        verify_task(
+            &sign_bytes(payload_type::TASK, t, &n.issuer),
+            &n.manifest,
+            NOW,
+            &limits,
+        )
     };
 
     let mut t = base.clone();
@@ -192,7 +203,10 @@ fn task_time_and_shape_rules() {
 
     let mut t = base;
     t.network_id = "other".into();
-    assert!(matches!(check(&t).unwrap_err(), ProtocolError::WrongNetwork { .. }));
+    assert!(matches!(
+        check(&t).unwrap_err(),
+        ProtocolError::WrongNetwork { .. }
+    ));
 }
 
 #[test]
@@ -204,7 +218,13 @@ fn oversized_and_malformed_inputs_are_rejected() {
         verify_task(&huge, &n.manifest, NOW, &limits).unwrap_err(),
         ProtocolError::Crypto(cybermesh_crypto::CryptoError::TooLarge { .. })
     ));
-    for junk in [&b""[..], b"null", b"[]", b"{\"payloadType\":1}", &[0xff, 0xfe]] {
+    for junk in [
+        &b""[..],
+        b"null",
+        b"[]",
+        b"{\"payloadType\":1}",
+        &[0xff, 0xfe],
+    ] {
         assert!(verify_task(junk, &n.manifest, NOW, &limits).is_err());
     }
     // Non-canonical payload bytes (extra whitespace) under a valid signature.

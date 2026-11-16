@@ -100,7 +100,12 @@ pub fn eval(a: &EvalArgs) -> Result<()> {
         bail!("no usable rows");
     }
     let mut conf: BTreeMap<&'static str, (Confusion, Vec<String>)> = BTreeMap::new();
-    let names = ["feed-only", "lexical-only", "engine-malicious", "engine-suspicious"];
+    let names = [
+        "feed-only",
+        "lexical-only",
+        "engine-malicious",
+        "engine-suspicious",
+    ];
     let start = Instant::now();
     let mut assessments = Vec::with_capacity(rows.len());
     for (d, _) in &rows {

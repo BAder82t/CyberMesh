@@ -10,3 +10,8 @@ apps/browser-extension/dist/
 *.secret.json
 .DS_Store
 .env
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/Cargo.lock
+/measure-out/

@@ -1,0 +1,61 @@
+# Hardened systemd unit for a CyberMesh worker (Linux).
+# OS-level limits complement the worker's own cooperative 1 % CPU budget:
+#   CPUQuota caps the cgroup at 2 % of one core (headroom for networking bursts),
+#   MemoryMax enforces the 200 MiB budget, and the sandbox removes write access to
+#   everything except the worker's state directory.
+[Unit]
+Description=CyberMesh worker (opt-in, resource-limited)
+Documentation=https://github.com/BAder82t/CyberMesh/blob/main/docs/operator-guide.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cybermesh
+Group=cybermesh
+ExecStart=/usr/local/bin/cybermesh worker run --config /etc/cybermesh/worker.toml
+Restart=on-failure
+RestartSec=10s
+
+# Resource limits (cgroup v2)
+CPUQuota=2%
+CPUWeight=1
+Nice=19
+IOSchedulingClass=idle
+MemoryMax=200M
+MemorySwapMax=0
+TasksMax=64
+
+# Filesystem sandbox
+StateDirectory=cybermesh
+ReadOnlyPaths=/etc/cybermesh
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+
+# Privileges
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

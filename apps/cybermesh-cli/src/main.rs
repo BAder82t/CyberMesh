@@ -20,7 +20,11 @@ use clap::{Parser, Subcommand};
 use cybermesh_protocol::SystemClock;
 
 #[derive(Parser, Debug)]
-#[command(name = "cybermesh", version, about = "CyberMesh: community-verified phishing and malicious-domain intelligence")]
+#[command(
+    name = "cybermesh",
+    version,
+    about = "CyberMesh: community-verified phishing and malicious-domain intelligence"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -194,21 +198,28 @@ async fn main() -> Result<()> {
         }
         Cmd::Worker(WorkerCmd::Status { state_dir }) => {
             let p = state_dir.join("status.json");
-            let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+            let s =
+                std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
             println!("{s}");
             Ok(())
         }
         Cmd::Worker(WorkerCmd::Pause { control_dir }) => control_file(&control_dir, "PAUSE", true),
-        Cmd::Worker(WorkerCmd::Resume { control_dir }) => control_file(&control_dir, "PAUSE", false),
+        Cmd::Worker(WorkerCmd::Resume { control_dir }) => {
+            control_file(&control_dir, "PAUSE", false)
+        }
         Cmd::Worker(WorkerCmd::Stop { control_dir }) => control_file(&control_dir, "STOP", true),
         Cmd::Coordinator(CoordinatorCmd::Run { config }) => {
             let cfg = cybermesh_node::config::CoordinatorConfig::load(&config)?;
             let (setup, skipped) = cybermesh_node::coordinator::setup_from_config(&cfg, clock)?;
             if skipped > 0 {
-                tracing::warn!(skipped, "input lines were not valid domains and were skipped");
+                tracing::warn!(
+                    skipped,
+                    "input lines were not valid domains and were skipped"
+                );
             }
             let report =
-                cybermesh_node::coordinator::run_coordinator(setup, shutdown_signal().await).await?;
+                cybermesh_node::coordinator::run_coordinator(setup, shutdown_signal().await)
+                    .await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }

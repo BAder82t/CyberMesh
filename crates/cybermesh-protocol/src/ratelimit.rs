@@ -99,7 +99,10 @@ mod tests {
     #[test]
     fn oversized_cost_is_clamped_not_refused_forever() {
         let mut rl = RateLimiter::new(50, 10, 10);
-        assert!(rl.allow(&"p", 257, 0), "idle bucket admits a max-size message");
+        assert!(
+            rl.allow(&"p", 257, 0),
+            "idle bucket admits a max-size message"
+        );
         assert!(!rl.allow(&"p", 257, 1000));
         assert!(rl.allow(&"p", 257, 5000));
         // Huge time jumps do not overflow.

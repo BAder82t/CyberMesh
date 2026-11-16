@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CyberMesh</title>
+  <link rel="stylesheet" href="ui.css">
+  <script type="module" src="popup.js"></script>
+</head>
+<body class="popup">
+  <main id="main" data-mode="loading">
+    <header class="popup-header">
+      <h1>CyberMesh</h1>
+      <span id="mode" class="pill">Loading&hellip;</span>
+    </header>
+    <p id="mode-detail" class="detail"></p>
+
+    <dl class="facts compact">
+      <dt>Release</dt><dd id="sequence">-</dd>
+      <dt>Listed hosts</dt>
+      <dd><span id="block-count">0</span> block &middot; <span id="warn-count">0</span> warn</dd>
+      <dt>Valid until</dt><dd id="expires">-</dd>
+      <dt>Signed by</dt><dd id="operators">-</dd>
+      <dt>Last successful update</dt><dd id="last-success">never</dd>
+      <dt>Last check</dt><dd id="last-attempt">never</dd>
+      <dt>Network</dt><dd id="network">-</dd>
+    </dl>
+    <p id="problems" class="error" hidden></p>
+
+    <label class="toggle">
+      <input type="checkbox" id="strict">
+      <span>Strict mode: no &ldquo;Continue anyway&rdquo; for sites classified as <em>block</em></span>
+    </label>
+    <p id="strict-note" class="note" hidden></p>
+
+    <section class="site">
+      <p>This site: <span id="site-status">-</span></p>
+      <button id="report-site" type="button" disabled>Report a false positive for this site</button>
+    </section>
+
+    <div class="actions">
+      <button id="update-now" type="button" class="primary">Update now</button>
+    </div>
+
+    <p class="privacy">
+      Releases are verified offline against the bundled trust root. The only request this
+      extension makes is downloading the release; the sites you visit never leave your browser.
+    </p>
+  </main>
+</body>
+</html>

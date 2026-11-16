@@ -18,7 +18,13 @@ async fn fifteen_workers_five_operators() {
     ds.dedup();
     let started = Instant::now();
     let h = Harness::start(Options {
-        operators: vec![("org-a", 3), ("org-b", 3), ("org-c", 3), ("org-d", 3), ("org-e", 3)],
+        operators: vec![
+            ("org-a", 3),
+            ("org-b", 3),
+            ("org-c", 3),
+            ("org-d", 3),
+            ("org-e", 3),
+        ],
         replication: 3,
         batch_size: 32,
         result_timeout: Duration::from_secs(10),

@@ -6,15 +6,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec, normalize_domain};
-use cybermesh_crypto::{Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce, random_bytes};
-use cybermesh_network::{Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed};
+use cybermesh_crypto::{
+    Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce, random_bytes,
+};
+use cybermesh_network::{
+    Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed,
+};
 use cybermesh_protocol::replay::ReplayCache;
 use cybermesh_protocol::validate::{verify_heartbeat, verify_result};
 use cybermesh_protocol::{
     Clock, Limits, OperatorId, PROTOCOL_VERSION, Role, TaskAnnouncement, TaskKind, TrustManifest,
     WorkerState, payload_type,
 };
-use cybermesh_verifier::{Policy, ReputationBook, SubmitOutcome, TaskStatus, TaskVerifier, VerificationRecord};
+use cybermesh_verifier::{
+    Policy, ReputationBook, SubmitOutcome, TaskStatus, TaskVerifier, VerificationRecord,
+};
 use serde::Serialize;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
@@ -101,11 +107,19 @@ pub fn setup_from_config(
     let issuer = SecretKey::read_from_file(&cfg.issuer_key)?;
     let verifier = SecretKey::read_from_file(&cfg.verifier_key)?;
     let (manifest, _) = files::load_manifest(&cfg.manifest, &cfg.governance_root, clock.now())?;
-    if manifest.key_with_role(&issuer.key_id(), Role::Issuer).is_none() {
+    if manifest
+        .key_with_role(&issuer.key_id(), Role::Issuer)
+        .is_none()
+    {
         return Err(NodeError::Config("issuer key lacks the issuer role".into()));
     }
-    if manifest.key_with_role(&verifier.key_id(), Role::Verifier).is_none() {
-        return Err(NodeError::Config("verifier key lacks the verifier role".into()));
+    if manifest
+        .key_with_role(&verifier.key_id(), Role::Verifier)
+        .is_none()
+    {
+        return Err(NodeError::Config(
+            "verifier key lacks the verifier role".into(),
+        ));
     }
     cfg.policy.validate().map_err(NodeError::Config)?;
     let engine = Engine::new(EvidenceBundle::load(&cfg.evidence_dir)?);
@@ -392,7 +406,8 @@ impl Coordinator {
                     evidence: vec![prior, v.payload_digest],
                 };
                 warn!(worker = %fault.worker.short(), task = %task_id, "late equivocation proven; worker quarantined");
-                self.reputation.record_fault(&fault, &format!("task {task_id}"));
+                self.reputation
+                    .record_fault(&fault, &format!("task {task_id}"));
                 let path = self
                     .s
                     .state_dir
@@ -400,7 +415,11 @@ impl Coordinator {
                     .join(format!("{task_id}-{}.json", fault.worker.short()));
                 let _ = files::write_json(&path, &fault);
                 let _ = files::write_atomic(
-                    &self.s.state_dir.join("faults").join(format!("{task_id}-{}.envelope.json", fault.worker.short())),
+                    &self
+                        .s
+                        .state_dir
+                        .join("faults")
+                        .join(format!("{task_id}-{}.envelope.json", fault.worker.short())),
                     &m.data,
                 );
                 self.report.faults += 1;
@@ -431,7 +450,11 @@ impl Coordinator {
                 net.report(m, Acceptance::Reject).await;
             }
         }
-        if self.inflight.get(&task_id).is_some_and(|i| i.verifier.is_complete()) {
+        if self
+            .inflight
+            .get(&task_id)
+            .is_some_and(|i| i.verifier.is_complete())
+        {
             self.settle(&task_id);
         }
     }
@@ -449,7 +472,8 @@ impl Coordinator {
                     return;
                 }
                 let h = v.message;
-                let compatible = h.engine == engine_spec() && h.evidence == self.s.engine.evidence().pins;
+                let compatible =
+                    h.engine == engine_spec() && h.evidence == self.s.engine.evidence().pins;
                 if !compatible {
                     debug!(worker = %h.worker.short(), "worker evidence/engine differs from coordinator");
                 }
@@ -499,7 +523,8 @@ pub async fn run_coordinator(
         ..NetConfig::default()
     };
     let net = cybermesh_network::spawn(keypair, net_cfg)?;
-    std::fs::create_dir_all(setup.state_dir.join("records")).map_err(|e| NodeError::Io(e.to_string()))?;
+    std::fs::create_dir_all(setup.state_dir.join("records"))
+        .map_err(|e| NodeError::Io(e.to_string()))?;
     let rep_path = setup.state_dir.join("reputation.json");
     let reputation: ReputationBook = if rep_path.exists() {
         files::read_json(&rep_path)?

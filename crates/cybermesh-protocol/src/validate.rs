@@ -100,7 +100,9 @@ fn check_header(v: u16, network: &str, manifest: &TrustManifest) -> Result<(), P
 }
 
 fn is_hex_id(s: &str) -> bool {
-    s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    s.len() == 32
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn check_evidence(e: &EvidencePins, limits: &Limits) -> Result<(), ProtocolError> {
@@ -131,9 +133,7 @@ fn check_sorted_domains<'a, I: Iterator<Item = &'a str>>(
         if let Some(p) = prev
             && d <= p
         {
-            return Err(ProtocolError::invalid(
-                "domains must be sorted and unique",
-            ));
+            return Err(ProtocolError::invalid("domains must be sorted and unique"));
         }
         prev = Some(d);
         n += 1;
@@ -169,7 +169,9 @@ pub fn verify_task(
         return Err(ProtocolError::SignerMismatch);
     }
     if !is_hex_id(&t.task_id) || !is_hex_id(&t.nonce) {
-        return Err(ProtocolError::invalid("task_id and nonce must be 32 hex chars"));
+        return Err(ProtocolError::invalid(
+            "task_id and nonce must be 32 hex chars",
+        ));
     }
     if t.issued_at > now.saturating_add(limits.max_clock_skew_secs) {
         return Err(ProtocolError::NotYetValid);
@@ -230,7 +232,9 @@ pub fn verify_result(
         return Err(ProtocolError::SignerMismatch);
     }
     if !is_hex_id(&r.task_id) || !is_hex_id(&r.nonce) {
-        return Err(ProtocolError::invalid("task_id and nonce must be 32 hex chars"));
+        return Err(ProtocolError::invalid(
+            "task_id and nonce must be 32 hex chars",
+        ));
     }
     if r.completed_at > now.saturating_add(limits.max_clock_skew_secs) {
         return Err(ProtocolError::NotYetValid);
@@ -248,7 +252,10 @@ pub fn verify_result(
         if a.findings.len() > limits.max_findings {
             return Err(ProtocolError::invalid("too many findings"));
         }
-        if a.findings.iter().any(|f| f.detail.len() > limits.max_detail_len) {
+        if a.findings
+            .iter()
+            .any(|f| f.detail.len() > limits.max_detail_len)
+        {
             return Err(ProtocolError::invalid("finding detail too long"));
         }
     }
@@ -262,8 +269,13 @@ pub fn verify_heartbeat(
     now: u64,
     limits: &Limits,
 ) -> Result<Verified<Heartbeat>, ProtocolError> {
-    let v: Verified<Heartbeat> =
-        verify_signed(bytes, payload_type::HEARTBEAT, Role::Worker, manifest, limits)?;
+    let v: Verified<Heartbeat> = verify_signed(
+        bytes,
+        payload_type::HEARTBEAT,
+        Role::Worker,
+        manifest,
+        limits,
+    )?;
     let h = &v.message;
     check_header(h.v, &h.network_id, manifest)?;
     if v.signer != h.worker || manifest.operator_of(&h.worker) != Some(&h.operator) {

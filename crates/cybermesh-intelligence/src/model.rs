@@ -130,10 +130,8 @@ impl ThreatRelease {
             {
                 return self.entries.get(i);
             }
-            match candidate.find('.') {
-                Some(i) => candidate = &candidate[i + 1..],
-                None => return None,
-            }
+            let i = candidate.find('.')?;
+            candidate = &candidate[i + 1..];
         }
     }
 }

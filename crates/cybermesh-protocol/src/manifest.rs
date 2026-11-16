@@ -180,7 +180,10 @@ impl TrustManifest {
                 )));
             }
             if m.roles.is_empty() {
-                return Err(ProtocolError::invalid(format!("member {} has no roles", m.label)));
+                return Err(ProtocolError::invalid(format!(
+                    "member {} has no roles",
+                    m.label
+                )));
             }
             if !keys.insert(m.public_key) {
                 return Err(ProtocolError::invalid("duplicate member key"));
@@ -188,12 +191,16 @@ impl TrustManifest {
         }
         let rs = &self.release_signers;
         if rs.threshold == 0 || usize::from(rs.threshold) > rs.keys.len() {
-            return Err(ProtocolError::invalid("release signer threshold out of range"));
+            return Err(ProtocolError::invalid(
+                "release signer threshold out of range",
+            ));
         }
         let mut rkeys = BTreeSet::new();
         for k in &rs.keys {
             if !ops.contains(&k.operator) {
-                return Err(ProtocolError::invalid("release signer references unknown operator"));
+                return Err(ProtocolError::invalid(
+                    "release signer references unknown operator",
+                ));
             }
             if !rkeys.insert(k.public_key) {
                 return Err(ProtocolError::invalid("duplicate release signer key"));

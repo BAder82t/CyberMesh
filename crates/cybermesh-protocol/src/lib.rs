@@ -25,7 +25,9 @@ pub mod validate;
 
 pub use clock::{Clock, ManualClock, SystemClock};
 pub use error::ProtocolError;
-pub use manifest::{GovernanceRoot, KeySet, Member, Operator, Revocation, Role, SignerEntry, TrustManifest};
+pub use manifest::{
+    GovernanceRoot, KeySet, Member, Operator, Revocation, Role, SignerEntry, TrustManifest,
+};
 pub use messages::*;
 pub use validate::Limits;
 

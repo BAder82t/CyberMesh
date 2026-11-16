@@ -1,0 +1,95 @@
+# Local CyberMesh demonstration: one coordinator (org-a) and six workers from five
+# organisations, one of them simulating a compromised operator (org-m). Run via
+# deploy/docker/demo.sh. Each worker is capped with cgroup limits in addition to the
+# worker's own cooperative 1 % CPU budget.
+name: cybermesh-demo
+
+x-node: &node
+  image: cybermesh:demo
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  volumes: [demo:/demo]
+  environment:
+    RUST_LOG: info,libp2p=warn
+  depends_on:
+    init:
+      condition: service_completed_successfully
+
+x-worker: &worker
+  <<: *node
+  restart: unless-stopped
+  cpus: "0.10"
+  mem_limit: 200m
+  pids_limit: 64
+
+services:
+  init:
+    image: cybermesh:demo
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        FEATURES: adversary-sim
+    volumes: [demo:/demo]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        test -f /demo/manifest.json ||
+        cybermesh demo init --out /demo --mode docker --adversary flip-verdicts
+        --evidence /opt/cybermesh/datasets/demo/evidence
+        --domains /opt/cybermesh/datasets/demo/domains.txt
+    networks: {mesh: {}}
+
+  coordinator:
+    <<: *node
+    command: ["coordinator", "run", "--config", "/demo/coordinator.toml"]
+    restart: "no"
+    profiles: [run]
+    networks: {mesh: {ipv4_address: 172.28.0.10}}
+
+  worker-a1:
+    <<: *worker
+    command: ["worker", "run", "--config", "/demo/worker-a1.toml"]
+    networks: {mesh: {ipv4_address: 172.28.0.11}}
+  worker-b1:
+    <<: *worker
+    command: ["worker", "run", "--config", "/demo/worker-b1.toml"]
+    networks: {mesh: {ipv4_address: 172.28.0.12}}
+  worker-b2:
+    <<: *worker
+    command: ["worker", "run", "--config", "/demo/worker-b2.toml"]
+    networks: {mesh: {ipv4_address: 172.28.0.13}}
+  worker-c1:
+    <<: *worker
+    command: ["worker", "run", "--config", "/demo/worker-c1.toml"]
+    networks: {mesh: {ipv4_address: 172.28.0.14}}
+  worker-d1:
+    <<: *worker
+    command: ["worker", "run", "--config", "/demo/worker-d1.toml"]
+    networks: {mesh: {ipv4_address: 172.28.0.15}}
+  worker-m1:
+    <<: *worker
+    command: ["worker", "run", "--config", "/demo/worker-m1.toml"]
+    networks: {mesh: {ipv4_address: 172.28.0.16}}
+
+  cli:
+    <<: *node
+    profiles: [tools]
+    entrypoint: ["/bin/sh", "-c"]
+    networks: {mesh: {}}
+
+  web:
+    <<: *node
+    profiles: [web]
+    command: ["serve", "--dir", "/demo/public", "--addr", "0.0.0.0:8088"]
+    ports: ["127.0.0.1:8088:8088"]
+    networks: {mesh: {}}
+
+networks:
+  mesh:
+    ipam:
+      config: [{subnet: 172.28.0.0/24}]
+
+volumes:
+  demo: {}

@@ -100,7 +100,9 @@ pub fn verify_release(
 ) -> Result<VerifiedRelease, ReleaseError> {
     let required = usize::from(root.threshold);
     if required == 0 {
-        return Err(ReleaseError::Invalid("trust root threshold must be >= 1".into()));
+        return Err(ReleaseError::Invalid(
+            "trust root threshold must be >= 1".into(),
+        ));
     }
     let env = Envelope::parse(bytes, MAX_RELEASE_BYTES).map_err(ReleaseError::Envelope)?;
     let lookup = |id: &KeyId| {
@@ -152,7 +154,9 @@ pub fn verify_release(
     if release.expires_at <= release.issued_at
         || release.expires_at - release.issued_at > MAX_RELEASE_TTL_SECS
     {
-        return Err(ReleaseError::Invalid("release lifetime out of range".into()));
+        return Err(ReleaseError::Invalid(
+            "release lifetime out of range".into(),
+        ));
     }
     if release.entries.len() > MAX_ENTRIES {
         return Err(ReleaseError::Invalid("too many entries".into()));
@@ -160,7 +164,10 @@ pub fn verify_release(
     let mut prev: Option<&str> = None;
     for e in &release.entries {
         if !is_normalized_domain(&e.indicator) {
-            return Err(ReleaseError::Invalid(format!("bad indicator {}", e.indicator)));
+            return Err(ReleaseError::Invalid(format!(
+                "bad indicator {}",
+                e.indicator
+            )));
         }
         if prev.is_some_and(|p| p >= e.indicator.as_str()) {
             return Err(ReleaseError::Invalid("entries not sorted/unique".into()));
@@ -182,13 +189,19 @@ pub fn verify_release(
     }
     for w in release.corrections.windows(2) {
         if w[0] >= w[1] {
-            return Err(ReleaseError::Invalid("corrections not sorted/unique".into()));
+            return Err(ReleaseError::Invalid(
+                "corrections not sorted/unique".into(),
+            ));
         }
     }
     if release.corrections.iter().any(|c| {
-        !printable(&c.indicator, 253) || !printable(&c.reference, MAX_REFERENCE) || !printable(&c.note, MAX_NOTE)
+        !printable(&c.indicator, 253)
+            || !printable(&c.reference, MAX_REFERENCE)
+            || !printable(&c.note, MAX_NOTE)
     }) {
-        return Err(ReleaseError::Invalid("correction has oversized or non-printable fields".into()));
+        return Err(ReleaseError::Invalid(
+            "correction has oversized or non-printable fields".into(),
+        ));
     }
     let digest = Digest::of(&v.payload);
     if let Some(s) = state {

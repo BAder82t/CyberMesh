@@ -1,0 +1,20 @@
+{
+  "name": "cybermesh-browser-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chromium extension that verifies signed CyberMesh threat-intelligence releases offline and warns before visiting listed hosts.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "test:e2e": "node --test --test-concurrency=1 test/e2e/*.e2e.mjs",
+    "lint": "node scripts/lint.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
+}

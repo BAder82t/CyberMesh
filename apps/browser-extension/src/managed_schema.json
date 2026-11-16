@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "strictBlocking": {
+      "title": "Strict blocking",
+      "description": "When true, hosts the release classifies as \"block\" cannot be bypassed with \"Continue anyway\". \"warn\" entries stay dismissible.",
+      "type": "boolean"
+    }
+  }
+}

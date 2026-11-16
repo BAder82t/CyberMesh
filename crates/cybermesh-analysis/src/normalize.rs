@@ -54,9 +54,7 @@ fn extract_host(s: &str) -> &str {
         Some(i) if is_scheme(&s[..i]) => &s[i + 3..],
         _ => s,
     };
-    let end = rest
-        .find(['/', '?', '#', '\\'])
-        .unwrap_or(rest.len());
+    let end = rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len());
     let authority = &rest[..end];
     let host_port = match authority.rfind('@') {
         Some(i) => &authority[i + 1..],
@@ -87,15 +85,27 @@ mod tests {
         );
         // Cyrillic 'а' (U+0430) in "pаypal" becomes punycode.
         assert_eq!(normalize_domain("pаypal.com").unwrap(), "xn--pypal-4ve.com");
-        assert_eq!(normalize_domain("  www.example.org  ").unwrap(), "www.example.org");
+        assert_eq!(
+            normalize_domain("  www.example.org  ").unwrap(),
+            "www.example.org"
+        );
     }
 
     #[test]
     fn embedded_urls_do_not_change_the_host() {
         for (input, host) in [
-            ("evil.example.com/redirect?u=http://good.example.com", "evil.example.com"),
-            ("evil.example.com?next=https://good.example.com", "evil.example.com"),
-            ("evil.example.com#http://good.example.com", "evil.example.com"),
+            (
+                "evil.example.com/redirect?u=http://good.example.com",
+                "evil.example.com",
+            ),
+            (
+                "evil.example.com?next=https://good.example.com",
+                "evil.example.com",
+            ),
+            (
+                "evil.example.com#http://good.example.com",
+                "evil.example.com",
+            ),
             ("hxxp://evil.example.com", "evil.example.com"),
             ("HTTPS://Evil.Example.com/x", "evil.example.com"),
         ] {
@@ -107,7 +117,16 @@ mod tests {
 
     #[test]
     fn rejects_non_domains() {
-        for bad in ["", "localhost", "10.0.0.1", "http://[::1]/", "a b.com", "ex_ample.com", "http://", "..."] {
+        for bad in [
+            "",
+            "localhost",
+            "10.0.0.1",
+            "http://[::1]/",
+            "a b.com",
+            "ex_ample.com",
+            "http://",
+            "...",
+        ] {
             assert!(normalize_domain(bad).is_err(), "{bad}");
         }
     }

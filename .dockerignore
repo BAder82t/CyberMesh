@@ -1,0 +1,8 @@
+target
+demo-out
+eval-data
+state
+.git
+apps/browser-extension/node_modules
+apps/browser-extension/dist
+**/*.key.json

@@ -7,7 +7,9 @@ use libp2p::futures::StreamExt as _;
 use libp2p::gossipsub::{self, IdentTopic, MessageAcceptance, MessageId};
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
-use libp2p::{Multiaddr, PeerId, Swarm, allow_block_list, connection_limits, identity, noise, tcp, yamux};
+use libp2p::{
+    Multiaddr, PeerId, Swarm, allow_block_list, connection_limits, identity, noise, tcp, yamux,
+};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::{debug, info, warn};

@@ -5,8 +5,8 @@ use cybermesh_protocol::{AppealDecision, AppealOutcome, PROTOCOL_VERSION, payloa
 use cybermesh_verifier::{Classification, DomainOutcome, TaskStatus, VerificationRecord};
 
 use crate::model::{
-    Action, Confidence, Correction, CorrectionKind, EvidenceKind, EvidenceRef, MatchScope,
-    Reason, ReleaseRef, ThreatEntry, ThreatRelease,
+    Action, Confidence, Correction, CorrectionKind, EvidenceKind, EvidenceRef, MatchScope, Reason,
+    ReleaseRef, ThreatEntry, ThreatRelease,
 };
 use crate::{GENERATOR, MAX_ENTRIES, MAX_RELEASE_TTL_SECS, verify::ReleaseError};
 
@@ -182,11 +182,17 @@ pub fn build_release(
             usable.push((actual, r));
         }
     }
-    usable.sort_by(|a, b| a.0.cmp(&b.0));
+    usable.sort_by_key(|a| a.0);
     usable.dedup_by(|a, b| a.0 == b.0);
 
     // domain -> (verified_at, rank, record digest, outcome, record)
-    type Cand<'a> = (u64, (u8, u16), Digest, &'a DomainOutcome, &'a VerificationRecord);
+    type Cand<'a> = (
+        u64,
+        (u8, u16),
+        Digest,
+        &'a DomainOutcome,
+        &'a VerificationRecord,
+    );
     let mut best: BTreeMap<&str, Cand<'_>> = BTreeMap::new();
     for (digest, rec) in &usable {
         for o in &rec.outcomes {

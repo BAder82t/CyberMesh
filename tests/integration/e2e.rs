@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use cybermesh_anchor::{Anchor, AnchorReceipt, LocalChain, LogEntry, TransparencyLog};
 use cybermesh_crypto::{Digest, canonical};
-use cybermesh_intelligence::{Action, BuildParams, TrustRoot, build_release, sign_release, verify_release};
+use cybermesh_intelligence::{
+    Action, BuildParams, TrustRoot, build_release, sign_release, verify_release,
+};
 use cybermesh_protocol::{Clock, SystemClock};
 use cybermesh_tests::{Harness, LEXICAL, Options, PHISH};
 use cybermesh_verifier::TaskStatus;
@@ -29,7 +31,11 @@ async fn full_pipeline_over_libp2p() {
         .filter(|(_, r)| r.status == TaskStatus::Verified)
         .collect();
     assert!(verified.iter().all(|(_, r)| r.recomputed));
-    assert!(verified.iter().all(|(_, r)| r.outcomes.iter().all(|o| o.agreeing_operators.len() >= 3)));
+    assert!(
+        verified
+            .iter()
+            .all(|(_, r)| r.outcomes.iter().all(|o| o.agreeing_operators.len() >= 3))
+    );
 
     // Build a release independently twice (two organisations) and co-sign.
     let now = SystemClock.now();
@@ -45,7 +51,10 @@ async fn full_pipeline_over_libp2p() {
     let mut reversed = report.records.clone();
     reversed.reverse();
     let rel_b = build_release(&reversed, &[], &params).unwrap();
-    assert_eq!(canonical::to_vec(&rel_a).unwrap(), canonical::to_vec(&rel_b).unwrap());
+    assert_eq!(
+        canonical::to_vec(&rel_a).unwrap(),
+        canonical::to_vec(&rel_b).unwrap()
+    );
     let mut env = sign_release(&rel_a, &net.release_signers[0].0).unwrap();
     env.merge_signatures(&sign_release(&rel_b, &net.release_signers[1].0).unwrap())
         .unwrap();
@@ -73,7 +82,10 @@ async fn full_pipeline_over_libp2p() {
     };
     let proof = log.prove_inclusion(0, 1).unwrap();
     assert!(proof.verify());
-    assert_eq!(proof.entry.release_digest, Digest::of(&env.payload_bytes().unwrap()));
+    assert_eq!(
+        proof.entry.release_digest,
+        Digest::of(&env.payload_bytes().unwrap())
+    );
     LocalChain::verify_receipt(&receipt, &proof.checkpoint.commitment(), Some(&chain)).unwrap();
 }
 
@@ -95,6 +107,11 @@ async fn disconnected_worker_is_replaced_by_reassignment() {
     assert_eq!(report.verified, batches, "{report:?}");
     // The remaining three operators still meet the diversity requirement; tasks either
     // completed without the missing worker after the deadline or were reassigned.
-    assert!(report.records.iter().any(|(_, r)| r.status == TaskStatus::Verified));
+    assert!(
+        report
+            .records
+            .iter()
+            .any(|(_, r)| r.status == TaskStatus::Verified)
+    );
     assert_eq!(report.faults, 0, "an offline worker is not a faulty worker");
 }

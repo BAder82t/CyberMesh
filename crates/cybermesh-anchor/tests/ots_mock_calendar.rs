@@ -2,12 +2,11 @@
 #![cfg(feature = "ots")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-
 use std::thread;
 use std::time::Duration;
 
-use cybermesh_anchor::ots::{Attestation, DetachedTimestamp, Op, Timestamp, stamp};
 use cybermesh_anchor::ots::OtsAnchor as OtsAnchorForTest;
+use cybermesh_anchor::ots::{Attestation, DetachedTimestamp, Op, Timestamp, stamp};
 use cybermesh_anchor::{Anchor, AnchorReceipt, AnchorStatus};
 
 fn mock_calendar(fail: bool) -> String {
@@ -72,7 +71,14 @@ fn stamp_against_mock_calendar_and_verify_offline() {
 fn all_calendars_down_is_an_error_not_a_panic() {
     let down = mock_calendar(true);
     assert!(stamp([1u8; 32], &[down], Duration::from_secs(5)).is_err());
-    assert!(stamp([1u8; 32], &["http://127.0.0.1:9".into()], Duration::from_millis(500)).is_err());
+    assert!(
+        stamp(
+            [1u8; 32],
+            &["http://127.0.0.1:9".into()],
+            Duration::from_millis(500)
+        )
+        .is_err()
+    );
 }
 
 #[test]

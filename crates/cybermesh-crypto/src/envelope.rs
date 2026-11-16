@@ -305,7 +305,9 @@ mod tests {
             Envelope::parse(&bytes, 50),
             Err(CryptoError::TooLarge { .. })
         ));
-        assert!(Envelope::parse(br#"{"payloadType":"x","payload":"","signatures":[]}"#, 1000).is_err());
+        assert!(
+            Envelope::parse(br#"{"payloadType":"x","payload":"","signatures":[]}"#, 1000).is_err()
+        );
         assert!(Envelope::parse(b"not json", 1000).is_err());
         let mut env = Envelope::sign(T, b"p", &k);
         env.payload = "!!!".into();

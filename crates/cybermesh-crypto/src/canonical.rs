@@ -64,7 +64,10 @@ mod tests {
             r#"{"a":1,"b":"é","c":{"x":1,"y":2},"d":0}"#,
             r#"{"a":1.0,"b":"é","c":{"x":1,"y":2}}"#,
         ] {
-            assert!(from_slice::<Sample>(bad.as_bytes()).is_err(), "accepted {bad:?}");
+            assert!(
+                from_slice::<Sample>(bad.as_bytes()).is_err(),
+                "accepted {bad:?}"
+            );
         }
     }
 

@@ -70,7 +70,9 @@ impl Policy {
             return (Classification::None, "insufficient independent operators");
         }
         if a.verdict == Verdict::KnownBenign
-            || a.findings.iter().any(|f| f.code == FindingCode::PopularDomain)
+            || a.findings
+                .iter()
+                .any(|f| f.code == FindingCode::PopularDomain)
         {
             return (Classification::None, "on popularity allowlist");
         }

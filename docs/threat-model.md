@@ -1,0 +1,67 @@
+# Threat model
+
+Scope: CyberMesh v0.1.0 as implemented in this repository. The method is asset- and
+adversary-driven and STRIDE-informed. For each threat this document gives the mitigation,
+the test that exercises it, and the residual risk. "Test" names refer to files in this
+repository.
+
+## 1. Assets
+
+1. **Integrity of published intelligence**: no benign site is blocked, and nothing is silently dropped.
+2. **Availability of protection**: consumers keep working through outages.
+3. **Participant safety**: worker hosts are never made to execute foreign code, fetch hostile content or leak data.
+4. **User privacy**: browsing activity never leaves the browser.
+5. **Accountability**: misbehaviour is attributable using signed evidence.
+
+## 2. Adversaries
+
+| ID | Adversary | Capabilities assumed |
+|---|---|---|
+| A1 | External network attacker | Can observe, inject, drop, replay and delay traffic, and connect to public endpoints |
+| A2 | Malicious or compromised worker | Holds one enrolled worker key, can sign anything, and can run modified code |
+| A3 | Colluding operators | Control all workers of up to *t* organisations, including *t* ≥ the operator threshold |
+| A4 | Sybil attacker | Can create many keys or peer ids, or one organisation can enrol many workers |
+| A5 | Compromised release-signing key | Holds one release key (or several keys of one organisation) |
+| A6 | Feed poisoner | Can get entries into a public reference feed |
+| A7 | Malicious anchor or calendar | Controls a timestamp calendar or a chain node |
+| A8 | Supply-chain attacker | Controls a dependency or a build input |
+| A9 | Curious infrastructure operator | Runs a release host, calendar or relay and wants to learn about users or participants |
+
+Out of scope: an adversary holding a threshold of governance keys, an adversary holding a threshold of release-signing keys from distinct organisations, compromise of the end user's browser or OS, and kernel-level compromise of a worker host. The last one affects that host's own results, which verification then catches.
+
+## 3. Threats and mitigations
+
+| # | Threat | Mitigation | Evidence (tests) | Residual risk |
+|---|---|---|---|---|
+| T1 | **Malicious worker node** submits false assessments (A2) | Verifier recomputes every task with pinned evidence; any differing signed result is a provable `IncorrectResult` fault → quarantine; classification uses the verifier's own assessment | `verifier/tests/adversarial.rs::single_malicious_worker_is_caught_by_recomputation`; `tests/adversarial::forged_verdicts_are_caught_and_quarantined` (real network) | A verifier without matching evidence cannot recompute (then: no `block`, disputes unresolved) |
+| T2 | **Sybil**: one org enrols many workers or peer ids to fake diversity (A4) | Membership is governance-signed; diversity counted per *operator*; worker's operator bound by manifest; peer allowlist from manifest | `one_operator_with_many_workers_is_not_diverse`; `results_bind_worker_identity_and_operator`; `unenrolled_peer_cannot_connect_or_inject` | Governance must vet organisations; collusion between distinct real organisations is T7 |
+| T3 | **Compromised organisation computer** (A2 on a member host) | Same as T1; key revocation in the manifest; workers run as unprivileged user with OS sandboxing (systemd unit); no inbound code | `revoked_worker_results_are_rejected`; `revoked_issuer_is_rejected` | Key theft until revocation is distributed; revocation needs a manifest update |
+| T4 | **Task forgery** (A1, A2) | Tasks must be signed by an enrolled issuer; issuer field must equal signer; DSSE payload-type separation; canonical encoding | `forged_tasks_are_rejected`; `oversized_and_malformed_inputs_are_rejected`; fuzz target `task` | Compromised issuer key can issue bogus *tasks* (not results/releases): bounded by allowlisted kinds and limits |
+| T5 | **Malicious updates**: tampered binaries, manifests or releases (A8, A1) | Manifests are k-of-n governance-signed with sequence numbers; releases are k-of-n operator-signed with anti-rollback; reproducible deterministic release bytes; `--locked` builds, pinned toolchain, `cargo-deny`, SBOM, actions pinned by SHA | `manifest_requires_governance_threshold_and_rejects_rollback`; `anti_rollback_and_equivocation`; CI | Binary release signing and reproducible-build attestation are not yet published (roadmap) |
+| T6 | **Threat-feed poisoning** (A6) | Popular and hosting-platform evidence prevents blocking popular services; feed snapshots are pinned by digest and bound to their kind; upheld appeals suppress re-listing from lexical evidence; feed listing is necessary but not sufficient for `block` | `popular_domain_overrides_feed_listing`; `colluders_cannot_turn_a_feed_false_positive_on_a_popular_domain_into_a_block`; `relabelling_a_source_changes_its_pin` | A poisoned entry for a non-popular legitimate site *will* be blocked if the verifier trusts that feed: feed choice is a governance decision; appeals are the remedy |
+| T7 | **Reputation manipulation / collusion** (A3) | Reputation is never evidence; one fault quarantines; colluders need the verifier's own feed corroboration for `block`; recomputation catches identical lies | `colluding_operators_cannot_cause_block`; `reputation_apply_is_idempotent` | Colluders that *agree with the truth* gain reputation (harmless); a colluding *verifier* is T15 |
+| T8 | **False-positive attacks**: getting a competitor blocked (A3, A6) | Block requires feed + verifier corroboration + non-popular; lexical-only → advisory `warn`; public corrections; appeals; consumer dismissal of warnings | `block_requires_independent_corroboration`; `appeal_covers_subdomains_and_only_fresh_block_relists` | An attacker who can get a site into the trusted feed can cause a block until appeal |
+| T9 | **Denial of service** (A1, A2) | Envelope size limits; per-author token buckets; bounded queues/replay cache (fail closed); connection limits; bounded rejection logs; parser budgets (OTS nodes/bytes, recursion) | `per_peer_rate_limit_drops_floods`; `rejection_log_is_bounded_under_flooding`; `breadth_amplification_is_bounded`; fuzzing | Enrolled peers can still consume their rate allowance; gossipsub peer scoring not enabled |
+| T10 | **Replay** of tasks, results, releases (A1, A2) | Replay cache keyed by payload digest until expiry; results bound to task digest + attempt; gossip ids `H(author‖data)`; release anti-rollback state | `replay_cache_rejects_redelivered_task`; `replayed_late_unassigned_and_mismatched_results_are_rejected`; `tests/adversarial::replayed_results_are_rejected` | A consumer that loses its state can be rolled back to any still-unexpired release (max 30 days) |
+| T11 | **Key compromise**: worker, issuer or verifier key (A2) | Revocation list in manifest; role separation; key files 0600, no symlinks, fstat on open handle; keys zeroised in memory | `key_file_roundtrip_and_permissions` | No HSM support yet; revocation latency = manifest distribution |
+| T12 | **Compromised release-signing key** (A5) | k-of-n signatures from *distinct operators*; revoked keys excluded from trust root; equivocation detected | `threshold_counts_distinct_operators`; `revoked_signing_key_no_longer_counts`; extension unit tests | Consumers must update their bundled trust root to drop a revoked key (extension update) |
+| T13 | **Supply-chain compromise** (A8) | Minimal dependencies; `cargo-deny` (advisories, licences, sources); SBOM per CI run; secret scanning; Actions pinned to SHAs; extension has zero runtime dependencies | CI workflow | Transitive crates (libp2p) are large; `paste` unmaintained advisory documented |
+| T14 | **Metadata leakage** (A9) | Extension downloads the whole list (no per-URL lookups); release host learns only "a client fetched the list"; anchors receive one 32-byte hash, OTS adds a random nonce; worker results contain no org-internal data | `privacy.md`; extension e2e asserts only the release URL is requested | Release host sees client IPs and fetch times; peers see each other's IPs and participation |
+| T15 | **Malicious verifier or issuer** (A2 on coordinator) | Verification records are signed and published to release signers who *independently rebuild* releases; worker results are signed evidence anyone can recheck | `deterministic_generation_and_independent_cosigning` | A malicious verifier can withhold tasks or records (availability), and in the MVP is a single party: run verifiers at ≥2 organisations (roadmap) |
+| T16 | **Malicious blockchain attestations** (A7) | Anchors only receive a commitment; OTS proofs evaluated offline with bounded parser; upgrade only contacts configured calendars; Bitcoin attestations must be checked against the user's own node; anchors are not trusted for protection | `breadth_amplification_is_bounded`; `stamp_against_mock_calendar_and_verify_offline`; `injected_failures` | A calendar can lie about pending status (harmless: no protection decision depends on it) |
+| T17 | **Network partitions** (A1) | Workers redial bootstrap peers; bounded outbox until deadline; coordinator reassigns tasks to other live operators; consumers use cached, unexpired releases | `reconnects_after_peer_restart`; `disconnected_worker_is_replaced_by_reassignment` | Long partitions delay new intelligence; releases expire after their TTL (fail-safe, not fail-open) |
+| T18 | **Arbitrary code execution / scanning via workers** | No task carries code, scripts, URLs or commands; one allowlisted kind; engine never makes network requests; adversary simulation is a non-default compile-time feature | Code review; `assess` has no I/O | A worker binary built with `adversary-sim` misbehaves only against its own reputation |
+| T19 | **Parser exploitation** (A1) | Strict canonical JSON, `deny_unknown_fields`, size limits, no `unsafe` in project code, property tests and fuzz targets for envelopes, tasks, releases, OTS proofs, domains | proptests in every crate; `fuzz/` | Dependencies (serde_json, libp2p) are trusted |
+| T20 | **Evidence tampering on a worker host** | Evidence files verified against bundle digests; pins bound to kind; symlinks/special files refused; size caps | `verifies_digests_and_parses_lists`; `refuses_symlinked_sources` | Local root can change both files and code (caught by recomputation) |
+
+## 4. Findings from internal reviews
+
+Two independent internal reviews (security and Rust correctness) examined the core crates. Every
+confirmed or plausible finding of HIGH or MEDIUM severity was fixed with a regression test. See
+[security-review.md](security-review.md). This is not an external audit.
+
+## 5. Explicit non-goals
+
+- CyberMesh is not an anonymity system. Participants are known organisations.
+- It does not protect against all malicious websites; it covers only hosts in the current release.
+- It does not replace endpoint security, mail filtering or browser Safe Browsing.

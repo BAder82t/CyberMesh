@@ -1,0 +1,33 @@
+name: False-positive report
+description: A domain was flagged that you believe is legitimate.
+title: "False positive: "
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Reports are reviewed by the network's governance group; upheld appeals are
+        published as corrections in the next release. **Do not include personal data.**
+  - type: input
+    id: indicator
+    attributes:
+      label: Domain (host) that was flagged
+      placeholder: login.example.com
+    validations: { required: true }
+  - type: input
+    id: release
+    attributes:
+      label: Release sequence shown in the warning
+      placeholder: "7"
+  - type: dropdown
+    id: relation
+    attributes:
+      label: Your relationship to the domain
+      options: [Site owner or operator, User of the site, Security researcher, Other]
+    validations: { required: true }
+  - type: textarea
+    id: reason
+    attributes:
+      label: Why is this a false positive?
+      description: Evidence helps (ownership proof, what the site is, since when).
+    validations: { required: true }

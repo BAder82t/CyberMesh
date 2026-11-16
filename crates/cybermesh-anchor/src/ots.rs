@@ -140,7 +140,9 @@ impl<'a> Reader<'a> {
         self.nodes += 1;
         self.msg_bytes += msg_len;
         if self.nodes > MAX_NODES || self.msg_bytes > MAX_TOTAL_MSG_BYTES {
-            return Err(AnchorError::InvalidReceipt("proof exceeds size budget".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "proof exceeds size budget".into(),
+            ));
         }
         Ok(())
     }
@@ -219,7 +221,9 @@ impl Attestation {
                 let uri = std::str::from_utf8(uri)
                     .map_err(|_| AnchorError::InvalidReceipt("calendar uri not utf-8".into()))?;
                 if !uri.bytes().all(|b| b.is_ascii_graphic()) {
-                    return Err(AnchorError::InvalidReceipt("calendar uri has invalid chars".into()));
+                    return Err(AnchorError::InvalidReceipt(
+                        "calendar uri has invalid chars".into(),
+                    ));
                 }
                 Attestation::Pending {
                     uri: uri.to_owned(),
@@ -236,7 +240,9 @@ impl Attestation {
             }
         };
         if pr.pos != payload.len() {
-            return Err(AnchorError::InvalidReceipt("trailing bytes in attestation".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "trailing bytes in attestation".into(),
+            ));
         }
         Ok(att)
     }
@@ -259,7 +265,9 @@ impl Op {
             0x08 => Op::Sha256,
             0x02 | 0x03 | 0x67 => Op::Unsupported(tag),
             other => {
-                return Err(AnchorError::InvalidReceipt(format!("unknown op tag {other:#04x}")));
+                return Err(AnchorError::InvalidReceipt(format!(
+                    "unknown op tag {other:#04x}"
+                )));
             }
         })
     }
@@ -294,7 +302,9 @@ impl Timestamp {
         let mut r = Reader::new(buf, 0);
         let t = Self::read(&mut r, msg, 0)?;
         if r.pos != buf.len() {
-            return Err(AnchorError::InvalidReceipt("trailing bytes after timestamp".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "trailing bytes after timestamp".into(),
+            ));
         }
         Ok(t)
     }
@@ -344,7 +354,10 @@ impl Timestamp {
             if valid {
                 out.push((self.msg.clone(), Ok(a.clone())));
             } else {
-                out.push((Vec::new(), Err("branch uses an unsupported operation".into())));
+                out.push((
+                    Vec::new(),
+                    Err("branch uses an unsupported operation".into()),
+                ));
             }
         }
         for (op, child) in &self.ops {
@@ -369,14 +382,20 @@ impl DetachedTimestamp {
     pub fn parse(bytes: &[u8]) -> Result<Self, AnchorError> {
         let magic = header_magic();
         if bytes.len() < magic.len() || bytes[..magic.len()] != magic[..] {
-            return Err(AnchorError::InvalidReceipt("not an OpenTimestamps proof".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "not an OpenTimestamps proof".into(),
+            ));
         }
         let mut r = Reader::new(bytes, magic.len());
         if r.varuint()? != MAJOR_VERSION {
-            return Err(AnchorError::InvalidReceipt("unsupported ots version".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "unsupported ots version".into(),
+            ));
         }
         if r.byte()? != 0x08 {
-            return Err(AnchorError::Unsupported("only sha256 file digests are supported".into()));
+            return Err(AnchorError::Unsupported(
+                "only sha256 file digests are supported".into(),
+            ));
         }
         let digest = r.bytes(32)?.to_vec();
         let timestamp = Timestamp::deserialize(&bytes[r.pos..], digest)?;
@@ -414,7 +433,9 @@ impl DetachedTimestamp {
             });
         }
         if statuses.is_empty() {
-            return Err(AnchorError::InvalidReceipt("proof has no attestations".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "proof has no attestations".into(),
+            ));
         }
         Ok(statuses)
     }
@@ -459,7 +480,9 @@ pub fn attach(dt: &mut DetachedTimestamp, responses: Vec<Timestamp>) -> Result<(
         .ok_or_else(|| AnchorError::InvalidReceipt("not a prepared stamp".into()))?;
     for r in responses {
         if r.msg != tip.msg {
-            return Err(AnchorError::InvalidReceipt("calendar answered a different digest".into()));
+            return Err(AnchorError::InvalidReceipt(
+                "calendar answered a different digest".into(),
+            ));
         }
         tip.attestations.extend(r.attestations);
         tip.ops.extend(r.ops);
@@ -686,7 +709,10 @@ mod tests {
         }));
         assert!(statuses.iter().any(|s| matches!(
             s,
-            AnchorStatus::BitcoinAttested { height: 840_000, .. }
+            AnchorStatus::BitcoinAttested {
+                height: 840_000,
+                ..
+            }
         )));
         assert!(parsed.verify(&[0u8; 32]).is_err());
     }
@@ -728,7 +754,10 @@ mod tests {
 
     #[test]
     fn varuint_overflow_and_trailing_attestation_bytes_are_rejected() {
-        let mut r = Reader::new(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f], 0);
+        let mut r = Reader::new(
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f],
+            0,
+        );
         assert!(r.varuint().is_err());
         let mut out = Vec::new();
         out.extend_from_slice(&TAG_BITCOIN);
@@ -739,7 +768,16 @@ mod tests {
 
     #[test]
     fn varuint_roundtrip() {
-        for v in [0u64, 1, 127, 128, 300, 840_000, u64::from(u32::MAX), u64::MAX] {
+        for v in [
+            0u64,
+            1,
+            127,
+            128,
+            300,
+            840_000,
+            u64::from(u32::MAX),
+            u64::MAX,
+        ] {
             let mut out = Vec::new();
             write_varuint(&mut out, v);
             let mut r = Reader::new(&out, 0);

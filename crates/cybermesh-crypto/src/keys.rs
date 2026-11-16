@@ -64,10 +64,12 @@ impl PublicKey {
 
     /// Strict verification (rejects non-canonical `S`, small-order `R` and weak keys).
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
-        let sig_bytes: [u8; 64] = signature.try_into().map_err(|_| CryptoError::InvalidLength {
-            expected: 64,
-            actual: signature.len(),
-        })?;
+        let sig_bytes: [u8; 64] = signature
+            .try_into()
+            .map_err(|_| CryptoError::InvalidLength {
+                expected: 64,
+                actual: signature.len(),
+            })?;
         let vk = VerifyingKey::from_bytes(&self.0).map_err(|_| CryptoError::InvalidPublicKey)?;
         let sig = Signature::from_bytes(&sig_bytes);
         vk.verify_strict(message, &sig)
@@ -106,7 +108,10 @@ pub struct KeyId(String);
 
 impl KeyId {
     pub fn parse(s: &str) -> Result<Self, CryptoError> {
-        if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        if s.len() != 64
+            || !s
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
             return Err(CryptoError::InvalidHex(
                 "key id must be 64 lowercase hex characters".into(),
@@ -357,7 +362,10 @@ mod tests {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
             let link = dir.path().join("link.json");
             std::os::unix::fs::symlink(&path, &link).unwrap();
-            assert!(SecretKey::read_from_file(&link).is_err(), "symlinks are not followed");
+            assert!(
+                SecretKey::read_from_file(&link).is_err(),
+                "symlinks are not followed"
+            );
         }
     }
 

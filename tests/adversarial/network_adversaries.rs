@@ -29,10 +29,21 @@ async fn run_with(mode: &'static str) -> cybermesh_node::coordinator::Coordinato
         max_record_age_secs: 86_400,
     };
     let rel = build_release(&report.records, &[], &params).unwrap();
-    assert_eq!(rel.lookup(PHISH).map(|e| e.action), Some(Action::Block), "{mode}");
-    assert_eq!(rel.lookup(LEXICAL).map(|e| e.action), Some(Action::Warn), "{mode}");
+    assert_eq!(
+        rel.lookup(PHISH).map(|e| e.action),
+        Some(Action::Block),
+        "{mode}"
+    );
+    assert_eq!(
+        rel.lookup(LEXICAL).map(|e| e.action),
+        Some(Action::Warn),
+        "{mode}"
+    );
     assert!(rel.lookup("www.google.com").is_none());
-    assert!(rel.lookup("mail.example.org").is_none(), "{mode}: benign domain published");
+    assert!(
+        rel.lookup("mail.example.org").is_none(),
+        "{mode}: benign domain published"
+    );
     report
 }
 
@@ -47,8 +58,15 @@ async fn forged_verdicts_are_caught_and_quarantined() {
         .collect();
     assert!(kinds.iter().all(|k| *k == FaultKind::IncorrectResult));
     // After the first fault the adversary is quarantined and excluded from later tasks.
-    let faulted_tasks = report.records.iter().filter(|(_, r)| !r.faults.is_empty()).count();
-    assert!(faulted_tasks <= 4, "quarantine should stop repeated assignment");
+    let faulted_tasks = report
+        .records
+        .iter()
+        .filter(|(_, r)| !r.faults.is_empty())
+        .count();
+    assert!(
+        faulted_tasks <= 4,
+        "quarantine should stop repeated assignment"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -72,7 +90,12 @@ async fn forged_signatures_are_rejected() {
     let report = run_with("forge-signature").await;
     assert!(report.results_rejected >= 1, "{report:?}");
     // Rejected results do not count, but the three honest operators still verify.
-    assert!(report.records.iter().all(|(_, r)| r.status == TaskStatus::Verified));
+    assert!(
+        report
+            .records
+            .iter()
+            .all(|(_, r)| r.status == TaskStatus::Verified)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -88,6 +111,14 @@ async fn replayed_results_are_rejected() {
         .flat_map(|(_, r)| r.accepted.iter())
         .filter(|a| a.operator.as_str() == "org-m")
         .count();
-    assert!(adversary_accepted <= 1, "only the first (honest) answer may be accepted: {report:?}");
-    assert!(report.records.iter().all(|(_, r)| r.status == TaskStatus::Verified));
+    assert!(
+        adversary_accepted <= 1,
+        "only the first (honest) answer may be accepted: {report:?}"
+    );
+    assert!(
+        report
+            .records
+            .iter()
+            .all(|(_, r)| r.status == TaskStatus::Verified)
+    );
 }

@@ -19,7 +19,11 @@ impl Checkpoint {
     pub fn commitment(&self) -> Digest {
         Digest::tagged(
             "cybermesh/anchor-checkpoint/v1",
-            &[self.log_id.as_bytes(), &self.size.to_be_bytes(), self.root.as_bytes()],
+            &[
+                self.log_id.as_bytes(),
+                &self.size.to_be_bytes(),
+                self.root.as_bytes(),
+            ],
         )
     }
 }
@@ -159,7 +163,9 @@ impl LocalChain {
         let mut prev = Digest([0u8; 32]);
         for (i, b) in self.blocks.iter().enumerate() {
             if b.height != i as u64 || b.prev != prev {
-                return Err(AnchorError::InvalidReceipt(format!("broken link at height {i}")));
+                return Err(AnchorError::InvalidReceipt(format!(
+                    "broken link at height {i}"
+                )));
             }
             prev = b.hash(&self.chain_id);
         }
@@ -300,7 +306,10 @@ mod tests {
         let mut forged = r2.clone();
         forged.block.time = 21;
         forged.block_hash = forged.block.hash("test-chain");
-        assert!(LocalChain::verify_receipt(&forged, &c2, None).is_ok(), "self-consistent");
+        assert!(
+            LocalChain::verify_receipt(&forged, &c2, None).is_ok(),
+            "self-consistent"
+        );
         assert!(
             LocalChain::verify_receipt(&forged, &c2, Some(&reopened)).is_err(),
             "but not in the chain"

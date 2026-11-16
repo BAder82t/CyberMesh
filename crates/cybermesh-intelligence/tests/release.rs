@@ -14,7 +14,11 @@ fn outcome(domain: &str, c: Classification, score: u16) -> DomainOutcome {
     DomainOutcome {
         domain: domain.into(),
         classification: c,
-        verdict: if c == Classification::Block { Verdict::Malicious } else { Verdict::Suspicious },
+        verdict: if c == Classification::Block {
+            Verdict::Malicious
+        } else {
+            Verdict::Suspicious
+        },
         risk_score_bp: score,
         confidence_bp: 9000,
         findings: vec![Finding {
@@ -74,14 +78,22 @@ fn records() -> Vec<(Digest, VerificationRecord)> {
         record(
             "00000000000000000000000000000001",
             vec![
-                outcome("examplebank-secure-login.phish.localhost", Classification::Block, 10_000),
+                outcome(
+                    "examplebank-secure-login.phish.localhost",
+                    Classification::Block,
+                    10_000,
+                ),
                 outcome("benign.example.com", Classification::None, 100),
             ],
             NOW - 100,
         ),
         record(
             "00000000000000000000000000000002",
-            vec![outcome("examplebank-account-verify.phish.localhost", Classification::Warn, 4900)],
+            vec![outcome(
+                "examplebank-account-verify.phish.localhost",
+                Classification::Warn,
+                4900,
+            )],
             NOW - 50,
         ),
         // Unverified records never contribute.
@@ -113,7 +125,10 @@ fn deterministic_generation_and_independent_cosigning() {
     let a = build_release(&recs, &[], &params(1)).unwrap();
     recs.reverse();
     let b = build_release(&recs, &[], &params(1)).unwrap();
-    let (ba, bb) = (canonical::to_vec(&a).unwrap(), canonical::to_vec(&b).unwrap());
+    let (ba, bb) = (
+        canonical::to_vec(&a).unwrap(),
+        canonical::to_vec(&b).unwrap(),
+    );
     assert_eq!(ba, bb, "input order must not change the release bytes");
     assert_eq!(a.entries.len(), 2);
     assert_eq!(a.entries[0].action, Action::Warn);
@@ -129,7 +144,10 @@ fn deterministic_generation_and_independent_cosigning() {
     let v = verify_release(&env_a.to_vec().unwrap(), &root, NOW + 10, None).unwrap();
     assert_eq!(v.operators.len(), 2);
     assert_eq!(
-        v.release.lookup("www.examplebank-secure-login.phish.localhost").unwrap().action,
+        v.release
+            .lookup("www.examplebank-secure-login.phish.localhost")
+            .unwrap()
+            .action,
         Action::Block
     );
 }
@@ -141,14 +159,20 @@ fn threshold_counts_distinct_operators() {
     let root = TrustRoot::from_manifest(&net.manifest);
     assert!(matches!(
         verify_release(&signed(&net, &rel, &[0]), &root, NOW, None),
-        Err(ReleaseError::Threshold { valid_operators: 1, required: 2 })
+        Err(ReleaseError::Threshold {
+            valid_operators: 1,
+            required: 2
+        })
     ));
     // Two keys, but both registered to the same operator.
     let mut same_op = root.clone();
     same_op.signers[1].operator = same_op.signers[0].operator.clone();
     assert!(matches!(
         verify_release(&signed(&net, &rel, &[0, 1]), &same_op, NOW, None),
-        Err(ReleaseError::Threshold { valid_operators: 1, .. })
+        Err(ReleaseError::Threshold {
+            valid_operators: 1,
+            ..
+        })
     ));
     // Unknown signers are ignored.
     let mut env = sign_release(&rel, &test_key("attacker-1")).unwrap();
@@ -172,7 +196,10 @@ fn revoked_signing_key_no_longer_counts() {
     let root = TrustRoot::from_manifest(&net.manifest);
     assert!(matches!(
         verify_release(&bytes, &root, NOW, None),
-        Err(ReleaseError::Threshold { valid_operators: 1, .. })
+        Err(ReleaseError::Threshold {
+            valid_operators: 1,
+            ..
+        })
     ));
 }
 
@@ -247,7 +274,10 @@ fn upheld_appeal_removes_entry_and_is_published_as_correction() {
         decided_at: NOW - 1,
     };
     let rel = build_release(&records(), std::slice::from_ref(&decision), &params(2)).unwrap();
-    assert!(rel.lookup("examplebank-account-verify.phish.localhost").is_none());
+    assert!(
+        rel.lookup("examplebank-account-verify.phish.localhost")
+            .is_none()
+    );
     assert_eq!(rel.corrections.len(), 1);
     assert_eq!(rel.corrections[0].kind, CorrectionKind::AppealUpheld);
     // A decision dated after the release is not applied yet.
@@ -256,16 +286,22 @@ fn upheld_appeal_removes_entry_and_is_published_as_correction() {
         ..decision.clone()
     };
     let rel = build_release(&records(), &[future], &params(2)).unwrap();
-    assert!(rel.lookup("examplebank-account-verify.phish.localhost").is_some());
+    assert!(
+        rel.lookup("examplebank-account-verify.phish.localhost")
+            .is_some()
+    );
     // A later rejection supersedes the upheld decision.
     let rejected = AppealDecision {
         appeal_id: "appeal-0002".into(),
         outcome: AppealOutcome::Rejected,
-        decided_at: NOW - 0,
+        decided_at: NOW,
         ..decision.clone()
     };
     let rel = build_release(&records(), &[decision, rejected], &params(2)).unwrap();
-    assert!(rel.lookup("examplebank-account-verify.phish.localhost").is_some());
+    assert!(
+        rel.lookup("examplebank-account-verify.phish.localhost")
+            .is_some()
+    );
 }
 
 #[test]
@@ -279,7 +315,11 @@ fn rollback_publishes_old_content_under_new_sequence() {
     let r3 = rollback(&r1, &[], &p3).unwrap();
     assert_eq!(r3.sequence, 3);
     assert_eq!(r3.entries, r1.entries);
-    assert!(r3.corrections.iter().any(|c| c.kind == CorrectionKind::Rollback));
+    assert!(
+        r3.corrections
+            .iter()
+            .any(|c| c.kind == CorrectionKind::Rollback)
+    );
     assert!(rollback(&r1, &[], &params(1)).is_err());
 }
 
@@ -288,16 +328,31 @@ fn stale_records_are_excluded() {
     let mut p = params(1);
     p.max_record_age_secs = 60;
     let rel = build_release(&records(), &[], &p).unwrap();
-    assert_eq!(rel.entries.len(), 1, "only the record from NOW-50 is fresh enough");
+    assert_eq!(
+        rel.entries.len(),
+        1,
+        "only the record from NOW-50 is fresh enough"
+    );
 }
 
 #[test]
 fn newest_record_wins_and_can_delist() {
     let d = "examplebank-account-verify.phish.localhost";
-    let old = record("00000000000000000000000000000010", vec![outcome(d, Classification::Warn, 4900)], NOW - 100);
-    let new = record("00000000000000000000000000000011", vec![outcome(d, Classification::None, 100)], NOW - 10);
+    let old = record(
+        "00000000000000000000000000000010",
+        vec![outcome(d, Classification::Warn, 4900)],
+        NOW - 100,
+    );
+    let new = record(
+        "00000000000000000000000000000011",
+        vec![outcome(d, Classification::None, 100)],
+        NOW - 10,
+    );
     let rel = build_release(&[old.clone(), new], &[], &params(1)).unwrap();
-    assert!(rel.lookup(d).is_none(), "a newer no-risk verdict de-lists the domain");
+    assert!(
+        rel.lookup(d).is_none(),
+        "a newer no-risk verdict de-lists the domain"
+    );
     let rel = build_release(&[old], &[], &params(1)).unwrap();
     assert!(rel.lookup(d).is_some());
 }
@@ -323,11 +378,18 @@ fn appeal_covers_subdomains_and_only_fresh_block_relists() {
     };
     // Records: block verified before the decision (NOW-100), warn after it (NOW-50).
     let rel = build_release(&records(), std::slice::from_ref(&decision), &params(2)).unwrap();
-    assert!(rel.entries.is_empty(), "subdomains of the appealed indicator are removed");
+    assert!(
+        rel.entries.is_empty(),
+        "subdomains of the appealed indicator are removed"
+    );
     // A block from fresh feed-corroborated evidence after the decision re-lists.
     let fresh = record(
         "00000000000000000000000000000020",
-        vec![outcome("examplebank-secure-login.phish.localhost", Classification::Block, 10_000)],
+        vec![outcome(
+            "examplebank-secure-login.phish.localhost",
+            Classification::Block,
+            10_000,
+        )],
         NOW - 5,
     );
     let mut recs = records();
@@ -357,17 +419,26 @@ fn consumer_detects_forks_and_bad_text() {
     let root = TrustRoot::from_manifest(&net.manifest);
     let r1 = build_release(&records(), &[], &params(1)).unwrap();
     let v1 = verify_release(&signed(&net, &r1, &[0, 1]), &root, NOW, None).unwrap();
-    let state = ConsumerState { sequence: 1, digest: v1.digest };
+    let state = ConsumerState {
+        sequence: 1,
+        digest: v1.digest,
+    };
     // Successor whose previous link points elsewhere: a fork.
     let mut p2 = params(2);
-    p2.previous = Some(ReleaseRef { sequence: 1, digest: Digest::of(b"other branch") });
+    p2.previous = Some(ReleaseRef {
+        sequence: 1,
+        digest: Digest::of(b"other branch"),
+    });
     let r2 = build_release(&records(), &[], &p2).unwrap();
     assert!(matches!(
         verify_release(&signed(&net, &r2, &[0, 1]), &root, NOW, Some(&state)),
         Err(ReleaseError::Invalid(_))
     ));
     // Correct link is accepted.
-    p2.previous = Some(ReleaseRef { sequence: 1, digest: v1.digest });
+    p2.previous = Some(ReleaseRef {
+        sequence: 1,
+        digest: v1.digest,
+    });
     let r2 = build_release(&records(), &[], &p2).unwrap();
     verify_release(&signed(&net, &r2, &[0, 1]), &root, NOW, Some(&state)).unwrap();
     // Huge sequence jump is refused.

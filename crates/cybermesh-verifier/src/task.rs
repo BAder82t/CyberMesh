@@ -109,12 +109,7 @@ impl TaskVerifier {
     }
 
     /// Authenticates a result envelope and binds it to this task.
-    pub fn submit(
-        &mut self,
-        bytes: &[u8],
-        manifest: &TrustManifest,
-        now: u64,
-    ) -> SubmitOutcome {
+    pub fn submit(&mut self, bytes: &[u8], manifest: &TrustManifest, now: u64) -> SubmitOutcome {
         let raw_digest = Digest::of(bytes);
         let v = match verify_result(bytes, manifest, now, &self.limits) {
             Ok(v) => v,
@@ -124,15 +119,28 @@ impl TaskVerifier {
         let digest = v.payload_digest;
         let worker = r.worker.clone();
         if r.task_id != self.task.task_id || r.attempt != self.task.attempt {
-            return self.reject(Some(worker), digest, "result is for a different task or attempt");
+            return self.reject(
+                Some(worker),
+                digest,
+                "result is for a different task or attempt",
+            );
         }
         if r.task_digest != self.task_digest {
-            return self.reject(Some(worker), digest, "result answers a different task payload");
+            return self.reject(
+                Some(worker),
+                digest,
+                "result answers a different task payload",
+            );
         }
         if !self.task.assignees.contains(&worker) {
             return self.reject(Some(worker), digest, "worker was not assigned this task");
         }
-        if now > self.task.expires_at.saturating_add(self.policy.result_grace_secs) {
+        if now
+            > self
+                .task
+                .expires_at
+                .saturating_add(self.policy.result_grace_secs)
+        {
             return self.reject(Some(worker), digest, "result arrived after the deadline");
         }
         if self.faulted.contains(&worker) {
@@ -146,7 +154,12 @@ impl TaskVerifier {
             return self.fault(&worker, &r.operator, FaultKind::Equivocation, evidence);
         }
         if r.input_digest != self.input_digest {
-            return self.fault(&worker, &r.operator, FaultKind::WrongInputDigest, vec![digest]);
+            return self.fault(
+                &worker,
+                &r.operator,
+                FaultKind::WrongInputDigest,
+                vec![digest],
+            );
         }
         if r.engine != self.task.engine || r.evidence != self.task.evidence {
             return self.reject(
@@ -158,7 +171,12 @@ impl TaskVerifier {
         let domains: Vec<&str> = r.assessments.iter().map(|a| a.domain.as_str()).collect();
         let expected: Vec<&str> = self.task.domains.iter().map(String::as_str).collect();
         if domains != expected {
-            return self.fault(&worker, &r.operator, FaultKind::DomainSetMismatch, vec![digest]);
+            return self.fault(
+                &worker,
+                &r.operator,
+                FaultKind::DomainSetMismatch,
+                vec![digest],
+            );
         }
         let assessments_digest = match r.assessments_digest() {
             Ok(d) => d,
@@ -291,11 +309,14 @@ impl TaskVerifier {
                 .map(|a| {
                     // Corroboration comes from the verifier's own evidence; when the engine
                     // is present `a` is also the verifier's own assessment.
-                    let corroborated = recomputed && engine.is_some_and(|e| {
-                        cybermesh_analysis::features::host_parts(&a.domain).is_some_and(|p| {
-                            !e.evidence().blocklist_hits(p.host, p.registrable).is_empty()
-                        })
-                    });
+                    let corroborated = recomputed
+                        && engine.is_some_and(|e| {
+                            cybermesh_analysis::features::host_parts(&a.domain).is_some_and(|p| {
+                                !e.evidence()
+                                    .blocklist_hits(p.host, p.registrable)
+                                    .is_empty()
+                            })
+                        });
                     let (classification, why) =
                         self.policy.classify(a, agreeing.len(), corroborated);
                     DomainOutcome {

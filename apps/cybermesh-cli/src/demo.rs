@@ -45,10 +45,30 @@ struct Org {
 }
 
 const ORGS: &[Org] = &[
-    Org { id: "org-a", name: "Organisation A (coordinator host)", workers: &["a1"], release_key: true },
-    Org { id: "org-b", name: "Organisation B", workers: &["b1", "b2"], release_key: true },
-    Org { id: "org-c", name: "Organisation C", workers: &["c1"], release_key: true },
-    Org { id: "org-d", name: "Organisation D", workers: &["d1"], release_key: false },
+    Org {
+        id: "org-a",
+        name: "Organisation A (coordinator host)",
+        workers: &["a1"],
+        release_key: true,
+    },
+    Org {
+        id: "org-b",
+        name: "Organisation B",
+        workers: &["b1", "b2"],
+        release_key: true,
+    },
+    Org {
+        id: "org-c",
+        name: "Organisation C",
+        workers: &["c1"],
+        release_key: true,
+    },
+    Org {
+        id: "org-d",
+        name: "Organisation D",
+        workers: &["d1"],
+        release_key: false,
+    },
 ];
 
 fn key(out: &Path, name: &str) -> Result<SecretKey> {
@@ -80,7 +100,10 @@ pub fn run(c: DemoCmd) -> Result<()> {
         network_id,
     } = c;
     if out.join("manifest.json").exists() {
-        bail!("{} already contains a demo network; remove it first", out.display());
+        bail!(
+            "{} already contains a demo network; remove it first",
+            out.display()
+        );
     }
     std::fs::create_dir_all(out.join("keys"))?;
     std::fs::create_dir_all(out.join("public"))?;
@@ -88,7 +111,9 @@ pub fn run(c: DemoCmd) -> Result<()> {
     std::fs::copy(&domains, out.join("domains.txt"))?;
     let now = util::now();
 
-    let gov: Vec<SecretKey> = (1..=3).map(|i| key(&out, &format!("gov-{i}"))).collect::<Result<_>>()?;
+    let gov: Vec<SecretKey> = (1..=3)
+        .map(|i| key(&out, &format!("gov-{i}")))
+        .collect::<Result<_>>()?;
     let root = GovernanceRoot {
         network_id: network_id.clone(),
         threshold: 2,
@@ -105,7 +130,12 @@ pub fn run(c: DemoCmd) -> Result<()> {
         .map(|o| (o.id, o.name, o.workers.to_vec(), o.release_key))
         .collect();
     if adversary.is_some() {
-        all_orgs.push(("org-m", "Organisation M (simulated compromised)", vec!["m1"], false));
+        all_orgs.push((
+            "org-m",
+            "Organisation M (simulated compromised)",
+            vec!["m1"],
+            false,
+        ));
     }
     for (id, name, ws, release) in &all_orgs {
         let op = OperatorId::new(id)?;
@@ -161,8 +191,14 @@ pub fn run(c: DemoCmd) -> Result<()> {
     env.add_signature(&gov[1])?;
     write(&out.join("manifest.json"), &env.to_vec()?)?;
     write_json(&out.join("governance-root.json"), &root)?;
-    write_json(&out.join("trust-root.json"), &TrustRoot::from_manifest(&manifest))?;
-    write_json(&out.join("public").join("trust-root.json"), &TrustRoot::from_manifest(&manifest))?;
+    write_json(
+        &out.join("trust-root.json"),
+        &TrustRoot::from_manifest(&manifest),
+    )?;
+    write_json(
+        &out.join("public").join("trust-root.json"),
+        &TrustRoot::from_manifest(&manifest),
+    )?;
 
     let coord_peer = cybermesh_network::peer_id_of(&coord.public_key())?;
     let (coord_listen, coord_addr) = if mode == "docker" {
@@ -212,7 +248,10 @@ block_min_score_bp = 7000
             format!("/ip4/127.0.0.1/tcp/{}", base_port + 1 + u16::try_from(i)?)
         };
         let adv = if *org == "org-m" {
-            format!("adversary = \"{}\"\n", adversary.as_deref().unwrap_or("flip-verdicts"))
+            format!(
+                "adversary = \"{}\"\n",
+                adversary.as_deref().unwrap_or("flip-verdicts")
+            )
         } else {
             String::new()
         };

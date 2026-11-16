@@ -120,7 +120,9 @@ pub fn load_records(dir: &Path, m: &TrustManifest) -> Result<Vec<(Digest, Verifi
     for p in entries {
         let env = Envelope::parse(&read(&p)?, 16 << 20)?;
         let v = env
-            .verify(payload_type::VERIFICATION, 1, |id| m.key_with_role(id, Role::Verifier))
+            .verify(payload_type::VERIFICATION, 1, |id| {
+                m.key_with_role(id, Role::Verifier)
+            })
             .with_context(|| format!("{}: not signed by an enrolled verifier", p.display()))?;
         let rec: VerificationRecord = canonical::from_slice(&v.payload)?;
         out.push((Digest::of(&v.payload), rec));
@@ -199,8 +201,14 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
                 "release {} built: {} entries ({} block, {} warn), {} corrections, payload {}",
                 rel.sequence,
                 rel.entries.len(),
-                rel.entries.iter().filter(|e| e.action == cybermesh_intelligence::Action::Block).count(),
-                rel.entries.iter().filter(|e| e.action == cybermesh_intelligence::Action::Warn).count(),
+                rel.entries
+                    .iter()
+                    .filter(|e| e.action == cybermesh_intelligence::Action::Block)
+                    .count(),
+                rel.entries
+                    .iter()
+                    .filter(|e| e.action == cybermesh_intelligence::Action::Warn)
+                    .count(),
                 rel.corrections.len(),
                 Digest::of(&bytes)
             );
@@ -213,13 +221,17 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
             out,
         } => {
             let bytes = read(&payload)?;
-            let _: ThreatRelease = canonical::from_slice(&bytes).context("payload is not a canonical release")?;
+            let _: ThreatRelease =
+                canonical::from_slice(&bytes).context("payload is not a canonical release")?;
             let k = SecretKey::read_from_file(&key)?;
             let env = match merge {
                 Some(p) => {
-                    let mut e = Envelope::parse(&read(&p)?, cybermesh_intelligence::MAX_RELEASE_BYTES)?;
+                    let mut e =
+                        Envelope::parse(&read(&p)?, cybermesh_intelligence::MAX_RELEASE_BYTES)?;
                     if e.payload_bytes()? != bytes {
-                        bail!("refusing to co-sign: the existing envelope carries different payload bytes");
+                        bail!(
+                            "refusing to co-sign: the existing envelope carries different payload bytes"
+                        );
                     }
                     e.add_signature(&k)?;
                     e
@@ -227,7 +239,11 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
                 None => Envelope::sign(payload_type::RELEASE, &bytes, &k),
             };
             write(&out, &env.to_vec()?)?;
-            eprintln!("signed by {} ({} signature(s))", k.key_id().short(), env.signatures.len());
+            eprintln!(
+                "signed by {} ({} signature(s))",
+                k.key_id().short(),
+                env.signatures.len()
+            );
             Ok(())
         }
         ReleaseCmd::Verify {
@@ -242,14 +258,23 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
                 Some(p) if p.exists() => Some(read_json(p)?),
                 _ => None,
             };
-            let v = verify_release(&read(&release)?, &root, now.unwrap_or_else(util::now), st.as_ref())?;
+            let v = verify_release(
+                &read(&release)?,
+                &root,
+                now.unwrap_or_else(util::now),
+                st.as_ref(),
+            )?;
             println!(
                 "OK release sequence={} entries={} corrections={} expires_at={} signed_by_operators=[{}] digest={}",
                 v.release.sequence,
                 v.release.entries.len(),
                 v.release.corrections.len(),
                 v.release.expires_at,
-                v.operators.iter().map(ToString::to_string).collect::<Vec<_>>().join(","),
+                v.operators
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
                 v.digest
             );
             if update_state && let Some(p) = state {
@@ -263,7 +288,11 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
             }
             Ok(())
         }
-        ReleaseCmd::TrustRoot { manifest, root, out } => {
+        ReleaseCmd::TrustRoot {
+            manifest,
+            root,
+            out,
+        } => {
             let m = util::load_manifest(&manifest, &root, util::now())?;
             write_json(&out, &TrustRoot::from_manifest(&m))
         }

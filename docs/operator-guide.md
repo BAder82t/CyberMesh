@@ -1,0 +1,90 @@
+# Operator guide: enrolling an organisation-controlled worker
+
+This guide is for an organisation that wants to contribute a worker to a CyberMesh network.
+Participation is opt-in and can be paused or stopped at any time.
+
+## 1. What a worker does and does not do
+
+| Does | Does not |
+|---|---|
+| Connects to enrolled peers only (allowlist from the governance-signed manifest) | Accept connections from unknown peers |
+| Accepts signed `domain-risk-assessment` tasks from the enrolled issuer | Run code, scripts, URLs or commands from the network |
+| Analyses domain *names* against locally pinned public evidence | Fetch, resolve or contact the domains it analyses |
+| Signs and publishes its results; sends heartbeats | Read browser histories, documents, credentials or security logs |
+| Stays within the CPU, memory, bandwidth and working-hour limits you set | Act as a proxy, crawler or scanner |
+
+## 2. Enrolment procedure
+
+1. **Generate keys on the worker host.** Private keys never leave the host.
+   ```bash
+   sudo useradd --system --home /var/lib/cybermesh --shell /usr/sbin/nologin cybermesh
+   sudo install -d -o cybermesh -m 700 /etc/cybermesh/keys
+   sudo -u cybermesh cybermesh keygen --out /etc/cybermesh/keys/worker.key.json
+   sudo -u cybermesh cybermesh key-info --key /etc/cybermesh/keys/worker.key.json
+   ```
+2. **Submit an enrolment request** to the network's governance group. It contains:
+   - your organisation name and the requested operator id (`[a-z0-9-]`, 2–32 characters);
+   - the worker's **public key** from `key-info` (never the key file);
+   - the worker's reachable address, if it should accept inbound peer connections;
+   - a security contact.
+3. **Governance adds the member and re-signs the manifest.** A threshold of governance keys signs the new manifest with an increased sequence number:
+   ```bash
+   cybermesh governance sign-manifest --manifest manifest.unsigned.json --key gov-1.key.json --out manifest.json
+   cybermesh governance sign-manifest --manifest manifest.unsigned.json --key gov-2.key.json --merge manifest.json --out manifest.json
+   ```
+4. **Install the trust material** on the worker:
+   - `governance-root.json`, the pinned trust anchor, obtained **out of band**, for example from the governance group's signed announcement;
+   - `manifest.json`;
+   - the evidence bundle directory. Its digests must match what tasks pin, so check it with `cybermesh evidence verify --dir ...`.
+5. **Configure** `/etc/cybermesh/worker.toml`. The demo's `worker-*.toml` files are complete examples.
+   ```toml
+   network_id = "cybermesh-pilot"
+   key = "/etc/cybermesh/keys/worker.key.json"
+   manifest = "/etc/cybermesh/manifest.json"
+   governance_root = "/etc/cybermesh/governance-root.json"
+   evidence_dir = "/etc/cybermesh/evidence"
+   state_dir = "/var/lib/cybermesh"
+   control_dir = "/var/lib/cybermesh/control"
+   listen = ["/ip4/0.0.0.0/tcp/4100"]
+   bootstrap = ["/dns4/coordinator.example.org/tcp/4100/p2p/12D3KooW..."]  # or /ip4/...
+   heartbeat_secs = 10
+
+   [resources]
+   cpu_percent = 1.0            # average CPU ceiling (percent of one core)
+   cpu_window_secs = 60         # averaging window and maximum burst credit
+   memory_mb = 200              # pause new work above this resident size
+   max_load_per_cpu = 0.8       # pause while the machine is busy
+   outbound_kib_per_sec = 64    # outbound application bandwidth
+   max_queue = 16
+   active_hours_utc = ["18:00-07:00"]  # e.g. outside office hours
+   ```
+   *Note:* `/dns4/` bootstrap addresses need DNS support in the transport. The MVP build supports `/ip4/` and `/ip6/` only, and `/dns4/` is on the roadmap. Use IP addresses for now.
+6. **Run under the hardened systemd unit** in [`deploy/systemd/cybermesh-worker.service`](../deploy/systemd/cybermesh-worker.service). It adds OS-enforced limits: `CPUQuota=2%`, `MemoryMax=200M`, a read-only system, no capabilities, and a system-call filter.
+   ```bash
+   sudo cp deploy/systemd/cybermesh-worker.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now cybermesh-worker
+   ```
+
+## 3. Day-to-day control
+
+```bash
+cybermesh worker status --state-dir /var/lib/cybermesh     # live state, CPU, RSS, network counters
+cybermesh worker pause  --control-dir /var/lib/cybermesh/control   # stop taking tasks (stays connected)
+cybermesh worker resume --control-dir /var/lib/cybermesh/control
+cybermesh worker stop   --control-dir /var/lib/cybermesh/control   # exits within ~250 ms
+sudo systemctl stop cybermesh-worker                         # immediate shutdown (SIGTERM)
+```
+
+## 4. Leaving the network or reacting to compromise
+
+- **Leaving.** Stop the service and ask governance to remove the member from the next manifest.
+- **Suspected key compromise.** Stop the worker and ask governance to add the key id to `revocations`. Every node ignores a revoked key as soon as it loads the new manifest. Then generate a new key and re-enrol.
+- **Quarantine.** If the verifier quarantines your worker for a provable fault, the verification record names the evidence: the signed result digests. Investigate, fix and ask governance to reinstate the worker. Reinstatement is the documented appeals path for operators.
+
+## 5. Platform support
+
+| Platform | Status |
+|---|---|
+| Linux (x86_64, aarch64) | Supported: systemd unit, cgroup limits, Docker image |
+| macOS | Builds and runs (used for development). The governor measures process CPU time and reads load via `sysctl`. Use `launchd` with `LowPriorityIO` and `ProcessType=Background`; there is no hard CPU cap without third-party tools. |
+| Windows | Not yet tested. Planned path: run as a Windows service under a low-privilege virtual account and enforce CPU and memory with a Job Object (`JOBOBJECT_CPU_RATE_CONTROL_INFORMATION`, `JobMemoryLimit`). On Windows the governor's load check is disabled. |

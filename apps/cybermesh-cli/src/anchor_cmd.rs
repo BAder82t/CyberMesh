@@ -91,12 +91,19 @@ fn release_entry(path: &std::path::Path) -> Result<LogEntry> {
 
 pub fn run(c: AnchorCmd) -> Result<()> {
     match c {
-        AnchorCmd::Append { log, log_id, release } => {
+        AnchorCmd::Append {
+            log,
+            log_id,
+            release,
+        } => {
             let mut l = TransparencyLog::load_or_create(&log, &log_id)?;
             let idx = l.append(release_entry(&release)?)?;
             l.save(&log)?;
             let cp = l.checkpoint()?;
-            println!("appended at index {idx}; checkpoint size={} root={}", cp.size, cp.root);
+            println!(
+                "appended at index {idx}; checkpoint size={} root={}",
+                cp.size, cp.root
+            );
             Ok(())
         }
         AnchorCmd::Commit {
@@ -116,7 +123,8 @@ pub fn run(c: AnchorCmd) -> Result<()> {
             let result = match adapter.as_str() {
                 "local" => {
                     let chain = chain.context("--chain is required for the local adapter")?;
-                    LocalChain::open(&chain, &format!("{log_id}-localchain"))?.submit(commitment, util::now())
+                    LocalChain::open(&chain, &format!("{log_id}-localchain"))?
+                        .submit(commitment, util::now())
                 }
                 "ots" => submit_ots(commitment, calendars),
                 _ => bail!("unknown adapter"),
@@ -131,7 +139,10 @@ pub fn run(c: AnchorCmd) -> Result<()> {
                             receipt,
                         },
                     )?;
-                    println!("anchored checkpoint size={} commitment={commitment}", cp.size);
+                    println!(
+                        "anchored checkpoint size={} commitment={commitment}",
+                        cp.size
+                    );
                     Ok(())
                 }
                 Err(e) => {
@@ -208,7 +219,9 @@ pub fn run(c: AnchorCmd) -> Result<()> {
                     } => println!(
                         "  bitcoin: block {height} must have merkleroot {merkle_root_display} (check with your own node)"
                     ),
-                    AnchorStatus::Unverifiable { reason } => println!("  unverifiable branch: {reason}"),
+                    AnchorStatus::Unverifiable { reason } => {
+                        println!("  unverifiable branch: {reason}")
+                    }
                 }
             }
             Ok(())

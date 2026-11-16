@@ -30,7 +30,10 @@ fn evidence(feed: &[&str]) -> EvidenceBundle {
         }],
         pins: BTreeMap::from([
             ("brands".into(), Digest::of(b"brands-v1")),
-            ("reference-feed".into(), Digest::of(feed.join("\n").as_bytes())),
+            (
+                "reference-feed".into(),
+                Digest::of(feed.join("\n").as_bytes()),
+            ),
         ]),
         sources: vec![],
         skipped_lines: 0,
@@ -47,7 +50,10 @@ struct Fixture {
 /// Operators: org-a (2 workers), org-b, org-c, org-m (malicious) => worker indices
 /// 0,1 = org-a; 2 = org-b; 3 = org-c; 4 = org-m.
 fn fixture(assignees: &[usize]) -> Fixture {
-    let net = TestNetwork::new(&[("org-a", 2), ("org-b", 1), ("org-c", 1), ("org-m", 1)], NOW);
+    let net = TestNetwork::new(
+        &[("org-a", 2), ("org-b", 1), ("org-c", 1), ("org-m", 1)],
+        NOW,
+    );
     let engine = Engine::new(evidence(&[PHISH]));
     let task = net.task(
         &[PHISH, LEXICAL, BENIGN],
@@ -90,8 +96,13 @@ impl Fixture {
     }
 
     fn verifier(&self) -> TaskVerifier {
-        TaskVerifier::new(self.task.clone(), self.task_digest, Policy::default(), Limits::default())
-            .unwrap()
+        TaskVerifier::new(
+            self.task.clone(),
+            self.task_digest,
+            Policy::default(),
+            Limits::default(),
+        )
+        .unwrap()
     }
 }
 
@@ -121,7 +132,10 @@ fn honest_operators_produce_block_and_warn() {
     let f = fixture(&[0, 2, 3]);
     let mut v = f.verifier();
     for w in [0, 2, 3] {
-        assert_eq!(v.submit(&f.sign(w, &f.honest(w)), &f.net.manifest, NOW + 3), SubmitOutcome::Accepted);
+        assert_eq!(
+            v.submit(&f.sign(w, &f.honest(w)), &f.net.manifest, NOW + 3),
+            SubmitOutcome::Accepted
+        );
     }
     assert!(v.is_complete());
     let rec = v.finalize(Some(&f.engine), NOW + 5);
@@ -138,10 +152,16 @@ fn forged_signature_and_impersonation_are_rejected() {
     let mut v = f.verifier();
     // Unenrolled key signs a result claiming to be worker 2.
     let bytes = sign_bytes(payload_type::RESULT, &f.honest(2), &test_key("intruder"));
-    assert!(matches!(v.submit(&bytes, &f.net.manifest, NOW + 3), SubmitOutcome::Rejected(_)));
+    assert!(matches!(
+        v.submit(&bytes, &f.net.manifest, NOW + 3),
+        SubmitOutcome::Rejected(_)
+    ));
     // Enrolled worker 3 signs a result claiming to be worker 2.
     let bytes = sign_bytes(payload_type::RESULT, &f.honest(2), &f.net.workers[3].key);
-    assert!(matches!(v.submit(&bytes, &f.net.manifest, NOW + 3), SubmitOutcome::Rejected(_)));
+    assert!(matches!(
+        v.submit(&bytes, &f.net.manifest, NOW + 3),
+        SubmitOutcome::Rejected(_)
+    ));
     // Bit flip in the envelope signature.
     let mut env: cybermesh_crypto::Envelope =
         serde_json::from_slice(&f.sign(2, &f.honest(2))).unwrap();
@@ -161,7 +181,10 @@ fn single_malicious_worker_is_caught_by_recomputation() {
     }
     let mut bad = f.honest(4);
     forged_malicious(&mut bad);
-    assert_eq!(v.submit(&f.sign(4, &bad), &f.net.manifest, NOW + 3), SubmitOutcome::Accepted);
+    assert_eq!(
+        v.submit(&f.sign(4, &bad), &f.net.manifest, NOW + 3),
+        SubmitOutcome::Accepted
+    );
     let rec = v.finalize(Some(&f.engine), NOW + 5);
     assert!(rec.recomputed);
     assert_eq!(rec.status, TaskStatus::Verified);
@@ -208,7 +231,11 @@ fn colluding_operators_cannot_cause_block() {
     let rec = v.finalize(None, NOW + 5);
     assert!(!rec.recomputed);
     assert_eq!(classification(&rec, BENIGN), Classification::Warn);
-    assert!(rec.outcomes.iter().all(|o| o.classification != Classification::Block));
+    assert!(
+        rec.outcomes
+            .iter()
+            .all(|o| o.classification != Classification::Block)
+    );
 }
 
 /// Regression for an audit finding: the reference feed lists a host on a popular domain
@@ -220,11 +247,23 @@ fn colluders_cannot_turn_a_feed_false_positive_on_a_popular_domain_into_a_block(
     let mut ev = evidence(&["www.google.com"]);
     ev.popular.insert("google.com".into());
     let engine = Engine::new(ev);
-    let task = net.task(&["www.google.com"], &[0, 1, 2], engine_spec(), engine.evidence().pins.clone(), NOW);
+    let task = net.task(
+        &["www.google.com"],
+        &[0, 1, 2],
+        engine_spec(),
+        engine.evidence().pins.clone(),
+        NOW,
+    );
     let task_digest = Digest::of(&canonical::to_vec(&task).unwrap());
     let honest = engine.assess("www.google.com").unwrap();
     assert_eq!(honest.verdict, Verdict::KnownBenign);
-    let mut v = TaskVerifier::new(task.clone(), task_digest, Policy::default(), Limits::default()).unwrap();
+    let mut v = TaskVerifier::new(
+        task.clone(),
+        task_digest,
+        Policy::default(),
+        Limits::default(),
+    )
+    .unwrap();
     for w in 0..3 {
         let mut r = TaskResult {
             v: PROTOCOL_VERSION,
@@ -243,21 +282,39 @@ fn colluders_cannot_turn_a_feed_false_positive_on_a_popular_domain_into_a_block(
             usage: ResourceUsage::default(),
         };
         forged_malicious(&mut r);
-        v.submit(&sign_bytes(payload_type::RESULT, &r, &net.workers[w].key), &net.manifest, NOW + 2);
+        v.submit(
+            &sign_bytes(payload_type::RESULT, &r, &net.workers[w].key),
+            &net.manifest,
+            NOW + 2,
+        );
     }
     let rec = v.finalize(Some(&engine), NOW + 3);
     assert!(rec.recomputed);
     assert_eq!(rec.faults.len(), 3);
-    assert!(rec.outcomes.iter().all(|o| o.classification != Classification::Block));
+    assert!(
+        rec.outcomes
+            .iter()
+            .all(|o| o.classification != Classification::Block)
+    );
 }
 
 #[test]
 fn unsafe_policies_are_refused() {
     let f = fixture(&[0, 2, 3]);
     for p in [
-        Policy { min_operators: 0, ..Policy::default() },
-        Policy { warn_min_score_bp: 8000, block_min_score_bp: 7000, ..Policy::default() },
-        Policy { warn_min_score_bp: 0, ..Policy::default() },
+        Policy {
+            min_operators: 0,
+            ..Policy::default()
+        },
+        Policy {
+            warn_min_score_bp: 8000,
+            block_min_score_bp: 7000,
+            ..Policy::default()
+        },
+        Policy {
+            warn_min_score_bp: 0,
+            ..Policy::default()
+        },
     ] {
         assert!(TaskVerifier::new(f.task.clone(), f.task_digest, p, Limits::default()).is_err());
     }
@@ -298,7 +355,11 @@ fn one_operator_with_many_workers_is_not_diverse() {
         v.submit(&f.sign(w, &f.honest(w)), &f.net.manifest, NOW + 3);
     }
     let rec = v.finalize(Some(&f.engine), NOW + 5);
-    assert_eq!(rec.status, TaskStatus::Insufficient, "only 2 distinct operators");
+    assert_eq!(
+        rec.status,
+        TaskStatus::Insufficient,
+        "only 2 distinct operators"
+    );
     assert_eq!(rec.publishable().count(), 0);
 }
 
@@ -310,8 +371,14 @@ fn equivocation_is_a_provable_fault() {
     let mut r2 = f.honest(2);
     r2.nonce = "ffffffffffffffffffffffffffffffff".into();
     r2.assessments[0].risk_score_bp = 1;
-    assert_eq!(v.submit(&f.sign(2, &r1), &f.net.manifest, NOW + 3), SubmitOutcome::Accepted);
-    assert_eq!(v.submit(&f.sign(2, &r1), &f.net.manifest, NOW + 3), SubmitOutcome::Duplicate);
+    assert_eq!(
+        v.submit(&f.sign(2, &r1), &f.net.manifest, NOW + 3),
+        SubmitOutcome::Accepted
+    );
+    assert_eq!(
+        v.submit(&f.sign(2, &r1), &f.net.manifest, NOW + 3),
+        SubmitOutcome::Duplicate
+    );
     assert_eq!(
         v.submit(&f.sign(2, &r2), &f.net.manifest, NOW + 3),
         SubmitOutcome::Fault(FaultKind::Equivocation)
@@ -327,7 +394,10 @@ fn replayed_late_unassigned_and_mismatched_results_are_rejected() {
     // Result for a different (older) task payload.
     let mut old = f.honest(2);
     old.task_digest = Digest::of(b"older task");
-    assert!(matches!(v.submit(&f.sign(2, &old), &f.net.manifest, NOW + 3), SubmitOutcome::Rejected(_)));
+    assert!(matches!(
+        v.submit(&f.sign(2, &old), &f.net.manifest, NOW + 3),
+        SubmitOutcome::Rejected(_)
+    ));
     // Worker 4 was not assigned.
     assert!(matches!(
         v.submit(&f.sign(4, &f.honest(4)), &f.net.manifest, NOW + 3),
@@ -335,7 +405,11 @@ fn replayed_late_unassigned_and_mismatched_results_are_rejected() {
     ));
     // Deadline passed.
     assert!(matches!(
-        v.submit(&f.sign(3, &f.honest(3)), &f.net.manifest, f.task.expires_at + 3600),
+        v.submit(
+            &f.sign(3, &f.honest(3)),
+            &f.net.manifest,
+            f.task.expires_at + 3600
+        ),
         SubmitOutcome::Rejected(_)
     ));
     // Wrong input digest is signed misbehaviour.
@@ -366,7 +440,10 @@ fn disagreement_without_recompute_is_disputed_not_resolved() {
     let rec = v.finalize(None, NOW + 5);
     assert_eq!(rec.status, TaskStatus::Disputed);
     assert!(rec.outcomes.is_empty());
-    assert!(rec.faults.is_empty(), "no fault can be proven without recomputation");
+    assert!(
+        rec.faults.is_empty(),
+        "no fault can be proven without recomputation"
+    );
 }
 
 #[test]

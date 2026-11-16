@@ -98,7 +98,9 @@ impl TransparencyLog {
     fn validate(&self) -> Result<(), AnchorError> {
         for w in self.entries.windows(2) {
             if w[1].sequence <= w[0].sequence {
-                return Err(AnchorError::Log("log sequences must strictly increase".into()));
+                return Err(AnchorError::Log(
+                    "log sequences must strictly increase".into(),
+                ));
             }
         }
         let digests: std::collections::BTreeSet<_> =
@@ -197,14 +199,17 @@ impl TransparencyLog {
 /// Atomic file replacement: write to a fresh, exclusively created temp file in the same
 /// directory (never following an existing path), fsync, then rename over the target.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let nonce = cybermesh_crypto::random_bytes::<8>()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let nonce =
+        cybermesh_crypto::random_bytes::<8>().map_err(|e| std::io::Error::other(e.to_string()))?;
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.{}.tmp", hex::encode(nonce)));
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
     let res = f.write_all(bytes).and_then(|()| f.sync_all());
     if let Err(e) = res {
         let _ = fs::remove_file(&tmp);
