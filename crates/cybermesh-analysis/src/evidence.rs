@@ -30,6 +30,7 @@ pub fn source_pin(id: &str, kind: SourceKind, file_digest: &Digest) -> Digest {
         SourceKind::Blocklist => "blocklist",
         SourceKind::Popularity => "popularity",
         SourceKind::Brands => "brands",
+        SourceKind::HostingPlatforms => "hosting-platforms",
     };
     Digest::tagged(
         "cybermesh/evidence-source/v1",
@@ -68,6 +69,9 @@ pub enum SourceKind {
     Popularity,
     /// JSON table of protected brands.
     Brands,
+    /// Registrable domains whose subdomains are independently controlled customer sites
+    /// (user-content hosting not covered by the Public Suffix List's private section).
+    HostingPlatforms,
 }
 
 /// Metadata for one source in `bundle.json`.
@@ -108,6 +112,7 @@ pub struct EvidenceBundle {
     /// `(source id, normalised hosts)`, sorted by source id.
     pub blocklists: Vec<(String, HashSet<String>)>,
     pub popular: HashSet<String>,
+    pub hosting_platforms: HashSet<String>,
     pub brands: Vec<Brand>,
     pub pins: EvidencePins,
     pub sources: Vec<SourceMeta>,
@@ -233,6 +238,11 @@ impl EvidenceBundle {
                     let (set, skipped) = parse_domain_list(bytes);
                     bundle.skipped_lines += skipped;
                     bundle.popular.extend(set);
+                }
+                SourceKind::HostingPlatforms => {
+                    let (set, skipped) = parse_domain_list(bytes);
+                    bundle.skipped_lines += skipped;
+                    bundle.hosting_platforms.extend(set);
                 }
                 SourceKind::Brands => {
                     let mut brands: Vec<Brand> = serde_json::from_slice(bytes)

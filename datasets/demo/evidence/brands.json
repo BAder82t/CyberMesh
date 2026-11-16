@@ -1,0 +1,400 @@
+[
+  {
+    "name": "adobe",
+    "tokens": [
+      "adobe"
+    ],
+    "legitimate": [
+      "adobe.com"
+    ]
+  },
+  {
+    "name": "amazon",
+    "tokens": [
+      "amazon"
+    ],
+    "legitimate": [
+      "amazon.ca",
+      "amazon.co.jp",
+      "amazon.co.uk",
+      "amazon.com",
+      "amazon.com.au",
+      "amazon.com.br",
+      "amazon.com.mx",
+      "amazon.de",
+      "amazon.es",
+      "amazon.fr",
+      "amazon.in",
+      "amazon.it",
+      "amazon.nl",
+      "amazon.pl",
+      "amazon.se",
+      "amazonaws.com"
+    ]
+  },
+  {
+    "name": "apple",
+    "tokens": [
+      "apple",
+      "appleid",
+      "icloud"
+    ],
+    "legitimate": [
+      "apple.com",
+      "apple.news",
+      "icloud.com",
+      "me.com"
+    ]
+  },
+  {
+    "name": "bankofamerica",
+    "tokens": [
+      "bankofamerica"
+    ],
+    "legitimate": [
+      "bankofamerica.com",
+      "bofa.com"
+    ]
+  },
+  {
+    "name": "binance",
+    "tokens": [
+      "binance"
+    ],
+    "legitimate": [
+      "binance.com",
+      "binance.us"
+    ]
+  },
+  {
+    "name": "bybit",
+    "tokens": [
+      "bybit"
+    ],
+    "legitimate": [
+      "bybit.com"
+    ]
+  },
+  {
+    "name": "chase",
+    "tokens": [
+      "chase"
+    ],
+    "legitimate": [
+      "chase.com",
+      "jpmorgan.com",
+      "jpmorganchase.com"
+    ]
+  },
+  {
+    "name": "coinbase",
+    "tokens": [
+      "coinbase"
+    ],
+    "legitimate": [
+      "coinbase.com"
+    ]
+  },
+  {
+    "name": "dexscreener",
+    "tokens": [
+      "dexscreener"
+    ],
+    "legitimate": [
+      "dexscreener.com"
+    ]
+  },
+  {
+    "name": "dhl",
+    "tokens": [
+      "dhl"
+    ],
+    "legitimate": [
+      "dhl.co.uk",
+      "dhl.com",
+      "dhl.de"
+    ]
+  },
+  {
+    "name": "docusign",
+    "tokens": [
+      "docusign"
+    ],
+    "legitimate": [
+      "docusign.com",
+      "docusign.net"
+    ]
+  },
+  {
+    "name": "dropbox",
+    "tokens": [
+      "dropbox"
+    ],
+    "legitimate": [
+      "dropbox.com",
+      "dropboxusercontent.com"
+    ]
+  },
+  {
+    "name": "examplebank",
+    "tokens": [
+      "examplebank"
+    ],
+    "legitimate": [
+      "examplebank.test"
+    ]
+  },
+  {
+    "name": "exodus",
+    "tokens": [
+      "exodus"
+    ],
+    "legitimate": [
+      "exodus.com"
+    ]
+  },
+  {
+    "name": "facebook",
+    "tokens": [
+      "facebook",
+      "meta"
+    ],
+    "legitimate": [
+      "facebook.com",
+      "fb.com",
+      "messenger.com",
+      "meta.com"
+    ]
+  },
+  {
+    "name": "fedex",
+    "tokens": [
+      "fedex"
+    ],
+    "legitimate": [
+      "fedex.com"
+    ]
+  },
+  {
+    "name": "google",
+    "tokens": [
+      "gmail",
+      "google"
+    ],
+    "legitimate": [
+      "gmail.com",
+      "goo.gl",
+      "google.co.uk",
+      "google.com",
+      "google.de",
+      "googleapis.com",
+      "googleusercontent.com",
+      "youtube.com"
+    ]
+  },
+  {
+    "name": "instagram",
+    "tokens": [
+      "instagram"
+    ],
+    "legitimate": [
+      "instagram.com"
+    ]
+  },
+  {
+    "name": "kucoin",
+    "tokens": [
+      "kucoin"
+    ],
+    "legitimate": [
+      "kucoin.com"
+    ]
+  },
+  {
+    "name": "ledger",
+    "tokens": [
+      "ledger",
+      "ledgerlive"
+    ],
+    "legitimate": [
+      "ledger.com"
+    ]
+  },
+  {
+    "name": "linkedin",
+    "tokens": [
+      "linkedin"
+    ],
+    "legitimate": [
+      "linkedin.com",
+      "lnkd.in"
+    ]
+  },
+  {
+    "name": "metamask",
+    "tokens": [
+      "metamask"
+    ],
+    "legitimate": [
+      "metamask.io"
+    ]
+  },
+  {
+    "name": "microsoft",
+    "tokens": [
+      "microsoft",
+      "microsoftonline",
+      "office365",
+      "onedrive",
+      "outlook",
+      "sharepoint"
+    ],
+    "legitimate": [
+      "azure.com",
+      "hotmail.com",
+      "live.com",
+      "microsoft.com",
+      "microsoftonline.com",
+      "msn.com",
+      "office.com",
+      "office365.com",
+      "onedrive.com",
+      "outlook.com",
+      "sharepoint.com",
+      "windows.net"
+    ]
+  },
+  {
+    "name": "netflix",
+    "tokens": [
+      "netflix"
+    ],
+    "legitimate": [
+      "netflix.com"
+    ]
+  },
+  {
+    "name": "opensea",
+    "tokens": [
+      "opensea"
+    ],
+    "legitimate": [
+      "opensea.io"
+    ]
+  },
+  {
+    "name": "pancakeswap",
+    "tokens": [
+      "pancakeswap"
+    ],
+    "legitimate": [
+      "pancakeswap.finance"
+    ]
+  },
+  {
+    "name": "paypal",
+    "tokens": [
+      "paypal"
+    ],
+    "legitimate": [
+      "paypal.com",
+      "paypal.me",
+      "paypalobjects.com"
+    ]
+  },
+  {
+    "name": "roblox",
+    "tokens": [
+      "roblox"
+    ],
+    "legitimate": [
+      "roblox.com"
+    ]
+  },
+  {
+    "name": "safepal",
+    "tokens": [
+      "safepal"
+    ],
+    "legitimate": [
+      "safepal.com",
+      "safepal.io"
+    ]
+  },
+  {
+    "name": "steam",
+    "tokens": [
+      "steamcommunity",
+      "steampowered"
+    ],
+    "legitimate": [
+      "steamcommunity.com",
+      "steampowered.com"
+    ]
+  },
+  {
+    "name": "trezor",
+    "tokens": [
+      "trezor"
+    ],
+    "legitimate": [
+      "trezor.io"
+    ]
+  },
+  {
+    "name": "tronlink",
+    "tokens": [
+      "tronlink"
+    ],
+    "legitimate": [
+      "tronlink.org"
+    ]
+  },
+  {
+    "name": "trustwallet",
+    "tokens": [
+      "trustwallet"
+    ],
+    "legitimate": [
+      "trustwallet.com"
+    ]
+  },
+  {
+    "name": "uniswap",
+    "tokens": [
+      "uniswap"
+    ],
+    "legitimate": [
+      "uniswap.org"
+    ]
+  },
+  {
+    "name": "usps",
+    "tokens": [
+      "usps"
+    ],
+    "legitimate": [
+      "usps.com"
+    ]
+  },
+  {
+    "name": "wellsfargo",
+    "tokens": [
+      "wellsfargo"
+    ],
+    "legitimate": [
+      "wellsfargo.com"
+    ]
+  },
+  {
+    "name": "whatsapp",
+    "tokens": [
+      "whatsapp"
+    ],
+    "legitimate": [
+      "wa.me",
+      "whatsapp.com",
+      "whatsapp.net"
+    ]
+  }
+]

@@ -19,11 +19,14 @@ pub enum DevCmd {
     TestVectors {
         #[arg(long)]
         out: PathBuf,
+        /// Reference time (Unix seconds) the vectors are built around.
+        #[arg(long, default_value_t = 1_800_000_000)]
+        now: u64,
     },
 }
 
-const NOW: u64 = 1_800_000_000;
 
+#[allow(non_snake_case)]
 fn outcome(d: &str, c: Classification, score: u16, codes: &[(FindingCode, i32, &str)]) -> DomainOutcome {
     DomainOutcome {
         domain: d.into(),
@@ -48,8 +51,9 @@ fn outcome(d: &str, c: Classification, score: u16, codes: &[(FindingCode, i32, &
     }
 }
 
+#[allow(non_snake_case)]
 pub fn run(c: DevCmd) -> Result<()> {
-    let DevCmd::TestVectors { out } = c;
+    let DevCmd::TestVectors { out, now: NOW } = c;
     let net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], NOW);
     let rec = VerificationRecord {
         v: 1,

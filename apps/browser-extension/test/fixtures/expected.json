@@ -1,0 +1,12 @@
+{
+  "block": "examplebank-secure-login.phish.localhost",
+  "expired_now": 1800086400,
+  "future_now": 1799996400,
+  "network_id": "cybermesh-test",
+  "now": 1800000010,
+  "subdomain_of_block": "login.examplebank-secure-login.phish.localhost",
+  "unlisted": "examplebank.test",
+  "valid_digest": "sha256:c88f6bc07c4c9f354fd9c3024f69486625945cb5fed1e4a8426ed596a91bab49",
+  "valid_sequence": 7,
+  "warn": "examplebank-account-verify.phish.localhost"
+}

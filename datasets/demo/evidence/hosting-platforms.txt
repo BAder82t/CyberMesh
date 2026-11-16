@@ -1,0 +1,28 @@
+# User-content hosting platforms: each subdomain is an independently controlled customer
+# site, so the platform's popularity must not exempt customer sites. Platforms already in
+# the Public Suffix List private section are handled by the PSL and need not be listed.
+# Compiled for this project (Apache-2.0).
+000webhostapp.com
+beget.tech
+blogspot.com
+blogspot.fr
+carrd.co
+framer.website
+godaddysites.com
+hpage.com
+jimdosite.com
+mybluehost.me
+mystrikingly.com
+notion.site
+site123.me
+square.site
+teachable.com
+tumblr.com
+ucoz.net
+usrfiles.com
+webflow.io
+webnode.page
+weebly.com
+wixsite.com
+wordpress.com
+glitch.me

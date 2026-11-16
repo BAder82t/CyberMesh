@@ -1,0 +1,41 @@
+{
+  "v": 1,
+  "sources": [
+    {
+      "id": "brands",
+      "kind": "brands",
+      "file": "brands.json",
+      "sha256": "sha256:f174d37972b5b063e0555210d6f88f76a4177cd8bcb9e8d4bd834d48e5e5ec0c",
+      "version": "2026-11-16",
+      "license": "Apache-2.0",
+      "origin": "cybermesh"
+    },
+    {
+      "id": "hosting-platforms",
+      "kind": "hosting-platforms",
+      "file": "hosting-platforms.txt",
+      "sha256": "sha256:7e5245a687644b6a354c3b7b1430563544991ee6dcbe2a5216b020882f24b6e8",
+      "version": "2026-11-16",
+      "license": "Apache-2.0",
+      "origin": "cybermesh"
+    },
+    {
+      "id": "popularity",
+      "kind": "popularity",
+      "file": "popular-domains.txt",
+      "sha256": "sha256:3a201dca15d60a65f7fba68b3a61abe6a95def928964e843368bd18fa491611f",
+      "version": "majestic-million-2026-11-16-top10k",
+      "license": "CC-BY-3.0",
+      "origin": "https://majestic.com/reports/majestic-million"
+    },
+    {
+      "id": "reference-feed",
+      "kind": "blocklist",
+      "file": "reference-feed.txt",
+      "sha256": "sha256:1738badc110b53a49866d2e10234ee66bbaf1b9c51b8e98edc5004e84159c0ef",
+      "version": "demo-2026-11-16",
+      "license": "CC0-1.0",
+      "origin": "cybermesh synthetic demo feed"
+    }
+  ]
+}

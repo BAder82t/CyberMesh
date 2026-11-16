@@ -1,0 +1,21 @@
+{
+  "network_id": "cybermesh-test",
+  "threshold": 2,
+  "signers": [
+    {
+      "label": "org-a-release",
+      "operator": "org-a",
+      "public_key": "6f4d27c22470091daa7b0d340a13cbe0b1286a16d0ca79f4cdf810f34117a3a0"
+    },
+    {
+      "label": "org-b-release",
+      "operator": "org-a",
+      "public_key": "a3775369812b3436e6aa18ee7b96513f913d0aa45252fb87141c0a9a67631678"
+    },
+    {
+      "label": "org-c-release",
+      "operator": "org-c",
+      "public_key": "881d12190570955a1675bc4646b0acffd2f158eb144f3aad04dc0d6ef2804e50"
+    }
+  ]
+}

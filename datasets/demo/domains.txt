@@ -1,0 +1,19 @@
+# Domains assessed in the local demonstration. Fictional hosts use reserved names.
+# Feed-listed phishing test destinations (expected: block)
+examplebank-secure-login.phish.localhost
+examplebank-billing-update.phish.localhost
+malware-drop.example.net
+# Lexical-only lookalikes, not in any feed (expected: advisory warning)
+examplebank-account-verify.phish.localhost
+examplebank-password-reset.phish.localhost
+xn--exmplebank-login-udn.test
+# Feed false positive on a popular domain (expected: not published)
+www.google.com
+# Legitimate and unrelated hosts (expected: not published)
+examplebank.test
+www.wikipedia.org
+github.com
+mail.example.org
+docs.example.com
+news.example.co.uk
+shop.example.net

@@ -1,0 +1,85 @@
+{
+  "dataset": "eval-data/dataset.csv",
+  "split": "dev",
+  "rows": 37090,
+  "skipped_rows": 0,
+  "malicious": 351,
+  "benign": 36739,
+  "engine_micros_per_domain": 19.000451604205985,
+  "evidence_pins": {
+    "brands": "sha256:95f8ba7e4f9b11cb31bfbb72481c74fd7ed82208c959b394f581c2cbe18cfd49",
+    "hosting-platforms": "sha256:c44a001acc44374e51cd72d07a4e1f78d806a01a8b60905ed7cf5f8a8e51e79c",
+    "popularity": "sha256:0fa856896a28b323273b8de58e7bede94eea4fbbddc42203fbecb1c99b1e0f2c",
+    "reference-feed": "sha256:b68bad6173e22b49569dd7e00a300bd2fef55ecb825c070751face44c247ff66"
+  },
+  "detectors": {
+    "engine-malicious": {
+      "confusion": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 36739,
+        "fn_": 351
+      },
+      "precision": null,
+      "recall": 0.0,
+      "false_positive_rate": 0.0,
+      "f1": null,
+      "false_positive_examples": []
+    },
+    "engine-suspicious": {
+      "confusion": {
+        "tp": 8,
+        "fp": 7,
+        "tn": 36732,
+        "fn_": 343
+      },
+      "precision": 0.5333333333333333,
+      "recall": 0.022792022792022793,
+      "false_positive_rate": 0.00019053322082800294,
+      "f1": 0.043715846994535526,
+      "false_positive_examples": [
+        "gogole.com",
+        "goole.com",
+        "mazon.org",
+        "paypay-card.co.jp",
+        "insagram.com",
+        "finance.ua",
+        "cloud-cme.com"
+      ]
+    },
+    "feed-only": {
+      "confusion": {
+        "tp": 0,
+        "fp": 0,
+        "tn": 36739,
+        "fn_": 351
+      },
+      "precision": null,
+      "recall": 0.0,
+      "false_positive_rate": 0.0,
+      "f1": null,
+      "false_positive_examples": []
+    },
+    "lexical-only": {
+      "confusion": {
+        "tp": 8,
+        "fp": 7,
+        "tn": 36732,
+        "fn_": 343
+      },
+      "precision": 0.5333333333333333,
+      "recall": 0.022792022792022793,
+      "false_positive_rate": 0.00019053322082800294,
+      "f1": 0.043715846994535526,
+      "false_positive_examples": [
+        "gogole.com",
+        "goole.com",
+        "mazon.org",
+        "paypay-card.co.jp",
+        "insagram.com",
+        "finance.ua",
+        "cloud-cme.com"
+      ]
+    }
+  }
+}

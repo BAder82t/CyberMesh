@@ -14,7 +14,7 @@ pub const ENGINE_NAME: &str = "cybermesh-lexical";
 /// Bumped on any change that can alter output for the same input. The suffix records the
 /// exact Public Suffix List and IDNA table versions compiled in (pinned with `=` in
 /// `Cargo.toml`), because they also determine output.
-pub const ENGINE_VERSION: &str = "0.2.0+psl.2.1.255+idna.1.1.0";
+pub const ENGINE_VERSION: &str = "0.3.0+psl.2.1.255+idna.1.1.0";
 
 /// The engine spec of this build.
 #[must_use]
@@ -167,7 +167,12 @@ impl Engine {
                 detail: truncate(format!("listed in reference feed: {}", feed_hits.join(", "))),
             });
         }
-        let popular = self.evidence.popular.contains(parts.registrable);
+        // On user-content hosting platforms each subdomain is a separately controlled site:
+        // the platform's popularity says nothing about a customer's site.
+        let customer_site = self.evidence.hosting_platforms.contains(parts.registrable)
+            && !parts.subdomain_labels.is_empty()
+            && parts.subdomain_labels != ["www"];
+        let popular = !customer_site && self.evidence.popular.contains(parts.registrable);
         if popular {
             findings.push(Finding {
                 code: FindingCode::PopularDomain,
@@ -451,9 +456,15 @@ mod tests {
                     "examplebank-secure-login.phish.localhost".to_owned(),
                     "drive.google.com".to_owned(),
                     "malware-drop.xyz".to_owned(),
+                    "evil-login.weebly.com".to_owned(),
                 ]),
             )],
-            popular: HashSet::from(["google.com".to_owned(), "wikipedia.org".to_owned()]),
+            popular: HashSet::from([
+                "google.com".to_owned(),
+                "wikipedia.org".to_owned(),
+                "weebly.com".to_owned(),
+            ]),
+            hosting_platforms: HashSet::from(["weebly.com".to_owned()]),
             brands,
             pins: BTreeMap::from([("reference-feed".into(), Digest::of(b"f"))]),
             sources: vec![],
@@ -504,6 +515,18 @@ mod tests {
         assert_eq!(a.confidence_bp, 3000);
         let codes: Vec<_> = a.findings.iter().map(|f| f.code).collect();
         assert_eq!(codes, vec![FindingCode::FeedMatch, FindingCode::PopularDomain]);
+    }
+
+    #[test]
+    fn customer_sites_on_hosting_platforms_are_not_exempted() {
+        let e = test_engine();
+        let a = e.assess("evil-login.weebly.com").unwrap();
+        assert_eq!(a.verdict, Verdict::Malicious);
+        assert!(!a.findings.iter().any(|f| f.code == FindingCode::PopularDomain));
+        // The platform itself stays exempt, and non-platform popular domains keep the
+        // exemption for their subdomains.
+        assert_eq!(e.assess("www.weebly.com").unwrap().verdict, Verdict::KnownBenign);
+        assert_eq!(e.assess("drive.google.com").unwrap().verdict, Verdict::KnownBenign);
     }
 
     #[test]
@@ -597,6 +620,7 @@ mod tests {
             "evil.github.io",
             "www.example.co.uk",
             "apple-pie-recipes.com",
+            "evil-login.weebly.com",
         ];
         let out: Vec<_> = corpus.iter().map(|d| e.assess(d).unwrap()).collect();
         let bytes = cybermesh_crypto::canonical::to_vec(&out).unwrap();
@@ -616,13 +640,14 @@ mod tests {
                 (0, Verdict::NoSignal),
                 (0, Verdict::NoSignal),
                 (3500, Verdict::NoSignal),
+                (9700, Verdict::Malicious),
             ]
         );
         assert_eq!(Digest::of(&bytes).to_string(), GOLDEN_DIGEST);
     }
 
     const GOLDEN_DIGEST: &str =
-        "sha256:f81c8096736b55f8d8c54bd1ddfe9128b7936d169d85326a988b176e72405a7e";
+        "sha256:98fd210274ea54211d60679a57c33aecba667cd96dd94d44c6e329b231c94075";
 
     #[test]
     fn rejects_unnormalised_input() {

@@ -1,0 +1,9 @@
+# CyberMesh demo reference feed (synthetic, CC0-1.0).
+# Every entry is a fictional host under reserved names (.localhost, .test, .example)
+# and is used only by the local demonstration. It is NOT real threat intelligence.
+examplebank-secure-login.phish.localhost
+examplebank-billing-update.phish.localhost
+malware-drop.example.net
+invoice-viewer-download.test
+# A deliberate feed false positive on a popular domain: the engine must never publish it.
+www.google.com
