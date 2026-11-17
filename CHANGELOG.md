@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 (2026-11-17, research pre-release)
+
+Demo changes only; wire-compatible with v0.2.0. **Not production-ready; no external audit.**
 
 ### Added
 - The Docker Compose demo runs organisation B's independent verifier in its own hardened container, with only its own key and its own state. The manifest requires `min_verifiers = 2`, and the release containers show the quorum check: the coordinator's records alone publish nothing. Both signers then build from both verifiers' records.
