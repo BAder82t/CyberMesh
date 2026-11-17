@@ -22,7 +22,7 @@ the [roadmap](docs/roadmap.md).
 
 **Second application (v0.2.0): Certificate Transparency monitoring.** Workers that opt in split public CT logs into shards and scan every newly logged certificate for brand lookalikes. The network verifies their work against the logs' own Merkle hashes, and the output is an investigation report for security teams. Following every public tiled CT log takes about 243 million certificate entries a day: roughly 20–30 workers at a 1 % CPU budget, or one dedicated server. This is the first workload where pooling small donated slices is a natural fit. See [docs/ct-monitoring.md](docs/ct-monitoring.md).
 
-> **Status: research MVP (v0.2.1). Not production-ready.** The evaluation in [docs/evaluation.md](docs/evaluation.md) shows two things.
+> **Status: research MVP (v0.2.2). Not production-ready.** The evaluation in [docs/evaluation.md](docs/evaluation.md) shows two things.
 >
 > 1. The *verification and distribution* design works as intended, including against adversarial workers.
 > 2. The *lexical detection* adds only a few percent of early detection on phishing domains that feeds have not listed yet.

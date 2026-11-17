@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.2 (2026-11-17, research pre-release)
+
+Wire-compatible with v0.2.x: nodes without record distribution ignore the new `records` topic. **Not production-ready; no external audit.**
 
 ### Added
 - **Verification records are distributed over the network.**
