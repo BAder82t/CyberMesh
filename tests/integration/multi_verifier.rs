@@ -28,6 +28,7 @@ fn params(network_id: &str, min_verifiers: usize) -> BuildParams {
 async fn an_independent_verifier_completes_the_release_quorum() {
     let h = Harness::start(Options {
         independent_verifiers: 1,
+        min_verifiers: 2,
         ..Options::default()
     });
     let (net, report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
@@ -82,6 +83,38 @@ async fn an_independent_verifier_completes_the_release_quorum() {
     assert_eq!(rel.lookup(LEXICAL).map(|e| e.action), Some(Action::Warn));
     assert!(rel.lookup("www.google.com").is_none());
     assert!(rel.lookup("mail.example.org").is_none());
+    // Records were exchanged over the network: each organisation received all of the other's.
+    let digests = |v: &[(Digest, VerificationRecord)]| -> BTreeSet<Digest> {
+        v.iter().map(|(d, _)| *d).collect()
+    };
+    assert_eq!(
+        digests(&report.received),
+        digests(&v.records),
+        "coordinator received all of org-b's records"
+    );
+    assert_eq!(
+        digests(&v.received),
+        digests(&report.records),
+        "org-b received all of the coordinator's records"
+    );
+    assert!(report.records_published >= report.records.len() as u64);
+    assert_eq!(report.records_refused + v.records_refused, 0);
+    // So each organisation builds the release from its own node alone, with identical bytes.
+    let at_a: Vec<_> = report
+        .records
+        .iter()
+        .chain(report.received.iter())
+        .cloned()
+        .collect();
+    let at_b: Vec<_> = v.records.iter().chain(v.received.iter()).cloned().collect();
+    let p = params(&net.network_id, 2);
+    let rel_a = build_release(&at_a, &[], &p).unwrap();
+    let rel_b = build_release(&at_b, &[], &p).unwrap();
+    assert_eq!(
+        cybermesh_crypto::canonical::to_vec(&rel_a).unwrap(),
+        cybermesh_crypto::canonical::to_vec(&rel_b).unwrap()
+    );
+    assert_eq!(rel_a, rel);
     // Each entry cites a record from each verifier.
     let e = rel.lookup(PHISH).unwrap();
     let cited: BTreeSet<Digest> = e
@@ -102,6 +135,7 @@ async fn independent_verifiers_prove_faults_themselves() {
         replication: 4,
         result_timeout: Duration::from_secs(5),
         independent_verifiers: 2,
+        min_verifiers: 3,
         ..Options::default()
     });
     let (net, report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
@@ -120,11 +154,12 @@ async fn independent_verifiers_prove_faults_themselves() {
             v.operator
         );
     }
-    // Three verifier operators, quorum 3: the release is still correct.
+    // Three verifier operators, quorum 3: the release built at organisation A from its own
+    // node (own records plus those received over the network) is still correct.
     let all: Vec<_> = report
         .records
         .iter()
-        .chain(verifiers.iter().flat_map(|v| v.records.iter()))
+        .chain(report.received.iter())
         .cloned()
         .collect();
     let rel = build_release(&all, &[], &params(&net.network_id, 3)).unwrap();

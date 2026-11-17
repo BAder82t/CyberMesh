@@ -26,7 +26,6 @@ The Docker Compose demo runs organisation B's independent verifier in its own ha
 
 ## Next: harden the pilot
 - **Verifiers.**
-  - Distribute records between organisations over the network. Today they are files collected by release signers.
   - Let the coordinator act on faults proven by other verifiers.
   - Prove late equivocation at independent verifiers.
 - **CT.**

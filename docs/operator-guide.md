@@ -109,16 +109,26 @@ trust from the coordinator.
    [ct_policy]              # optional: CT spot checks with your own secret seed
    spot_check_tiles = 2
    ```
-3. **Run** `cybermesh verifier run --config verifier.toml`. It writes signed records to
-   `state_dir/records/` and its counters to `verifier-report.json` on exit.
-4. **Publish your records** to the release signers (for example over HTTPS or rsync). They
-   build with one `--records` directory per verifier organisation:
+3. **Run** `cybermesh verifier run --config verifier.toml`.
+   - It writes its own signed records to `state_dir/records/`.
+   - It publishes them on the network's `records` topic.
+   - It stores the other verifiers' records it receives in `state_dir/received-records/`.
+   - It writes its counters to `verifier-report.json` on exit.
+4. **Build releases from your own node.** Records are exchanged over the network, so your
+   organisation's release signer needs only your node's two directories:
    ```bash
-   cybermesh release build --records coordinator-records/ --records org-b-records/ \
+   cybermesh release build --records state/records/ --records state/received-records/ \
      --manifest manifest.json --root governance-root.json --sequence 42 --issued-at "$NOW" --out release.payload
    ```
-   `release build` refuses any record whose named verifier did not sign it or belongs to
-   another operator.
+   - `release build` checks every record again against your current manifest. It skips, and
+     names, any record that does not verify, such as one from a since-revoked verifier or one
+     whose named verifier did not sign it. `--strict` makes such files an error.
+   - Each co-signer builds from its own node and compares the bytes with the others; it
+     does not sign a payload it did not build. If the payloads differ, the nodes received
+     different records. Compare the releases' `inputs` (record digests) and exchange the
+     missing record files.
+   - Records larger than the network message limit (256 KiB) stay files only. Their
+     counter is `records_too_large`. You can still pass such files with another `--records`.
 
 ## 3. Day-to-day control
 

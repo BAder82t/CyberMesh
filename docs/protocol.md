@@ -233,7 +233,17 @@ ThreatRelease {
 
 ## 8. Transport
 
-- **Topics.** `/cybermesh/<network_id>/v1/{tasks,results,presence}` on gossipsub over libp2p TCP with Noise and Yamux.
+- **Topics.** `/cybermesh/<network_id>/v1/{tasks,results,presence,records}` on gossipsub over libp2p TCP with Noise and Yamux. Workers subscribe to `tasks`. The coordinator subscribes to `results`, `presence` and `records`. Independent verifiers subscribe to `tasks`, `results` and `records`.
+- **Record distribution.** Every verifier publishes each signed `VerificationRecord` envelope it writes on `records`. It also re-publishes those verified within the last hour every 15 minutes, which outlasts the 10-minute duplicate cache. On receipt, a verifier:
+  - authenticates the record exactly as a release builder does (enrolled verifier signature, canonical record, network id, named verifier equals signer and its operator);
+  - refuses its own echoes, records dated more than 300 s in the future, and records older than 30 days;
+  - stores new records as `received-records/<sha256-hex>.json`, re-encoded with only the record verifier's own signature;
+  - enforces quotas: 100,000 records and 1 GiB in total, 25,000 records and 256 MiB per verifier operator, and 2 records per operator and task id;
+  - prunes records once they are 30 days old;
+  - re-checks the store whenever a newer manifest is loaded, removing records of verifiers no longer enrolled.
+
+  Only valid new records are forwarded (`Accept`). Provably invalid ones are `Reject`ed: malformed, wrong network, or misattributed. Anything that is not proof of misbehaviour is `Ignore`d: an unknown signer (the receiver's manifest may lag), clock skew, age, a full quota or a local write error.
+- **Building from received records.** `release build` re-verifies every file against the build-time manifest, which is authoritative. Files that do not verify are skipped and named (`--strict` makes them fatal). Skipping can only remove support, never add an entry.
 - **Gossip settings.** Messages are signed (`ValidationMode::Strict`) and validated manually. The message id is `SHA-256(author peer id ‖ 0x00 ‖ data)`, and messages are at most 256 KiB.
 - **Admission and limits.** Only allow-listed peers (manifest members) may connect. A token bucket applies per author, and each message costs `1 + size/1024`, capped at the burst size.
 - **Mesh parameters.** These are set for small networks: `mesh_n = 4`, `mesh_n_low = 2`, `mesh_n_high = 8`, with flood publishing.

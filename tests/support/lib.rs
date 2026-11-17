@@ -120,6 +120,8 @@ pub struct Options {
     pub ct_policy: CtPolicy,
     /// Independent verifier nodes to run (0..=2), at operators 1 and 2.
     pub independent_verifiers: usize,
+    /// The manifest's release quorum (the test network has verifiers at operators 0..=2).
+    pub min_verifiers: u8,
 }
 
 impl Default for Options {
@@ -138,6 +140,7 @@ impl Default for Options {
             ct_replication: 2,
             ct_policy: CtPolicy::default(),
             independent_verifiers: 0,
+            min_verifiers: 1,
         }
     }
 }
@@ -189,7 +192,11 @@ pub fn start_worker(
 impl Harness {
     pub fn start(o: Options) -> Self {
         let now = SystemClock.now();
-        let net = TestNetwork::new(&o.operators, now);
+        let mut net = TestNetwork::new(&o.operators, now);
+        if o.min_verifiers != 1 {
+            net.manifest.min_verifiers = o.min_verifiers;
+            net.resign_manifest();
+        }
         let dir = tempfile::tempdir().unwrap();
         let port = free_port();
         let peer = cybermesh_network::peer_id_of(&net.issuer.public_key()).unwrap();
@@ -235,6 +242,7 @@ impl Harness {
             // Every worker, including simulated adversaries, takes part from the first task;
             // otherwise a slow start leaves the adversary unassigned and the test vacuous.
             start_after_workers: net.workers.len(),
+            records_wait: Duration::from_secs(20),
             policy: Policy::default(),
             clock,
             gossip_heartbeat: Duration::from_millis(100),
@@ -272,6 +280,7 @@ impl Harness {
                 gossip_heartbeat: Duration::from_millis(100),
                 manifest_source: None,
                 idle_exit: Some(Duration::from_secs(3)),
+                records_wait: Duration::from_secs(20),
             };
             let (vtx, vrx) = watch::channel(false);
             verifiers.push((

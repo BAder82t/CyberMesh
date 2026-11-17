@@ -10,6 +10,7 @@
 //! * [`verifier`]: an independent verifier run by another organisation. It follows tasks
 //!   and results, settles every task with its own engine, evidence and key, and signs its
 //!   own records; releases need records from `min_verifiers` distinct verifier operators.
+//! * [`records`]: distribution of signed verification records between verifiers.
 //! * [`governor`]: CPU, memory, load and working-hour policy for workers.
 
 #![forbid(unsafe_code)]
@@ -18,6 +19,7 @@ pub mod config;
 pub mod coordinator;
 pub mod files;
 pub mod governor;
+pub mod records;
 pub mod verifier;
 pub mod worker;
 

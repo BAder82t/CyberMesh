@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Verification records are distributed over the network.**
+  - Verifiers publish every record they sign on a new `records` gossip topic and store the others' in `received-records/`.
+  - Received records are authenticated as release builders do. The store is bounded and deduplicated, and refuses future-dated, stale and own records. Recent records are re-published so briefly disconnected peers catch up.
+  - Each organisation's release signer can now build from its own node alone: `--records state/records --records state/received-records`.
+  - Both demos show it: release signers no longer read another organisation's state.
+- `records_wait_secs`: with `exit_when_done` or `idle_exit`, a node waits (bounded) for the other verifiers' records of the tasks it settled.
+
+### Changed
+- `cybermesh release build` and the nodes share one record check (`cybermesh_verifier::verify_record_envelope`). `persist_record` returns the signed envelope as well.
+- `cybermesh release build` skips, and names, record files that do not verify against the build-time manifest. `--strict` restores aborting on them.
+
+### Security
+- Fixes from an internal review of record distribution ([docs/security-review.md](docs/security-review.md), fifth pass):
+  - byte and per-operator quotas;
+  - normalised storage, so re-wrapped envelopes cannot inflate it;
+  - pruning by age, and a re-check on every manifest update;
+  - no penalties for non-provable failures;
+  - a per-tick publish limit and a typed duplicate error;
+  - re-publication after a restart.
+
 ## v0.2.1 (2026-11-17, research pre-release)
 
 Demo changes only; wire-compatible with v0.2.0. **Not production-ready; no external audit.**

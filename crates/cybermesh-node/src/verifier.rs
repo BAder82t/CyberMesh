@@ -77,6 +77,9 @@ pub struct VerifierSetup {
     /// Exit after this long with nothing in flight, once at least one task was settled
     /// (tests and demos). `None`: run until stopped.
     pub idle_exit: Option<Duration>,
+    /// With `idle_exit`: how long to keep waiting for the other verifiers' records of the
+    /// tasks this verifier settled (when the manifest requires more than one verifier).
+    pub records_wait: Duration,
 }
 
 /// Counters written to `verifier-report.json` on exit.
@@ -102,12 +105,23 @@ pub struct VerifierReport {
     pub results_buffered_early: u64,
     /// Early results dropped because a budget was full, and late results for settled tasks.
     pub results_dropped: u64,
+    /// Own records published on the `records` topic (including re-publications).
+    pub records_published: u64,
+    /// Own records too large for one network message (kept only as files).
+    pub records_too_large: u64,
+    /// Valid records of other verifiers received and stored in `received-records/`.
+    pub records_received: u64,
+    /// Records refused from the network (invalid, too old, from the future, store full).
+    pub records_refused: u64,
     pub net_bytes_in: u64,
     pub net_bytes_out: u64,
     pub net_dropped_rate_limited: u64,
     pub net_dropped_queue_full: u64,
     #[serde(skip)]
     pub records: Vec<(Digest, VerificationRecord)>,
+    /// The other verifiers' records received (also in `received-records/`).
+    #[serde(skip)]
+    pub received: Vec<(Digest, VerificationRecord)>,
 }
 
 /// Loads a verifier from its configuration file.
@@ -142,6 +156,7 @@ pub fn setup_from_config(
             governance_root: cfg.governance_root.clone(),
         }),
         idle_exit: cfg.idle_exit_secs.map(Duration::from_secs),
+        records_wait: Duration::from_secs(cfg.records_wait_secs),
     })
 }
 
@@ -188,6 +203,8 @@ struct Verifier {
     ct_done: tokio::sync::mpsc::UnboundedSender<CtFinalized>,
     ct_finalizing: usize,
     last_activity: Instant,
+    records_in: crate::records::RecordStore,
+    records_out: crate::records::RecordPublisher,
 }
 
 impl Verifier {
@@ -512,12 +529,45 @@ impl Verifier {
             warn!(worker = %f.worker.short(), operator = %f.operator, kind = ?f.kind, "provable fault");
         }
         match persist_record(&self.s.state_dir.join("records"), &record, &self.s.key) {
-            Ok(d) => {
+            Ok((d, env)) => {
+                self.records_out.queue(env, record.verified_at);
                 info!(task = %record.task_id, status = ?record.status, recomputed = record.recomputed, published = record.publishable().count(), "task verified independently");
                 self.report.records.push((d, record));
             }
             Err(e) => warn!(error = %e, "failed to persist verification record"),
         }
+    }
+
+    /// Other verifier operators whose records each settled task needs for a release.
+    fn records_needed(&self) -> usize {
+        let quorum = usize::from(self.s.manifest.min_verifiers);
+        let available = self.s.manifest.verifier_operators().len();
+        quorum.min(available).saturating_sub(1)
+    }
+
+    async fn on_record(&mut self, net: &NetworkHandle, m: &InboundMessage) {
+        use crate::records::Received;
+        let now = self.s.clock.now();
+        let acc = match self.records_in.accept(&m.data, &self.s.manifest, now) {
+            Received::Stored { operator } => {
+                self.report.records_received += 1;
+                debug!(%operator, "verification record received");
+                Acceptance::Accept
+            }
+            Received::Duplicate | Received::Own => Acceptance::Ignore,
+            Received::Ignored(e) => {
+                // Not proof of misbehaviour (quota, clocks, manifest lag, local IO).
+                self.report.records_refused += 1;
+                debug!(error = %e, "verification record not stored");
+                Acceptance::Ignore
+            }
+            Received::Rejected(e) => {
+                self.report.records_refused += 1;
+                debug!(error = %e, "refused verification record");
+                Acceptance::Reject
+            }
+        };
+        net.report(m, acc).await;
     }
 
     fn expire_early_results(&mut self) {
@@ -559,7 +609,11 @@ pub async fn run_verifier(
         listen: setup.listen.clone(),
         bootstrap: setup.bootstrap.clone(),
         allowed_peers: allowed_peers(&setup.manifest, &id.key),
-        subscribe: vec![topics.tasks.clone(), topics.results.clone()],
+        subscribe: vec![
+            topics.tasks.clone(),
+            topics.results.clone(),
+            topics.records.clone(),
+        ],
         heartbeat: setup.gossip_heartbeat,
         // Same per-author allowance as the coordinator: results arrive in bursts.
         per_peer_burst: 4096,
@@ -577,7 +631,19 @@ pub async fn run_verifier(
     };
     info!(verifier = %id.key.short(), operator = %id.operator, peer = %net.local_peer_id, "independent verifier started");
     let (ct_done, mut ct_rx) = tokio::sync::mpsc::unbounded_channel::<CtFinalized>();
+    let max_message = Limits::default().max_envelope_bytes;
+    let records_in = crate::records::RecordStore::open(
+        &setup.state_dir.join("received-records"),
+        id.key.clone(),
+        &setup.manifest,
+        max_message,
+        setup.clock.now(),
+    )?;
+    let mut records_out = crate::records::RecordPublisher::new(max_message);
+    records_out.load_recent(&setup.state_dir.join("records"), setup.clock.now());
     let mut v = Verifier {
+        records_in,
+        records_out,
         report: VerifierReport {
             verifier: id.key.to_string(),
             operator: id.operator.to_string(),
@@ -615,6 +681,8 @@ pub async fn run_verifier(
                         v.on_task(&net, &m).await;
                     } else if m.topic == v.topics.results {
                         v.on_result(&net, &m).await;
+                    } else if m.topic == v.topics.records {
+                        v.on_record(&net, &m).await;
                     } else {
                         net.report(&m, Acceptance::Ignore).await;
                     }
@@ -631,6 +699,7 @@ pub async fn run_verifier(
                 }
             }
             _ = manifest_tick.tick() => {
+                v.records_in.prune(v.s.clock.now());
                 if let Some(src) = v.s.manifest_source.clone() {
                     match files::reload_manifest(&src, &v.s.manifest, v.s.clock.now()) {
                         files::Reload::Updated(m) => {
@@ -640,6 +709,10 @@ pub async fn run_verifier(
                                 break;
                             }
                             net.set_allowed(allowed_peers(&m, &v.id.key)).await;
+                            // Records of verifiers no longer enrolled are dropped.
+                            if let Err(e) = v.records_in.rescan(&m, v.s.clock.now()) {
+                                warn!(error = %e, "failed to re-check received records");
+                            }
                             if let Err(e) = files::persist_manifest_state(&v.s.state_dir.join("manifest-state.json"), &m) {
                                 warn!(error = %e, "failed to persist manifest state");
                             }
@@ -655,18 +728,47 @@ pub async fn run_verifier(
             _ = tick.tick() => {
                 v.settle_due();
                 v.expire_early_results();
+                v.records_out.republish_due(
+                    v.s.clock.now(),
+                    crate::records::REPUBLISH_EVERY,
+                    crate::records::REPUBLISH_WINDOW_SECS,
+                );
+                v.records_out.flush(&net, &v.topics.records).await;
                 if let Some(idle) = v.s.idle_exit
                     && v.report.tasks_seen > 0
                     && v.pending.is_empty()
                     && v.ct_finalizing == 0
+                    && (v.records_needed() == 0 || v.records_out.is_idle())
                     && v.last_activity.elapsed() >= idle
                 {
-                    break;
+                    // Stay for the other verifiers' records (bounded), so this organisation's
+                    // release signer can build from this node alone.
+                    let own: Vec<(String, Digest)> = v
+                        .report
+                        .records
+                        .iter()
+                        .map(|(_, r)| (r.task_id.clone(), r.task_digest))
+                        .collect();
+                    let complete = crate::records::quorum_records_present(
+                        &v.records_in,
+                        &own,
+                        &v.id.operator,
+                        v.records_needed(),
+                    );
+                    if complete || v.last_activity.elapsed() >= idle + v.s.records_wait {
+                        if !complete {
+                            warn!("leaving before every task has the other verifiers' records");
+                        }
+                        break;
+                    }
                 }
             }
         }
     }
     v.persist_reputation();
+    v.report.records_published = v.records_out.published;
+    v.report.records_too_large = v.records_out.too_large;
+    v.report.received = std::mem::take(&mut v.records_in.received);
     let snap = net.stats.snapshot();
     v.report.net_bytes_in = snap.bytes_in;
     v.report.net_bytes_out = snap.bytes_out;
@@ -706,6 +808,7 @@ mod tests {
                 gossip_heartbeat: Duration::from_millis(100),
                 manifest_source: None,
                 idle_exit: None,
+                records_wait: Duration::from_secs(1),
             },
             id: VerifierId {
                 key: key.key_id(),
@@ -728,6 +831,15 @@ mod tests {
             ct_done,
             ct_finalizing: 0,
             last_activity: Instant::now(),
+            records_in: crate::records::RecordStore::open(
+                &std::env::temp_dir().join(format!("cm-records-{}", std::process::id())),
+                key.key_id(),
+                &net.manifest,
+                256 * 1024,
+                1_800_000_000,
+            )
+            .unwrap(),
+            records_out: crate::records::RecordPublisher::new(256 * 1024),
         }
     }
 

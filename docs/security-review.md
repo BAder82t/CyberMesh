@@ -116,6 +116,28 @@ Kept as is:
 - **One bad record file aborts `release build`.** This is fail-closed on purpose: a signer should notice, not silently skip records.
 - **Independent verifiers do not prove late equivocation.** This is on the roadmap.
 
+## Fifth pass: record distribution over the network
+
+An independent internal review covered the `records` topic, the record store and the exit logic. It found no CRITICAL issues. Its findings, fixed unless stated:
+
+| Severity | Finding | Fix | Test or evidence |
+|---|---|---|---|
+| HIGH | One stored record that no longer verifies aborted every `release build`, for example a record from a since-revoked verifier, or from a verifier the signer's manifest does not know yet. | `release build` skips and names invalid files; `--strict` restores the old behaviour. Nodes re-check their store on every manifest update and remove records that no longer verify. | `records_must_name_their_actual_signer_and_its_operator`, `revoked_verifiers_records_are_removed_and_old_ones_pruned` |
+| HIGH | The store was bounded by count only. One enrolled verifier could fill disk and memory and lock out honest records. | Byte and per-operator quotas; at most 2 records per operator and task; parsed records kept in memory only up to 4,096. | `rewrapped_records_are_stored_normalized_and_quotas_hold` |
+| MEDIUM | A relay could re-wrap an honest record with junk signatures and store up to 256 KiB per record. | The store keeps only the record verifier's own valid signature. | `rewrapped_records_are_stored_normalized_and_quotas_hold` |
+| MEDIUM | Records were never pruned, so the store eventually filled for good. | Pruned by age, every minute and on start. | `revoked_verifiers_records_are_removed_and_old_ones_pruned` |
+| MEDIUM | Honest relays were penalised for local conditions: manifest lag, clock skew, a full quota, a disk error. | Peers are penalised only for provable forgery; everything else is ignored. | `stores_only_valid_records_of_other_verifiers` |
+| MEDIUM | The exit wait counted records by task id only. Organisations' stores can differ, and a restart lost records awaiting re-publication. | Counts records for the same task digest. Own records are re-published after a restart. Documented that co-signers compare the releases' `inputs` when payloads differ. | `own_records_are_republished_after_a_restart` |
+| LOW | Duplicates were fully verified before being recognised. | Cheap raw-digest check first. | code review |
+| LOW | `flush` could hold the event loop for up to 1,024 publications, and duplicate detection matched an error string. | At most 32 publications per tick; a typed `NetError::Duplicate`. | code review |
+| LOW | A node with no own records leaves without waiting. | Not changed: every settled task writes an own record, so this needs a failed write, which is logged. | — |
+
+Residual risks:
+- Records are readable by every allow-listed peer. They are audit material, not secrets.
+- Records over 256 KiB are not distributed.
+- The build-time manifest is authoritative.
+- An operator can date its own record up to 300 s ahead and so make it its "latest".
+
 ## Accepted or deferred (documented residual risk)
 
 - **Manifest state on restart.** Fixed in v0.2.0: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.
