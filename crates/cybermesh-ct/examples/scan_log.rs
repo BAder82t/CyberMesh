@@ -1,30 +1,38 @@
-//! Scans full tiles of a real static CT log once (manual validation; not run in CI).
-//! Usage: cargo run -p cybermesh-ct --features http --example scan_log -- <monitoring-url> <evidence-dir> [tiles-from-end]
+//! Scans full tiles of a real static CT log once (manual validation; not run in CI). The
+//! checkpoint is verified against the log's pinned key and every tile root is proven against
+//! it, exactly as the verifier does.
+//! Usage: cargo run -p cybermesh-ct --features http --example scan_log -- <log-list.json> <log-id> <evidence-dir> [tiles-from-end]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{CtLogInfo, Engine, EvidenceBundle};
+use cybermesh_ct::checkpoint::fetch_verified_checkpoint;
 use cybermesh_ct::names::certificate_names;
+use cybermesh_ct::proof::TileAuthenticator;
 use cybermesh_ct::tile::parse_data_tile;
-use cybermesh_ct::{Checkpoint, TileSource, scan_tile};
+use cybermesh_ct::{TileSource, scan_tile};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let log = CtLogInfo {
-        log_id: "real".into(),
-        description: String::new(),
-        monitoring_url: args[1].clone(),
-    };
+    let logs: Vec<CtLogInfo> =
+        serde_json::from_str(&std::fs::read_to_string(&args[1]).unwrap()).unwrap();
+    let log = logs
+        .into_iter()
+        .find(|l| l.log_id == args[2])
+        .expect("log id");
     let src = cybermesh_ct::http::HttpTileSource::new(&log, Duration::from_secs(30)).unwrap();
-    let engine = Engine::new(EvidenceBundle::load(std::path::Path::new(&args[2])).unwrap());
-    let back: u64 = args.get(3).map_or(1, |s| s.parse().unwrap());
-    let cp = Checkpoint::parse(&src.checkpoint().unwrap()).unwrap();
+    let engine = Engine::new(EvidenceBundle::load(std::path::Path::new(&args[3])).unwrap());
+    let back: u64 = args.get(4).map_or(1, |s| s.parse().unwrap());
+    let cp = fetch_verified_checkpoint(&src, &log).unwrap();
     println!(
-        "checkpoint origin={} size={} full_tiles={}",
+        "checkpoint origin={} size={} full_tiles={} signature=verified (pinned key, signed at {} ms)",
         cp.origin,
         cp.size,
-        cp.full_tiles()
+        cp.full_tiles(),
+        cp.signed_at_ms
     );
+    let t_auth = Instant::now();
+    let auth = TileAuthenticator::new(&src, cp.clone());
     for n in cp.full_tiles().saturating_sub(back)..cp.full_tiles() {
         let t0 = Instant::now();
         let bytes = src.data_tile(n).unwrap();
@@ -45,14 +53,14 @@ fn main() {
         let cpu0 = Instant::now();
         let r = scan_tile(&bytes, n, &engine).unwrap();
         let scan = cpu0.elapsed();
-        let log_root = src.tile_root(n, cp.size).unwrap();
+        let proven = auth.tile_root(n).unwrap();
         println!(
-            "tile {n}: {} bytes, fetch {:?}, entries {} (precerts {precerts}), names {names}, unparsed {failed}, scan {:?}, root_matches_log={}, matches={}",
+            "tile {n}: {} bytes, fetch {:?}, entries {} (precerts {precerts}), names {names}, unparsed {failed}, scan {:?}, root_proven_against_signed_checkpoint={}, matches={}",
             bytes.len(),
             fetch,
             entries.len(),
             scan,
-            r.root.0 == log_root,
+            r.root.0 == proven,
             r.matches.len()
         );
         for m in r.matches.iter().take(10) {
@@ -62,4 +70,8 @@ fn main() {
             );
         }
     }
+    println!(
+        "proof of {back} tile root(s) against the signed checkpoint took {:?} (including hash tile fetches)",
+        t_auth.elapsed()
+    );
 }

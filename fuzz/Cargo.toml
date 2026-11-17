@@ -55,3 +55,9 @@ name = "ct_tile"
 path = "fuzz_targets/ct_tile.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "ct_checkpoint"
+path = "fuzz_targets/ct_checkpoint.rs"
+test = false
+doc = false

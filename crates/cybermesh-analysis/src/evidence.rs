@@ -87,7 +87,25 @@ pub struct CtLogInfo {
     /// Static CT API monitoring prefix, e.g. `https://mon.example.org/2026h2/`. Must be HTTPS;
     /// plain HTTP is accepted only for loopback hosts (tests and demonstrations).
     pub monitoring_url: String,
+    /// The log's checkpoint origin (its submission prefix without scheme or trailing slash,
+    /// e.g. `log.example.org/2026h2`). The RFC 6962 checkpoint signature does not cover it,
+    /// so it is pinned here.
+    pub origin: String,
+    /// The log's public key: base64 of its DER `SubjectPublicKeyInfo` (ECDSA P-256), as in
+    /// the CT log lists. Checkpoints must carry a valid signature by this key.
+    pub public_key: String,
 }
+
+/// Public key of the synthetic mock CT log (`cybermesh dev mock-ct-log`). Its private key is
+/// published in the source, so it is accepted only for loopback HTTP test logs.
+pub const DEMO_CT_LOG_PUBLIC_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0y8YK0nyrjCBqRjl0CZkcMOIJLtRrzoSGe5r+bLxzT6T0KIkaXr8fk/QKUoM9u6EuQQ4m13PUyR6kBEFPKRYGw==";
+
+/// DER prefix of an ECDSA P-256 `SubjectPublicKeyInfo` (id-ecPublicKey, prime256v1,
+/// uncompressed point follows).
+pub const P256_SPKI_PREFIX: [u8; 26] = [
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+];
 
 /// Splits `host[:port]` or `[v6]:port` (the authority, up to the first `/`).
 fn split_authority(rest: &str) -> Option<(&str, Option<&str>)> {
@@ -128,12 +146,50 @@ fn is_dns_host(h: &str) -> bool {
 }
 
 impl CtLogInfo {
+    /// The pinned public key as DER, if it is a well-formed ECDSA P-256
+    /// `SubjectPublicKeyInfo` with an uncompressed point.
+    #[must_use]
+    pub fn public_key_der(&self) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(&self.public_key)
+            .ok()?;
+        (der.len() == P256_SPKI_PREFIX.len() + 65
+            && der.starts_with(&P256_SPKI_PREFIX)
+            && der[P256_SPKI_PREFIX.len()] == 0x04)
+            .then_some(der)
+    }
+
     /// Validates the URL policy: `https://<dns name>[:port]/<path>/`, or plain HTTP to a
     /// loopback address (tests and demos). No credentials, query, fragment, percent-encoding
     /// or `..`.
     pub fn validate(&self) -> Result<(), String> {
         if !cybermesh_protocol::ct::is_valid_log_id(&self.log_id) {
             return Err(format!("invalid log id {}", self.log_id));
+        }
+        // A valid signed-note key name: non-empty, no spaces, `+` or control characters.
+        let o = self.origin.as_str();
+        if o.is_empty()
+            || o.len() > 256
+            || o.contains("://")
+            || o.ends_with('/')
+            || !o.bytes().all(|b| b.is_ascii_graphic() && b != b'+')
+        {
+            return Err(format!("{}: invalid checkpoint origin", self.log_id));
+        }
+        // The mock log's key is a public demonstration key: anyone can sign with it.
+        if self.public_key == DEMO_CT_LOG_PUBLIC_KEY && !self.monitoring_url.starts_with("http://")
+        {
+            return Err(format!(
+                "{}: the public demonstration key may only be pinned for a loopback test log",
+                self.log_id
+            ));
+        }
+        if self.public_key_der().is_none() {
+            return Err(format!(
+                "{}: public_key must be a base64 DER ECDSA P-256 SubjectPublicKeyInfo",
+                self.log_id
+            ));
         }
         let u = self.monitoring_url.as_str();
         let (rest, https) = if let Some(r) = u.strip_prefix("https://") {
@@ -472,6 +528,48 @@ mod tests {
         ));
     }
 
+    /// A real ECDSA P-256 SubjectPublicKeyInfo (Let's Encrypt Willow 2027h1).
+    const TEST_KEY: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzsMKtojO0BVB4t59lVyAhxtqObVA+wId5BpJGA8pZrw5GTjzuhpvLu/heQGi0hHCeislkDe34N/2D0SwEUBE0w==";
+
+    #[test]
+    fn ct_log_key_and_origin_policy() {
+        let log = |origin: &str, key: &str| CtLogInfo {
+            log_id: "log-a".into(),
+            description: String::new(),
+            monitoring_url: "https://mon.example.org/2026h2/".into(),
+            origin: origin.into(),
+            public_key: key.into(),
+        };
+        assert!(log("log.example.org/2026h2", TEST_KEY).validate().is_ok());
+        for bad in [
+            "",
+            "https://log.example.org",
+            "log.example.org/",
+            "a b",
+            "a+b",
+        ] {
+            assert!(log(bad, TEST_KEY).validate().is_err(), "{bad:?}");
+        }
+        // Not base64, an Ed25519 key, a truncated P-256 key.
+        let ed25519 = "MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=";
+        for bad in ["not base64!", ed25519, &TEST_KEY[..60]] {
+            assert!(log("log.example.org/x", bad).validate().is_err(), "{bad:?}");
+        }
+        assert_eq!(
+            log("o", TEST_KEY).public_key_der().map(|d| d.len()),
+            Some(91)
+        );
+        // The public demonstration key is refused for anything but a loopback test log.
+        assert!(
+            log("log.example.org/x", DEMO_CT_LOG_PUBLIC_KEY)
+                .validate()
+                .is_err()
+        );
+        let mut local = log("ct.cybermesh.test/mock", DEMO_CT_LOG_PUBLIC_KEY);
+        local.monitoring_url = "http://127.0.0.1:8090/".into();
+        assert!(local.validate().is_ok());
+    }
+
     #[test]
     fn ct_log_url_policy() {
         let ok = |u: &str| {
@@ -479,6 +577,8 @@ mod tests {
                 log_id: "log-a".into(),
                 description: String::new(),
                 monitoring_url: u.into(),
+                origin: "log.example.org/2026h2".into(),
+                public_key: TEST_KEY.into(),
             }
             .validate()
         };

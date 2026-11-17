@@ -739,6 +739,7 @@ dependencies = [
 name = "cybermesh-analysis"
 version = "0.2.2"
 dependencies = [
+ "base64 0.22.1",
  "cybermesh-crypto",
  "cybermesh-protocol",
  "idna",
@@ -822,6 +823,8 @@ dependencies = [
  "cybermesh-protocol",
  "proptest",
  "rcgen 0.14.10",
+ "ring",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "tiny_http",

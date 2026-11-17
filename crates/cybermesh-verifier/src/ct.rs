@@ -34,10 +34,16 @@ use crate::task::SubmitOutcome;
 
 /// Access to the CT log for verification (provided by the verifier's node).
 pub trait CtOracle {
-    /// The log's own root for a full data tile (level-1 hash tile entry).
+    /// The log's own root for a full data tile, proven against the log's signed checkpoint
+    /// (`None` when it cannot be obtained).
     fn tile_root(&self, log_id: &str, tile: u64) -> Option<Digest>;
     /// The verifier's own scan of a tile with its own engine and evidence.
     fn rescan(&self, log_id: &str, tile: u64) -> Option<TileScanResult>;
+    /// True if the log's hash tiles for `tile` contradict its signed checkpoint (the log or
+    /// its CDN is inconsistent), as opposed to merely being unavailable.
+    fn proof_failed(&self, _log_id: &str, _tile: u64) -> bool {
+        false
+    }
 }
 
 /// CT verification policy. Missing fields take their defaults.
@@ -364,8 +370,19 @@ impl CtTaskVerifier {
         // be proven wrong.
         let mut roots: BTreeMap<u64, Digest> = BTreeMap::new();
         let mut log_inconsistent: BTreeSet<u64> = BTreeSet::new();
+        // Tiles whose root the log could not be made to vouch for (hash tiles unavailable):
+        // their data is not anchored to the signed checkpoint.
+        let mut unanchored: BTreeSet<u64> = BTreeSet::new();
         let consistent = |roots: &BTreeMap<u64, Digest>, m: &TileScanResult| {
             roots.get(&m.tile_index).is_none_or(|r| *r == m.root)
+        };
+        // With log access and `check_log_roots`, the verifier's own rescan of a tile is
+        // evidence against a worker only if its root is the root proven against the log's
+        // signed checkpoint (an attacker who withholds hash tiles and serves the verifier a
+        // forged data tile must not get honest workers faulted).
+        let require_anchor = oracle.is_some() && self.policy.check_log_roots;
+        let anchored = |roots: &BTreeMap<u64, Digest>, m: &TileScanResult| {
+            !require_anchor || roots.get(&m.tile_index) == Some(&m.root)
         };
         if let Some(o) = oracle {
             // (2) Commitments against the log's own hashes. A worker root that differs from
@@ -376,6 +393,12 @@ impl CtTaskVerifier {
                     if let Some(r) = o.tile_root(&log_id, *t) {
                         roots.insert(*t, r);
                         checked_against_log += 1;
+                    } else if o.proof_failed(&log_id, *t) {
+                        // The log contradicts its own signed checkpoint: nobody can be
+                        // proven wrong, and nothing from this task may be trusted.
+                        log_inconsistent.insert(*t);
+                    } else {
+                        unanchored.insert(*t);
                     }
                 }
                 let suspect: BTreeSet<u64> = self
@@ -441,7 +464,7 @@ impl CtTaskVerifier {
             }
             let snapshot: BTreeMap<u64, TileScanResult> = rescanned
                 .iter()
-                .filter(|(_, m)| consistent(&roots, m))
+                .filter(|(_, m)| consistent(&roots, m) && anchored(&roots, m))
                 .map(|(k, m)| (*k, m.clone()))
                 .collect();
             self.fault_workers_where(
@@ -546,8 +569,9 @@ impl CtTaskVerifier {
                 .filter(|m| !consistent(&roots, m))
                 .map(|m| m.tile_index),
         );
-        if !log_inconsistent.is_empty() {
-            // The verifier's own view of the log is not authenticated by the log's hashes.
+        if !log_inconsistent.is_empty() || !unanchored.is_empty() {
+            // The verifier's own view of the log is not authenticated by the log's hashes:
+            // inconsistent (disputed) or unavailable (insufficient; retried later).
             authoritative = None;
         }
         if let Some(auth) = &authoritative {

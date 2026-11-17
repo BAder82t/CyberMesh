@@ -5,10 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cybermesh_analysis::{CtLogInfo, Engine, EvidenceBundle};
+use cybermesh_ct::checkpoint::fetch_verified_checkpoint;
 use cybermesh_ct::mock::{MockEntry, MockLog, demo_entries, serve};
 use cybermesh_ct::names::certificate_names;
+use cybermesh_ct::proof::TileAuthenticator;
 use cybermesh_ct::tile::parse_data_tile;
-use cybermesh_ct::{Checkpoint, TileSource, scan_tile, scan_tiles};
+use cybermesh_ct::{TileSource, scan_tile, scan_tiles};
 
 fn engine() -> Engine {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../datasets/demo/evidence");
@@ -19,16 +21,11 @@ fn engine() -> Engine {
 fn scan_over_http_matches_log_commitments_and_finds_lookalikes() {
     let log = Arc::new(MockLog::build("ct.example/test", &demo_entries(3)).unwrap());
     let (url, _h) = serve(Arc::clone(&log), "127.0.0.1:0").unwrap();
-    let src = cybermesh_ct::http::HttpTileSource::new(
-        &CtLogInfo {
-            log_id: "mock".into(),
-            description: "mock".into(),
-            monitoring_url: url,
-        },
-        Duration::from_secs(10),
-    )
-    .unwrap();
-    let cp = Checkpoint::parse(&src.checkpoint().unwrap()).unwrap();
+    let info: CtLogInfo = log.log_info("mock", &url);
+    let src = cybermesh_ct::http::HttpTileSource::new(&info, Duration::from_secs(10)).unwrap();
+    // Over HTTP: the checkpoint is signed by the pinned key and every tile root is proven.
+    let cp = fetch_verified_checkpoint(&src, &info).unwrap();
+    let auth = TileAuthenticator::new(&src, cp.clone());
     assert_eq!(cp.size, 768);
     assert_eq!(cp.full_tiles(), 3);
 
@@ -37,7 +34,7 @@ fn scan_over_http_matches_log_commitments_and_finds_lookalikes() {
     assert!(bytes > 0);
     for t in &tiles {
         // Worker commitment equals the log's own level-1 hash for that tile.
-        assert_eq!(t.root.0, src.tile_root(t.tile_index, cp.size).unwrap());
+        assert_eq!(t.root.0, auth.tile_root(t.tile_index).unwrap());
         assert_eq!(t.unparsed, 0);
     }
     let names: Vec<&str> = tiles
@@ -155,4 +152,30 @@ fn caps_keep_the_highest_risk_matches_and_commit_every_name() {
         t2.names_digest, t.names_digest,
         "a non-matching name change is visible"
     );
+}
+
+#[test]
+fn checkpoints_and_tiles_that_the_log_did_not_sign_are_refused() {
+    let mut log = MockLog::build("ct.example/test", &demo_entries(2)).unwrap();
+    let info = log.log_info("mock", "http://127.0.0.1/");
+    let cp = fetch_verified_checkpoint(&log, &info).unwrap();
+    assert_eq!(cp.size, 512);
+    // Another origin or key pinned: refused.
+    let mut wrong = info.clone();
+    wrong.origin = "ct.example/other".into();
+    assert!(fetch_verified_checkpoint(&log, &wrong).is_err());
+    // A CDN serving a different level-1 hash tile: the proof fails for that tile.
+    let p = cybermesh_ct::tile::hash_tile_path(1, 0, Some(2));
+    let mut tile = log.files[&p].clone();
+    tile[0] ^= 1;
+    log.replace_file(&p, tile);
+    let auth = TileAuthenticator::new(&log, cp);
+    assert!(matches!(
+        auth.tile_root(0),
+        Err(cybermesh_ct::CtError::Unauthenticated(_))
+    ));
+    // An edited checkpoint (larger tree claimed) is refused.
+    let text = log.checkpoint().unwrap().replacen("512", "768", 1);
+    log.replace_file("checkpoint", text.into_bytes());
+    assert!(fetch_verified_checkpoint(&log, &info).is_err());
 }

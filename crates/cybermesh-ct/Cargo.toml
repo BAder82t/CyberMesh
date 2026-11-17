@@ -22,6 +22,8 @@ cybermesh-analysis.workspace = true
 cybermesh-anchor.workspace = true
 cybermesh-crypto.workspace = true
 cybermesh-protocol.workspace = true
+# ECDSA P-256 verification of log checkpoint signatures (already used by the TLS stack).
+ring = "0.17"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"], optional = true }
 sha2.workspace = true
 thiserror.workspace = true
@@ -33,6 +35,7 @@ x509-parser = "=0.18.1"
 
 [dev-dependencies]
 cybermesh-ct = { path = ".", features = ["mock", "http"] }
+serde_json.workspace = true
 proptest.workspace = true
 
 [lints]

@@ -32,7 +32,7 @@ Verifiers publish the records they sign on a `records` gossip topic and store th
   - Let the coordinator act on faults proven by other verifiers.
   - Prove late equivocation at independent verifiers.
 - **CT.**
-  - Checkpoint signature and consistency verification.
+  - Witness cosignatures on checkpoints (C2SP `tlog-witness`), to detect split views. Checkpoint signatures and tile-root proofs are done.
   - Continuous tailing of new tiles.
   - RFC 6962 logs.
   - Owner-maintained brand infrastructure lists, needed before CT warnings can be enabled widely.

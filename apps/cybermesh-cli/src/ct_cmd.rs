@@ -7,8 +7,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use cybermesh_analysis::{Engine, EvidenceBundle};
+use cybermesh_ct::checkpoint::fetch_verified_checkpoint;
 use cybermesh_ct::http::HttpTileSource;
-use cybermesh_ct::{Checkpoint, TileSource as _, scan_tile};
+use cybermesh_ct::proof::TileAuthenticator;
+use cybermesh_ct::{TileSource as _, scan_tile};
 use serde::Serialize;
 
 use crate::release_cmd::load_records;
@@ -53,13 +55,20 @@ pub enum CtCmd {
     },
 }
 
-fn source(evidence: &EvidenceBundle, log: &str) -> Result<HttpTileSource> {
-    let info = evidence
+fn log_info(evidence: &EvidenceBundle, log: &str) -> Result<cybermesh_analysis::CtLogInfo> {
+    evidence
         .ct_logs
         .iter()
         .find(|l| l.log_id == log)
-        .with_context(|| format!("log {log} is not in the ct-logs evidence"))?;
-    Ok(HttpTileSource::new(info, Duration::from_secs(30))?)
+        .cloned()
+        .with_context(|| format!("log {log} is not in the ct-logs evidence"))
+}
+
+fn source(evidence: &EvidenceBundle, log: &str) -> Result<HttpTileSource> {
+    Ok(HttpTileSource::new(
+        &log_info(evidence, log)?,
+        Duration::from_secs(30),
+    )?)
 }
 
 #[derive(Serialize)]
@@ -98,12 +107,15 @@ pub fn run(c: CtCmd) -> Result<()> {
     match c {
         CtCmd::Checkpoint { evidence, log } => {
             let ev = EvidenceBundle::load(&evidence)?;
-            let cp = Checkpoint::parse(&source(&ev, &log)?.checkpoint()?)?;
+            let info = log_info(&ev, &log)?;
+            let cp = fetch_verified_checkpoint(&source(&ev, &log)?, &info)
+                .context("checkpoint not verified against the pinned log key")?;
             println!(
-                "origin={} size={} full_tiles={} (checkpoint signature not verified)",
+                "origin={} size={} full_tiles={} signed_at_ms={} (signature verified with the pinned key)",
                 cp.origin,
                 cp.size,
-                cp.full_tiles()
+                cp.full_tiles(),
+                cp.signed_at_ms
             );
             Ok(())
         }
@@ -116,7 +128,10 @@ pub fn run(c: CtCmd) -> Result<()> {
         } => {
             let ev = EvidenceBundle::load(&evidence)?;
             let src = source(&ev, &log)?;
-            let cp = Checkpoint::parse(&src.checkpoint()?)?;
+            let info = log_info(&ev, &log)?;
+            let cp = fetch_verified_checkpoint(&src, &info)
+                .context("checkpoint not verified against the pinned log key")?;
+            let auth = TileAuthenticator::new(&src, cp.clone());
             let first = first_tile.unwrap_or(cp.full_tiles().saturating_sub(tiles));
             let end = first
                 .checked_add(tiles)
@@ -131,7 +146,8 @@ pub fn run(c: CtCmd) -> Result<()> {
                 let data = src.data_tile(n)?;
                 bytes += data.len() as u64;
                 let r = scan_tile(&data, n, &engine)?;
-                if src.tile_root(n, cp.size).is_ok_and(|x| x == r.root.0) {
+                // The worker's root must equal the root proven against the signed checkpoint.
+                if auth.tile_root(n).is_ok_and(|x| x == r.root.0) {
                     roots_ok += 1;
                 }
                 unparsed += u64::from(r.unparsed);
@@ -140,7 +156,7 @@ pub fn run(c: CtCmd) -> Result<()> {
             let cpu = cybermesh_node::governor::process_cpu().saturating_sub(cpu0);
             let entries = tiles * 256;
             println!(
-                "scanned {entries} entries ({tiles} tiles from {first}) in {:.1}s: {} KiB downloaded (decoded), CPU {:.0} us/entry, unparsed {unparsed}, tile roots matching the log {roots_ok}/{tiles}, brand signals {}",
+                "scanned {entries} entries ({tiles} tiles from {first}) in {:.1}s: {} KiB downloaded (decoded), CPU {:.0} us/entry, unparsed {unparsed}, tile roots proven against the signed checkpoint {roots_ok}/{tiles}, brand signals {}",
                 t0.elapsed().as_secs_f64(),
                 bytes / 1024,
                 cpu.as_secs_f64() * 1e6 / entries as f64,

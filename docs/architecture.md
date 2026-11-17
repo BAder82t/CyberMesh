@@ -85,7 +85,7 @@ sequenceDiagram
 `ct-shard-scan` is a second task kind, fully described in [ct-monitoring.md](ct-monitoring.md).
 
 - **Work.** Workers that opt in download full data tiles of public static CT logs from pinned monitoring URLs. They extract certificate names and report per-tile Merkle roots, a digest of every extracted name, and brand-lookalike matches.
-- **Verification.** The verifier checks the roots against the log's level-1 hash tiles and re-scans tiles chosen from a secret seed. It re-scans everything on disagreement, and when publishing is enabled it confirms every tile that would publish a finding.
+- **Verification.** The verifier checks the log's checkpoint signature against the pinned key, proves each tile's root against that signed checkpoint, compares the workers' roots with it, and re-scans tiles chosen from a secret seed. It re-scans everything on disagreement, and when publishing is enabled it confirms every tile that would publish a finding.
 - **Output.** Results feed an investigation report. Browser warnings from CT evidence are opt-in and capped at `warn`.
 
 ### 3.4 Verification (`cybermesh-verifier`)

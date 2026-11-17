@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+base64.workspace = true
 cybermesh-crypto.workspace = true
 cybermesh-protocol.workspace = true
 idna.workspace = true

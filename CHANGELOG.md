@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **CT checkpoints are verified and tile roots are proven.**
+  - `ct-logs` evidence now pins each log's `origin` and `public_key` (ECDSA P-256 SPKI). Real keys come from Google's CT log list v3.
+  - The verifier accepts a checkpoint only with a valid RFC 6962 note signature by the pinned key.
+  - It proves every tile root it relies on against the signed root, through hash tiles at all levels.
+  - Hash tiles that contradict the signed checkpoint dispute the task without faulting anyone. A checkpoint that does not verify means no log access.
+  - `ct checkpoint` and `ct scan` verify and prove too.
+  - Validated against real Let's Encrypt and Google logs.
+- `ct_checkpoint` fuzz target.
+
+### Security
+- Fixes from an internal review of checkpoint verification ([docs/security-review.md](docs/security-review.md), sixth pass):
+  - tiles without a proven root leave the task `insufficient`, and their rescans are never evidence against workers;
+  - stale (more than an hour old) or future-dated checkpoints are refused;
+  - full-tile fallback for deleted partial tiles;
+  - only a hash mismatch counts as a log contradiction;
+  - malformed signature lines under the pinned name reject the note;
+  - the demonstration key is refused outside loopback test logs.
+
+### Changed
+- `TileSource::hash_tile(level, …)` replaces `level1_tile`. The unauthenticated `tile_root` helper is removed (use `proof::TileAuthenticator`).
+- The mock CT log signs its checkpoints with a fixed public demonstration key and serves hash tiles at every level.
+
 ## v0.2.2 (2026-11-17, research pre-release)
 
 Wire-compatible with v0.2.x: nodes without record distribution ignore the new `records` topic. **Not production-ready; no external audit.**
