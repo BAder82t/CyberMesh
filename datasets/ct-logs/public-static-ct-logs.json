@@ -1,0 +1,17 @@
+[
+  {
+    "log_id": "letsencrypt-willow-2027h1",
+    "description": "Let's Encrypt Willow 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17.",
+    "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2027h1/"
+  },
+  {
+    "log_id": "letsencrypt-sycamore-2027h1",
+    "description": "Let's Encrypt Sycamore 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17.",
+    "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2027h1/"
+  },
+  {
+    "log_id": "google-parcelyard-2027h1",
+    "description": "Google ParcelYard 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17.",
+    "monitoring_url": "https://storage.googleapis.com/parcelyard2027h1.prod.certificate.transparency.goog/"
+  }
+]

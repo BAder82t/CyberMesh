@@ -296,6 +296,7 @@ fn heartbeat_freshness() {
         engine: engine(),
         evidence: pins(),
         queue_depth: 0,
+        capabilities: vec![],
     };
     let bytes = sign_bytes(payload_type::HEARTBEAT, &hb, &n.workers[1].key);
     verify_heartbeat(&bytes, &n.manifest, NOW + 10, &limits).unwrap();

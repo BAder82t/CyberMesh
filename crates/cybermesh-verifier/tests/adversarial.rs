@@ -23,6 +23,7 @@ fn evidence(feed: &[&str]) -> EvidenceBundle {
         )],
         popular: HashSet::from(["google.com".to_owned()]),
         hosting_platforms: HashSet::new(),
+        ct_logs: vec![],
         brands: vec![Brand {
             name: "examplebank".into(),
             tokens: vec!["examplebank".into()],

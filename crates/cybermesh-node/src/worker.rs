@@ -7,14 +7,18 @@ use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec};
 use cybermesh_crypto::{Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce};
+use cybermesh_ct::TileSource as _;
+use cybermesh_ct::http::HttpTileSource;
+use cybermesh_ct::scan_tile;
 use cybermesh_network::{
     Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed, peer_id_of,
 };
+use cybermesh_protocol::ct::{CtScanResult, CtScanTask, TileScanResult, verify_ct_task};
 use cybermesh_protocol::replay::ReplayCache;
-use cybermesh_protocol::validate::verify_task;
+use cybermesh_protocol::validate::{peek_payload_type, verify_task};
 use cybermesh_protocol::{
     Clock, Heartbeat, Limits, OperatorId, PROTOCOL_VERSION, ProtocolError, ResourceUsage,
-    TaskAnnouncement, TaskResult, TrustManifest, WorkerState, payload_type,
+    TaskAnnouncement, TaskKind, TaskResult, TrustManifest, WorkerState, payload_type,
 };
 use serde::Serialize;
 use tokio::sync::watch;
@@ -63,6 +67,8 @@ pub struct WorkerStatus {
     pub resources: ResourceSnapshot,
     pub net_bytes_in: u64,
     pub net_bytes_out: u64,
+    /// Bytes downloaded from CT logs.
+    pub ct_bytes_fetched: u64,
     pub net_dropped_rate_limited: u64,
     pub connected_peers: u64,
     pub updated_at: u64,
@@ -84,7 +90,12 @@ pub fn setup_from_config(
     clock: Arc<dyn Clock>,
 ) -> Result<WorkerSetup, NodeError> {
     let key = SecretKey::read_from_file(&cfg.key)?;
-    let (manifest, _root) = files::load_manifest(&cfg.manifest, &cfg.governance_root, clock.now())?;
+    let (manifest, _root) = files::load_manifest_checked(
+        &cfg.manifest,
+        &cfg.governance_root,
+        &cfg.state_dir.join("manifest-state.json"),
+        clock.now(),
+    )?;
     if manifest.network_id != cfg.network_id {
         return Err(NodeError::Config(
             "manifest is for a different network".into(),
@@ -140,6 +151,21 @@ struct Outgoing {
 }
 
 /// Worker state machine; the async loop in [`run_worker`] drives it.
+/// A queued, verified assignment.
+enum Queued {
+    Domain(TaskAnnouncement, Digest),
+    Ct(CtScanTask, Digest),
+}
+
+impl Queued {
+    fn expires_at(&self) -> u64 {
+        match self {
+            Queued::Domain(t, _) => t.expires_at,
+            Queued::Ct(t, _) => t.expires_at,
+        }
+    }
+}
+
 struct Worker {
     s: WorkerSetup,
     id: KeyId,
@@ -147,7 +173,8 @@ struct Worker {
     topics: Topics,
     limits: Limits,
     replay: ReplayCache,
-    queue: VecDeque<(TaskAnnouncement, Digest)>,
+    queue: VecDeque<Queued>,
+    engine_arc: Arc<Engine>,
     outbox: VecDeque<Outgoing>,
     governor: Governor,
     status: WorkerStatus,
@@ -166,6 +193,10 @@ impl Worker {
         if now >= self.s.manifest.expires_at {
             // Never act on authority from an expired manifest.
             net.report(m, Acceptance::Ignore).await;
+            return;
+        }
+        if peek_payload_type(&m.data, &self.limits).as_deref() == Some(payload_type::CT_TASK) {
+            self.on_ct_task(net, m, now).await;
             return;
         }
         let v = match verify_task(&m.data, &self.s.manifest, now, &self.limits) {
@@ -200,7 +231,160 @@ impl Worker {
             return;
         }
         info!(task = %v.message.task_id, attempt = v.message.attempt, domains = v.message.domains.len(), "accepted assignment");
-        self.queue.push_back((v.message, v.payload_digest));
+        self.queue
+            .push_back(Queued::Domain(v.message, v.payload_digest));
+    }
+
+    async fn on_ct_task(
+        &mut self,
+        net: &NetworkHandle,
+        m: &cybermesh_network::InboundMessage,
+        now: u64,
+    ) {
+        let v = match verify_ct_task(&m.data, &self.s.manifest, now, &self.limits) {
+            Ok(v) => v,
+            Err(e) => {
+                self.status.messages_rejected += 1;
+                let acc = match e {
+                    ProtocolError::Expired | ProtocolError::NotYetValid => Acceptance::Ignore,
+                    _ => Acceptance::Reject,
+                };
+                debug!(error = %e, "rejected CT task message");
+                net.report(m, acc).await;
+                return;
+            }
+        };
+        let forget = v.message.expires_at + self.limits.max_clock_skew_secs;
+        if self
+            .replay
+            .check_and_insert(v.payload_digest, forget, now)
+            .is_err()
+        {
+            net.report(m, Acceptance::Ignore).await;
+            return;
+        }
+        net.report(m, Acceptance::Accept).await;
+        if !v.message.assignees.contains(&self.id) {
+            return;
+        }
+        if !self.s.resources.ct_scanning {
+            self.status.tasks_refused += 1;
+            warn!(task = %v.message.task_id, "assigned a CT scan but ct_scanning is disabled; refusing");
+            return;
+        }
+        if self.queue.len() >= self.s.resources.max_queue {
+            self.status.assignments_dropped += 1;
+            return;
+        }
+        info!(task = %v.message.task_id, log = %v.message.log_id, tiles = v.message.tile_count, "accepted CT assignment");
+        self.queue
+            .push_back(Queued::Ct(v.message, v.payload_digest));
+    }
+
+    async fn execute_ct(&mut self, net: &NetworkHandle, task: CtScanTask, digest: Digest) {
+        if let Err(e) = self.engine_arc.check_pins(&task.engine, &task.evidence) {
+            self.status.tasks_refused += 1;
+            warn!(task = %task.task_id, error = %e, "refused CT task");
+            return;
+        }
+        let Some(log) = self
+            .engine_arc
+            .evidence()
+            .ct_logs
+            .iter()
+            .find(|l| l.log_id == task.log_id)
+            .cloned()
+        else {
+            self.status.tasks_refused += 1;
+            warn!(task = %task.task_id, log = %task.log_id, "log is not in the pinned ct-logs evidence");
+            return;
+        };
+        let engine = Arc::clone(&self.engine_arc);
+        let kib = self.s.resources.ct_fetch_kib_per_sec;
+        let (first, count) = (task.first_tile, task.tile_count);
+        let cpu0 = process_cpu();
+        let t0 = Instant::now();
+        let scanned =
+            tokio::task::spawn_blocking(move || -> Result<(Vec<TileScanResult>, u64), String> {
+                let src = HttpTileSource::new(&log, Duration::from_secs(30))
+                    .map_err(|e| e.to_string())?;
+                let started = Instant::now();
+                let mut out = Vec::with_capacity(count as usize);
+                let mut bytes = 0u64;
+                for n in first..first + u64::from(count) {
+                    let data = src.data_tile(n).map_err(|e| e.to_string())?;
+                    bytes += data.len() as u64;
+                    out.push(scan_tile(&data, n, &engine).map_err(|e| e.to_string())?);
+                    if kib > 0 {
+                        let min = Duration::from_secs_f64(bytes as f64 / (kib as f64 * 1024.0));
+                        if let Some(wait) = min.checked_sub(started.elapsed()) {
+                            std::thread::sleep(wait);
+                        }
+                    }
+                }
+                Ok((out, bytes))
+            })
+            .await;
+        let (tiles, fetched) = match scanned {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                self.status.tasks_refused += 1;
+                warn!(task = %task.task_id, error = %e, "CT scan failed");
+                return;
+            }
+            Err(e) => {
+                self.status.tasks_refused += 1;
+                warn!(task = %task.task_id, error = %e, "CT scan panicked");
+                return;
+            }
+        };
+        let usage = ResourceUsage {
+            cpu_micros: u64::try_from(process_cpu().saturating_sub(cpu0).as_micros())
+                .unwrap_or(u64::MAX),
+            wall_micros: u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
+        };
+        let (Ok(input_digest), Ok(nonce)) = (task.input_digest(), generate_nonce()) else {
+            return;
+        };
+        let result = CtScanResult {
+            v: PROTOCOL_VERSION,
+            network_id: self.s.manifest.network_id.clone(),
+            task_id: task.task_id.clone(),
+            attempt: task.attempt,
+            task_digest: digest,
+            input_digest,
+            worker: self.id.clone(),
+            operator: self.operator.clone(),
+            engine: engine_spec(),
+            evidence: self.engine_arc.evidence().pins.clone(),
+            log_id: task.log_id.clone(),
+            tiles,
+            completed_at: self.s.clock.now(),
+            nonce,
+            usage,
+            fetched_bytes: fetched,
+        };
+        let Ok(bytes) = canonical::to_vec(&result) else {
+            return;
+        };
+        let Ok(signed) = Envelope::sign(payload_type::CT_RESULT, &bytes, &self.s.key).to_vec()
+        else {
+            return;
+        };
+        #[allow(unused_mut)]
+        let mut messages = vec![signed];
+        #[cfg(feature = "adversary-sim")]
+        if let Some(mode) = &self.s.adversary {
+            messages =
+                crate::adversary::apply_ct(mode, &result, &self.s.key, self.last_result.as_deref());
+        }
+        self.last_result = messages.first().cloned();
+        for m in messages {
+            self.send(net, m, task.expires_at).await;
+        }
+        self.status.tasks_completed += 1;
+        self.status.ct_bytes_fetched += fetched;
+        info!(task = %task.task_id, tiles = count, kib = fetched / 1024, cpu_us = result.usage.cpu_micros, "CT result submitted");
     }
 
     fn build_result(
@@ -242,13 +426,17 @@ impl Worker {
     }
 
     async fn execute_next(&mut self, net: &NetworkHandle) {
-        let Some((task, digest)) = self.queue.pop_front() else {
+        let Some(item) = self.queue.pop_front() else {
             return;
         };
         let now = self.s.clock.now();
-        if task.expires_at <= now {
+        if item.expires_at() <= now {
             return;
         }
+        let (task, digest) = match item {
+            Queued::Domain(t, d) => (t, d),
+            Queued::Ct(t, d) => return self.execute_ct(net, t, d).await,
+        };
         match self.build_result(&task, digest) {
             Ok(result) => {
                 #[allow(unused_mut)]
@@ -332,6 +520,11 @@ impl Worker {
             engine: engine_spec(),
             evidence: self.s.engine.evidence().pins.clone(),
             queue_depth: u16::try_from(self.queue.len()).unwrap_or(u16::MAX),
+            capabilities: if self.s.resources.ct_scanning {
+                vec![TaskKind::DomainRiskAssessment, TaskKind::CtShardScan]
+            } else {
+                vec![TaskKind::DomainRiskAssessment]
+            },
         };
         let Ok(bytes) = canonical::to_vec(&hb) else {
             return;
@@ -400,6 +593,7 @@ pub async fn run_worker(
         limits: Limits::default(),
         replay: ReplayCache::new(50_000),
         queue: VecDeque::new(),
+        engine_arc: Arc::new(setup.engine.clone()),
         outbox: VecDeque::new(),
         governor,
         cpu_resume_at: None,
@@ -442,6 +636,9 @@ pub async fn run_worker(
                                 break;
                             }
                             net.set_allowed(allowed_peers(&m, &w.id)).await;
+                            if let Err(e) = files::persist_manifest_state(&w.s.state_dir.join("manifest-state.json"), &m) {
+                                warn!(error = %e, "failed to persist manifest state");
+                            }
                             w.s.manifest = m;
                         }
                         files::Reload::Equivocation => {

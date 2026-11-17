@@ -22,7 +22,8 @@ mod normalize;
 
 pub use engine::{ENGINE_NAME, ENGINE_VERSION, Engine, engine_spec, scoring};
 pub use evidence::{
-    Brand, BundleManifest, EvidenceBundle, EvidenceError, SourceKind, SourceMeta, source_pin,
+    Brand, BundleManifest, CtLogInfo, EvidenceBundle, EvidenceError, SourceKind, SourceMeta,
+    source_pin,
 };
 pub use normalize::{NormalizeError, normalize_domain};
 

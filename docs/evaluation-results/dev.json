@@ -5,7 +5,7 @@
   "skipped_rows": 0,
   "malicious": 351,
   "benign": 36739,
-  "engine_micros_per_domain": 19.000451604205985,
+  "engine_micros_per_domain": 18.355364195200863,
   "evidence_pins": {
     "brands": "sha256:95f8ba7e4f9b11cb31bfbb72481c74fd7ed82208c959b394f581c2cbe18cfd49",
     "hosting-platforms": "sha256:c44a001acc44374e51cd72d07a4e1f78d806a01a8b60905ed7cf5f8a8e51e79c",
@@ -29,22 +29,20 @@
     "engine-suspicious": {
       "confusion": {
         "tp": 8,
-        "fp": 7,
-        "tn": 36732,
+        "fp": 5,
+        "tn": 36734,
         "fn_": 343
       },
-      "precision": 0.5333333333333333,
+      "precision": 0.6153846153846154,
       "recall": 0.022792022792022793,
-      "false_positive_rate": 0.00019053322082800294,
-      "f1": 0.043715846994535526,
+      "false_positive_rate": 0.00013609515773428782,
+      "f1": 0.04395604395604396,
       "false_positive_examples": [
         "gogole.com",
         "goole.com",
-        "mazon.org",
         "paypay-card.co.jp",
         "insagram.com",
-        "finance.ua",
-        "cloud-cme.com"
+        "finance.ua"
       ]
     },
     "feed-only": {
@@ -63,22 +61,20 @@
     "lexical-only": {
       "confusion": {
         "tp": 8,
-        "fp": 7,
-        "tn": 36732,
+        "fp": 5,
+        "tn": 36734,
         "fn_": 343
       },
-      "precision": 0.5333333333333333,
+      "precision": 0.6153846153846154,
       "recall": 0.022792022792022793,
-      "false_positive_rate": 0.00019053322082800294,
-      "f1": 0.043715846994535526,
+      "false_positive_rate": 0.00013609515773428782,
+      "f1": 0.04395604395604396,
       "false_positive_examples": [
         "gogole.com",
         "goole.com",
-        "mazon.org",
         "paypay-card.co.jp",
         "insagram.com",
-        "finance.ua",
-        "cloud-cme.com"
+        "finance.ua"
       ]
     }
   }

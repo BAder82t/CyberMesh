@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod clock;
+pub mod ct;
 pub mod domain;
 mod error;
 pub mod manifest;
@@ -43,4 +44,6 @@ pub mod payload_type {
     pub const RELEASE: &str = "application/vnd.cybermesh.release+json;v=1";
     pub const APPEAL_DECISION: &str = "application/vnd.cybermesh.appeal-decision+json;v=1";
     pub const VERIFICATION: &str = "application/vnd.cybermesh.verification+json;v=1";
+    pub const CT_TASK: &str = crate::ct::CT_TASK;
+    pub const CT_RESULT: &str = crate::ct::CT_RESULT;
 }

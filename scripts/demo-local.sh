@@ -12,15 +12,19 @@ OUT=${OUT:-demo-out}
 ADVERSARY=${ADVERSARY:-flip-verdicts}
 # The demo binary includes the adversary simulation; keep it out of target/release so it can
 # never be mistaken for a production build.
-cargo build -q --release -p cybermesh-cli --features adversary-sim --target-dir target/demo
+cargo build -q --release -p cybermesh-cli --features adversary-sim,dev-tools --target-dir target/demo
 BIN="$PWD/target/demo/release/cybermesh"
 case "$OUT" in ""|/|.|..|/*) echo "refusing OUT=$OUT" >&2; exit 1;; esac
 rm -rf "$OUT"
-"$BIN" demo init --out "$OUT" --evidence datasets/demo/evidence --domains datasets/demo/domains.txt --adversary "$ADVERSARY"
+"$BIN" demo init --out "$OUT" --evidence datasets/demo/evidence --domains datasets/demo/domains.txt --adversary "$ADVERSARY" \
+  --ct-log demo-mock-log --ct-tiles 8
 cd "$OUT"
 pids=()
 cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
+# Synthetic static CT log (real X.509 certificates) on loopback, pinned in ct-logs evidence.
+"$BIN" dev mock-ct-log --addr 127.0.0.1:8090 --tiles 8 2> logs-mock-ct.log &
+pids+=($!)
 mkdir -p logs
 for cfg in worker-*.toml; do
   name=${cfg%.toml}
@@ -29,7 +33,9 @@ for cfg in worker-*.toml; do
 done
 echo "== started ${#pids[@]} workers; running coordinator"
 "$BIN" coordinator run --config coordinator.toml > logs/coordinator-report.json 2> logs/coordinator.log
-python3 -I -c "import json;r=json.load(open('logs/coordinator-report.json'));print('coordinator:', {k:r[k] for k in ['tasks_issued','verified','disputed','insufficient','reassignments','faults','results_rejected']})"
+python3 -I -c "import json;r=json.load(open('logs/coordinator-report.json'));print('coordinator:', {k:r[k] for k in ['tasks_issued','verified','disputed','insufficient','reassignments','faults','results_rejected','ct_tiles_verified','ct_entries_verified','ct_matches','ct_tiles_rescanned']})"
+echo "== CT investigation report (newly certified lookalike names per protected brand)"
+"$BIN" ct report --records state/coordinator/records --manifest manifest.json --root governance-root.json --evidence evidence --out ct-report.json
 echo "== worker status (resource usage measured by each worker)"
 for cfg in worker-*.toml; do w=${cfg#worker-}; w=${w%.toml}; "$BIN" worker status --state-dir "state/$w" | python3 -I -c "import json,sys;s=json.load(sys.stdin);r=s['resources'];print(f\"  {s['operator']:6} state={s['state']:9} tasks={s['tasks_completed']} cpu_avg={r['cpu_percent_avg']:.3f}% rss={r['rss_bytes']/1048576:.1f}MiB net_out={s['net_bytes_out']}B\")"; done
 NOW=$(date +%s)

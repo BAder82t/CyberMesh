@@ -16,6 +16,13 @@ use crate::util::{write, write_json};
 #[derive(Subcommand, Debug)]
 pub enum DevCmd {
     /// Write release verification test vectors (deterministic test keys).
+    /// Serve a synthetic static CT log (real X.509 certificates) on a loopback address.
+    MockCtLog {
+        #[arg(long, default_value = "127.0.0.1:8090")]
+        addr: String,
+        #[arg(long, default_value_t = 8)]
+        tiles: usize,
+    },
     TestVectors {
         #[arg(long)]
         out: PathBuf,
@@ -61,7 +68,19 @@ fn outcome(
 
 #[allow(non_snake_case)]
 pub fn run(c: DevCmd) -> Result<()> {
-    let DevCmd::TestVectors { out, now: NOW } = c;
+    let (out, NOW) = match c {
+        DevCmd::TestVectors { out, now } => (out, now),
+        DevCmd::MockCtLog { addr, tiles } => {
+            let log = cybermesh_ct::mock::MockLog::build(
+                "ct.cybermesh.test/mock",
+                &cybermesh_ct::mock::demo_entries(tiles),
+            )?;
+            let (url, handle) = cybermesh_ct::mock::serve(std::sync::Arc::new(log), &addr)?;
+            eprintln!("mock static CT log with {} entries at {url}", tiles * 256);
+            let _ = handle.join();
+            return Ok(());
+        }
+    };
     let net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], NOW);
     let rec = VerificationRecord {
         v: 1,
@@ -112,6 +131,7 @@ pub fn run(c: DevCmd) -> Result<()> {
             ),
         ],
         verified_at: NOW - 60,
+        ct: None,
     };
     let rd = Digest::of(&canonical::to_vec(&rec)?);
     let params = BuildParams {

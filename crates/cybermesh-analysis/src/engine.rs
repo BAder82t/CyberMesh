@@ -14,7 +14,7 @@ pub const ENGINE_NAME: &str = "cybermesh-lexical";
 /// Bumped on any change that can alter output for the same input. The suffix records the
 /// exact Public Suffix List and IDNA table versions compiled in (pinned with `=` in
 /// `Cargo.toml`), because they also determine output.
-pub const ENGINE_VERSION: &str = "0.3.0+psl.2.1.255+idna.1.1.0";
+pub const ENGINE_VERSION: &str = "0.4.0+psl.2.1.255+idna.1.1.0";
 
 /// The engine spec of this build.
 #[must_use]
@@ -118,15 +118,28 @@ impl Engine {
 
     /// Checks that a task asks for this engine and exactly the local evidence snapshots.
     pub fn check_task(&self, task: &TaskAnnouncement) -> Result<(), AnalysisError> {
-        let TaskKind::DomainRiskAssessment = task.kind;
+        if task.kind != TaskKind::DomainRiskAssessment {
+            return Err(AnalysisError::InvalidDomain("not a domain task".into()));
+        }
+        self.check_pins(&task.engine, &task.evidence)
+    }
+
+    /// Checks that a task asks for this engine and exactly the local evidence snapshots
+    /// (shared by every task kind).
+    pub fn check_pins(
+        &self,
+        engine: &cybermesh_protocol::EngineSpec,
+        evidence: &cybermesh_protocol::EvidencePins,
+    ) -> Result<(), AnalysisError> {
         let spec = engine_spec();
-        if task.engine != spec {
+        if *engine != spec {
             return Err(AnalysisError::EngineMismatch {
-                required: task.engine.to_string(),
+                required: engine.to_string(),
                 actual: spec.to_string(),
             });
         }
-        for (id, pinned) in &task.evidence {
+        let task_evidence = evidence;
+        for (id, pinned) in task_evidence {
             match self.evidence.pins.get(id) {
                 None => return Err(AnalysisError::UnknownEvidence(id.clone())),
                 Some(local) if local != pinned => {
@@ -139,13 +152,13 @@ impl Engine {
                 Some(_) => {}
             }
         }
-        if task.evidence.len() != self.evidence.pins.len() {
+        if task_evidence.len() != self.evidence.pins.len() {
             // Every local source influences scoring, so all must be pinned.
             let missing = self
                 .evidence
                 .pins
                 .keys()
-                .find(|k| !task.evidence.contains_key(*k))
+                .find(|k| !task_evidence.contains_key(*k))
                 .cloned()
                 .unwrap_or_default();
             return Err(AnalysisError::UnknownEvidence(format!(
@@ -444,6 +457,11 @@ fn lookalike_part<'a>(brand: &Brand, parts: &[&'a str]) -> Option<&'a str> {
             if d == *t {
                 return Some(p);
             }
+            // A plain truncation of a token ("cloud" inside "icloud") is usually an ordinary
+            // word, not a typosquat; it is not counted as a lookalike.
+            if t.contains(*p) {
+                continue;
+            }
             let dist = edit_distance(p, t);
             if (t.len() >= 6 && dist == 1) || (t.len() >= 9 && dist == 2) {
                 return Some(p);
@@ -495,6 +513,7 @@ mod tests {
                 "weebly.com".to_owned(),
             ]),
             hosting_platforms: HashSet::from(["weebly.com".to_owned()]),
+            ct_logs: vec![],
             brands,
             pins: BTreeMap::from([("reference-feed".into(), Digest::of(b"f"))]),
             sources: vec![],
@@ -571,6 +590,27 @@ mod tests {
         assert_eq!(
             e.assess("drive.google.com").unwrap().verdict,
             Verdict::KnownBenign
+        );
+    }
+
+    #[test]
+    fn truncations_of_brand_tokens_are_not_lookalikes() {
+        // Found scanning real CT data: "cloud.*" matched the "icloud" token.
+        let e = test_engine();
+        let a = e.assess("cloud.ebs-elektrotechnik.de").unwrap();
+        assert!(
+            !a.findings
+                .iter()
+                .any(|f| f.code == FindingCode::BrandLookalike),
+            "{:?}",
+            a.findings
+        );
+        // Real typosquats are still caught.
+        let b = e.assess("paypa1-secure.com").unwrap();
+        assert!(
+            b.findings
+                .iter()
+                .any(|f| f.code == FindingCode::BrandLookalike)
         );
     }
 

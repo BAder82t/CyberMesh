@@ -34,6 +34,11 @@ pub enum DemoCmd {
         base_port: u16,
         #[arg(long, default_value = "cybermesh-demo")]
         network_id: String,
+        /// Enable CT monitoring of this pinned log (workers opt in, coordinator schedules).
+        #[arg(long)]
+        ct_log: Option<String>,
+        #[arg(long, default_value_t = 8)]
+        ct_tiles: u64,
     },
 }
 
@@ -98,6 +103,8 @@ pub fn run(c: DemoCmd) -> Result<()> {
         adversary,
         base_port,
         network_id,
+        ct_log,
+        ct_tiles,
     } = c;
     if out.join("manifest.json").exists() {
         bail!(
@@ -212,6 +219,12 @@ pub fn run(c: DemoCmd) -> Result<()> {
             format!("/ip4/127.0.0.1/tcp/{base_port}/p2p/{coord_peer}"),
         )
     };
+    let ct_section = match &ct_log {
+        Some(id) => format!(
+            "\n# Certificate Transparency monitoring (findings are advisory warnings only).\n[ct]\nlog_id = \"{id}\"\nfirst_tile = 0\ntile_count = {ct_tiles}\ntiles_per_task = 2\nreplication = 2\n"
+        ),
+        None => String::new(),
+    };
     let coord_toml = format!(
         r#"# CyberMesh coordinator (issuer + verifier) for organisation org-a.
 network_id = "{network_id}"
@@ -237,7 +250,7 @@ min_operators = 3
 result_grace_secs = 60
 warn_min_score_bp = 4000
 block_min_score_bp = 7000
-"#
+{ct_section}"#
     );
     write(&out.join("coordinator.toml"), coord_toml.as_bytes())?;
 
@@ -247,6 +260,7 @@ block_min_score_bp = 7000
         } else {
             format!("/ip4/127.0.0.1/tcp/{}", base_port + 1 + u16::try_from(i)?)
         };
+        let ct_on = ct_log.is_some();
         let adv = if *org == "org-m" {
             format!(
                 "adversary = \"{}\"\n",
@@ -276,6 +290,7 @@ max_load_per_cpu = 4.0
 outbound_kib_per_sec = 64
 max_queue = 16
 active_hours_utc = ["00:00-24:00"]
+ct_scanning = {ct_on}
 "#
         );
         write(&out.join(format!("worker-{w}.toml")), toml.as_bytes())?;

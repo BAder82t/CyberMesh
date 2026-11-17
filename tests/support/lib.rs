@@ -10,9 +10,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cybermesh_analysis::{Brand, Engine, EvidenceBundle};
+use cybermesh_analysis::{Brand, CtLogInfo, Engine, EvidenceBundle};
 use cybermesh_crypto::Digest;
+use cybermesh_ct::mock::MockLog;
 use cybermesh_network::Multiaddr;
+use cybermesh_node::coordinator::CtSetup;
 use cybermesh_node::coordinator::{
     CoordinatorReport, CoordinatorSetup, prepare_domains, run_coordinator,
 };
@@ -21,6 +23,7 @@ use cybermesh_node::worker::{WorkerSetup, WorkerStatus, run_worker};
 use cybermesh_protocol::testkit::TestNetwork;
 use cybermesh_protocol::{Clock, SystemClock};
 use cybermesh_verifier::Policy;
+use cybermesh_verifier::ct::CtPolicy;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -29,6 +32,11 @@ pub const LEXICAL: &str = "examplebank-account-verify.phish.localhost";
 
 /// Demo evidence shared by every node.
 pub fn evidence() -> EvidenceBundle {
+    evidence_with_ct(None)
+}
+
+/// Demo evidence, optionally pinning one CT log (`mock-log`) at `ct_url`.
+pub fn evidence_with_ct(ct_url: Option<&str>) -> EvidenceBundle {
     let feed = [PHISH, "malware-drop.example.net", "www.google.com"];
     EvidenceBundle {
         blocklists: vec![(
@@ -37,16 +45,30 @@ pub fn evidence() -> EvidenceBundle {
         )],
         popular: HashSet::from(["google.com".to_owned(), "wikipedia.org".to_owned()]),
         hosting_platforms: HashSet::new(),
+        ct_logs: ct_url
+            .map(|u| {
+                vec![CtLogInfo {
+                    log_id: "mock-log".into(),
+                    description: "mock".into(),
+                    monitoring_url: u.into(),
+                }]
+            })
+            .unwrap_or_default(),
         brands: vec![Brand {
             name: "examplebank".into(),
             tokens: vec!["examplebank".into()],
             legitimate: vec!["examplebank.test".into()],
         }],
-        pins: BTreeMap::from([
-            ("brands".into(), Digest::of(b"brands-v1")),
-            ("popularity".into(), Digest::of(b"popularity-v1")),
-            ("reference-feed".into(), Digest::of(b"feed-v1")),
-        ]),
+        pins: BTreeMap::from_iter(
+            ct_url
+                .map(|u| ("ct-logs".to_owned(), Digest::of(u.as_bytes())))
+                .into_iter()
+                .chain([
+                    ("brands".into(), Digest::of(b"brands-v1")),
+                    ("popularity".into(), Digest::of(b"popularity-v1")),
+                    ("reference-feed".into(), Digest::of(b"feed-v1")),
+                ]),
+        ),
         sources: vec![],
         skipped_lines: 0,
     }
@@ -87,6 +109,12 @@ pub struct Options {
     pub result_timeout: Duration,
     pub abandon_after: Duration,
     pub domains: Vec<String>,
+    /// Run a mock CT log and schedule `ct_tiles` full tiles of it.
+    pub ct_log: Option<Arc<MockLog>>,
+    pub ct_tiles: u64,
+    pub ct_tiles_per_task: u32,
+    pub ct_replication: usize,
+    pub ct_policy: CtPolicy,
 }
 
 impl Default for Options {
@@ -99,6 +127,11 @@ impl Default for Options {
             result_timeout: Duration::from_secs(6),
             abandon_after: Duration::from_secs(60),
             domains: domains(),
+            ct_log: None,
+            ct_tiles: 0,
+            ct_tiles_per_task: 2,
+            ct_replication: 2,
+            ct_policy: CtPolicy::default(),
         }
     }
 }
@@ -111,6 +144,8 @@ fn test_resources() -> ResourcePolicy {
         memory_mb: 1 << 20,
         max_load_per_cpu: f64::MAX,
         outbound_kib_per_sec: 0,
+        ct_scanning: true,
+        ct_fetch_kib_per_sec: 0,
         ..ResourcePolicy::default()
     }
 }
@@ -121,13 +156,14 @@ pub fn start_worker(
     bootstrap: &Multiaddr,
     dir: &std::path::Path,
     adversary: Option<&str>,
+    ct_url: Option<&str>,
 ) -> (watch::Sender<bool>, JoinHandle<WorkerStatus>) {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let w = &net.workers[i];
     let setup = WorkerSetup {
         key: cybermesh_crypto::SecretKey::from_seed(&w.key.seed()),
         manifest: net.manifest.clone(),
-        engine: Engine::new(evidence()),
+        engine: Engine::new(evidence_with_ct(ct_url)),
         listen: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
         bootstrap: vec![bootstrap.clone()],
         state_dir: dir.join(&w.label),
@@ -155,11 +191,28 @@ impl Harness {
             .parse()
             .unwrap();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        let ct_url = o.ct_log.as_ref().map(|log| {
+            let (url, _h) = cybermesh_ct::mock::serve(Arc::clone(log), "127.0.0.1:0").unwrap();
+            url
+        });
+        let ct = ct_url.as_ref().map(|u| CtSetup {
+            log: CtLogInfo {
+                log_id: "mock-log".into(),
+                description: "mock".into(),
+                monitoring_url: u.clone(),
+            },
+            first_tile: Some(0),
+            tile_count: o.ct_tiles,
+            tiles_per_task: o.ct_tiles_per_task,
+            replication: o.ct_replication,
+            policy: o.ct_policy.clone(),
+            seed: [7u8; 32],
+        });
         let setup = CoordinatorSetup {
             issuer: cybermesh_crypto::SecretKey::from_seed(&net.issuer.seed()),
             verifier: cybermesh_crypto::SecretKey::from_seed(&net.verifier.seed()),
             manifest: net.manifest.clone(),
-            engine: Engine::new(evidence()),
+            engine: Engine::new(evidence_with_ct(ct_url.as_deref())),
             listen: vec![format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap()],
             bootstrap: vec![],
             state_dir: dir.path().join("coordinator"),
@@ -177,13 +230,14 @@ impl Harness {
             clock,
             gossip_heartbeat: Duration::from_millis(100),
             manifest_source: None,
+            ct,
         };
         let (ctx, crx) = watch::channel(false);
         let coordinator = tokio::spawn(async move { run_coordinator(setup, crx).await.unwrap() });
         let mut workers = Vec::new();
         for i in 0..net.workers.len() {
             let adv = o.adversaries.iter().find(|(w, _)| *w == i).map(|(_, m)| *m);
-            let (tx, h) = start_worker(&net, i, &addr, dir.path(), adv);
+            let (tx, h) = start_worker(&net, i, &addr, dir.path(), adv, ct_url.as_deref());
             workers.push((i, tx, h));
         }
         Self {

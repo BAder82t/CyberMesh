@@ -7,6 +7,7 @@
 //! * `replay`: re-send the previous task's signed result instead of computing a new one.
 
 use cybermesh_crypto::{Envelope, SecretKey, canonical};
+use cybermesh_protocol::ct::{CtMatch, CtScanResult};
 use cybermesh_protocol::{Finding, FindingCode, TaskResult, Verdict, payload_type};
 
 fn sign(r: &TaskResult, key: &SecretKey) -> Vec<u8> {
@@ -59,5 +60,70 @@ pub fn apply(
             None => vec![sign(honest, key)],
         },
         _ => vec![sign(honest, key)],
+    }
+}
+
+fn sign_ct(r: &CtScanResult, key: &SecretKey) -> Vec<u8> {
+    let bytes = canonical::to_vec(r).unwrap_or_default();
+    Envelope::sign(payload_type::CT_RESULT, &bytes, key)
+        .to_vec()
+        .unwrap_or_default()
+}
+
+/// CT misbehaviour:
+/// * `omit-matches` (and `flip-verdicts`): hide every lookalike found.
+/// * `forge-ct-match`: add a fabricated, publishable lookalike to the first tile.
+/// * `equivocate`, `forge-signature`, `replay`: as for domain tasks.
+#[must_use]
+pub fn apply_ct(
+    mode: &str,
+    honest: &CtScanResult,
+    key: &SecretKey,
+    last: Option<&[u8]>,
+) -> Vec<Vec<u8>> {
+    match mode {
+        "omit-matches" | "flip-verdicts" => {
+            let mut r = honest.clone();
+            for t in &mut r.tiles {
+                t.matches.clear();
+                t.truncated = false;
+            }
+            vec![sign_ct(&r, key)]
+        }
+        "forge-ct-match" => {
+            let mut r = honest.clone();
+            if let Some(t) = r.tiles.first_mut() {
+                t.matches.insert(
+                    0,
+                    CtMatch {
+                        index: t.tile_index * 256,
+                        name: "examp1ebank-login-verify.example-shop.net".into(),
+                        risk_score_bp: 5900,
+                        verdict: Verdict::Suspicious,
+                        codes: vec![FindingCode::BrandLookalike, FindingCode::SuspiciousKeywords],
+                    },
+                );
+                t.matches
+                    .sort_by(|a, b| (a.index, &a.name).cmp(&(b.index, &b.name)));
+            }
+            vec![sign_ct(&r, key)]
+        }
+        "equivocate" => {
+            let mut r = honest.clone();
+            r.nonce = "e".repeat(32);
+            if let Some(t) = r.tiles.first_mut() {
+                t.matches.clear();
+            }
+            vec![sign_ct(honest, key), sign_ct(&r, key)]
+        }
+        "forge-signature" => match SecretKey::generate() {
+            Ok(k) => vec![sign_ct(honest, &k)],
+            Err(_) => vec![],
+        },
+        "replay" => match last {
+            Some(b) => vec![b.to_vec()],
+            None => vec![sign_ct(honest, key)],
+        },
+        _ => vec![sign_ct(honest, key)],
     }
 }

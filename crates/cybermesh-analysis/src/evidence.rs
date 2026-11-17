@@ -31,6 +31,7 @@ pub fn source_pin(id: &str, kind: SourceKind, file_digest: &Digest) -> Digest {
         SourceKind::Popularity => "popularity",
         SourceKind::Brands => "brands",
         SourceKind::HostingPlatforms => "hosting-platforms",
+        SourceKind::CtLogs => "ct-logs",
     };
     Digest::tagged(
         "cybermesh/evidence-source/v1",
@@ -72,6 +73,60 @@ pub enum SourceKind {
     /// Registrable domains whose subdomains are independently controlled customer sites
     /// (user-content hosting not covered by the Public Suffix List's private section).
     HostingPlatforms,
+    /// JSON list of Certificate Transparency logs workers may fetch from (the only network
+    /// endpoints CT tasks can reach).
+    CtLogs,
+}
+
+/// A CT log workers may scan (static CT API monitoring prefix).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CtLogInfo {
+    pub log_id: String,
+    pub description: String,
+    /// Static CT API monitoring prefix, e.g. `https://mon.example.org/2026h2/`. Must be HTTPS;
+    /// plain HTTP is accepted only for loopback hosts (tests and demonstrations).
+    pub monitoring_url: String,
+}
+
+impl CtLogInfo {
+    /// Validates the URL policy.
+    pub fn validate(&self) -> Result<(), String> {
+        if !cybermesh_protocol::ct::is_valid_log_id(&self.log_id) {
+            return Err(format!("invalid log id {}", self.log_id));
+        }
+        let u = self.monitoring_url.as_str();
+        let rest = if let Some(r) = u.strip_prefix("https://") {
+            r
+        } else if let Some(r) = u.strip_prefix("http://") {
+            let host = r.split(['/', ':']).next().unwrap_or("");
+            if !(host == "127.0.0.1" || host == "localhost" || host == "[::1]") {
+                return Err(format!(
+                    "{}: plain http is only allowed for loopback",
+                    self.log_id
+                ));
+            }
+            r
+        } else {
+            return Err(format!("{}: monitoring URL must be https", self.log_id));
+        };
+        let ok = !rest.is_empty()
+            && u.ends_with('/')
+            && u.len() <= 256
+            && u.bytes().all(|b| b.is_ascii_graphic())
+            && !rest.contains('@')
+            && !rest.contains("..")
+            && !rest.contains('?')
+            && !rest.contains('#');
+        if ok {
+            Ok(())
+        } else {
+            Err(format!(
+                "{}: malformed monitoring URL (must end with '/')",
+                self.log_id
+            ))
+        }
+    }
 }
 
 /// Metadata for one source in `bundle.json`.
@@ -113,6 +168,7 @@ pub struct EvidenceBundle {
     pub blocklists: Vec<(String, HashSet<String>)>,
     pub popular: HashSet<String>,
     pub hosting_platforms: HashSet<String>,
+    pub ct_logs: Vec<CtLogInfo>,
     pub brands: Vec<Brand>,
     pub pins: EvidencePins,
     pub sources: Vec<SourceMeta>,
@@ -244,6 +300,18 @@ impl EvidenceBundle {
                     bundle.skipped_lines += skipped;
                     bundle.popular.extend(set);
                 }
+                SourceKind::CtLogs => {
+                    let mut logs: Vec<CtLogInfo> = serde_json::from_slice(bytes)
+                        .map_err(|e| EvidenceError::Manifest(format!("ct-logs: {e}")))?;
+                    for l in &logs {
+                        l.validate().map_err(EvidenceError::Manifest)?;
+                    }
+                    logs.sort_by(|a, b| a.log_id.cmp(&b.log_id));
+                    if logs.windows(2).any(|w| w[0].log_id == w[1].log_id) {
+                        return Err(EvidenceError::Manifest("duplicate CT log id".into()));
+                    }
+                    bundle.ct_logs.extend(logs);
+                }
                 SourceKind::HostingPlatforms => {
                     let (set, skipped) = parse_domain_list(bytes);
                     bundle.skipped_lines += skipped;
@@ -354,6 +422,32 @@ mod tests {
             EvidenceBundle::from_manifest_and_files(manifest, &tampered),
             Err(EvidenceError::DigestMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn ct_log_url_policy() {
+        let ok = |u: &str| {
+            CtLogInfo {
+                log_id: "log-a".into(),
+                description: String::new(),
+                monitoring_url: u.into(),
+            }
+            .validate()
+        };
+        assert!(ok("https://mon.example.org/2026h2/").is_ok());
+        assert!(ok("http://127.0.0.1:8090/").is_ok());
+        assert!(
+            ok("http://mon.example.org/").is_err(),
+            "plain http to a remote host"
+        );
+        assert!(ok("https://user@mon.example.org/").is_err());
+        assert!(ok("https://mon.example.org/a?x=1/").is_err());
+        assert!(
+            ok("https://mon.example.org/2026h2").is_err(),
+            "must end with /"
+        );
+        assert!(ok("file:///etc/").is_err());
+        assert!(ok("http://127.0.0.1.evil.example/").is_err());
     }
 
     #[test]

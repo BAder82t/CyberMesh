@@ -59,6 +59,8 @@ impl fmt::Display for OperatorId {
 #[serde(rename_all = "kebab-case")]
 pub enum TaskKind {
     DomainRiskAssessment,
+    /// Certificate Transparency shard scan (see [`crate::ct`]). Opt-in per worker.
+    CtShardScan,
 }
 
 /// Name and version of the analysis engine that must be used.
@@ -258,6 +260,9 @@ pub struct Heartbeat {
     pub engine: EngineSpec,
     pub evidence: EvidencePins,
     pub queue_depth: u16,
+    /// Task kinds this worker accepts (CT scanning makes outbound requests to CT logs and is
+    /// opt-in per operator).
+    pub capabilities: Vec<TaskKind>,
 }
 
 /// Outcome of a reviewed false-positive appeal.
