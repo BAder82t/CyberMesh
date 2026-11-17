@@ -153,6 +153,19 @@ An independent internal review covered the checkpoint verifier, the Merkle proof
 
 Residual risk: a log that signs different trees for different viewers (a split view) is not detected without witnesses (roadmap).
 
+## Seventh pass: CT follow mode
+
+An independent internal review covered continuous tailing. It found no flaw in the consistency proof: its PoC checked 251,695 genuine extensions and every fork position for small trees, with no wrong result. Its findings, fixed unless stated:
+
+| Severity | Finding | Fix | Test or evidence |
+|---|---|---|---|
+| HIGH | Batches that were abandoned (too few workers) or never verified advanced the resume point, so their tiles could be skipped for good, also across restarts. | Only verified batches advance it. Given-up batches are retried on later polls, up to 3 times. Tiles still unverified are counted and keep the resume point. | `given_up_batches_are_retried_and_never_skipped` |
+| MEDIUM | A CT finalisation that failed internally left its batch in progress forever, which blocked the resume point and a bounded run's exit. | Treated as given up, so it is retried. | code review |
+| MEDIUM | After an inconsistent checkpoint, following stayed stuck with no escalation or way out. Pending tasks could still be verified against the forked view. | Halts after 3 inconsistent checkpoints in a row; a bounded run ends and `coordinator run` exits with an error. `ct follow-reset` keeps the resume point. Pending tasks are verified only against a checkpoint that extends the followed head. | `a_log_that_rewrites_history_is_not_followed` |
+| LOW | A panicking poll left polling switched off. | The outcome is always delivered. | code review |
+| LOW | A smaller, older checkpoint (a lagging mirror) was reported as rewritten history. | Treated as stale. | code review |
+| LOW | `until_tile` already reached before the first poll ends the run immediately. | Not changed: there is nothing left to scan. | — |
+
 ## Accepted or deferred (documented residual risk)
 
 - **Manifest state on restart.** Fixed in v0.2.0: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.

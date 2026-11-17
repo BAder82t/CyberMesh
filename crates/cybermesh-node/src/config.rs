@@ -153,6 +153,26 @@ pub struct CtScanConfig {
     pub replication: usize,
     #[serde(default)]
     pub policy: cybermesh_verifier::ct::CtPolicy,
+    /// Follow the log as it grows (poll its checkpoint and schedule new tiles) instead of
+    /// scanning a fixed range once. `first_tile` (or the latest `tile_count` tiles) is where
+    /// following starts; progress is kept in `state_dir/ct-follow.json`.
+    #[serde(default)]
+    pub follow: bool,
+    #[serde(default = "d_poll")]
+    pub poll_secs: u64,
+    #[serde(default = "d_max_poll_tiles")]
+    pub max_tiles_per_poll: u64,
+    /// Follow mode: stop (with `exit_when_done`) once every tile below this is settled.
+    #[serde(default)]
+    pub until_tile: Option<u64>,
+}
+
+fn d_poll() -> u64 {
+    60
+}
+
+fn d_max_poll_tiles() -> u64 {
+    256
 }
 
 fn d_ct_tiles() -> u32 {

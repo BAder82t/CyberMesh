@@ -240,6 +240,11 @@ async fn main() -> Result<()> {
                 cybermesh_node::coordinator::run_coordinator(setup, shutdown_signal().await)
                     .await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.ct_follow_halted {
+                anyhow::bail!(
+                    "CT follow halted: the log's checkpoints do not extend each other; investigate, then `cybermesh ct follow-reset`"
+                );
+            }
             Ok(())
         }
         Cmd::Verifier(VerifierCmd::Run { config }) => {

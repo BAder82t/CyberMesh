@@ -17,6 +17,7 @@
 
 pub mod config;
 pub mod coordinator;
+pub mod ct_follow;
 pub mod files;
 pub mod governor;
 pub mod records;

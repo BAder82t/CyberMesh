@@ -43,7 +43,9 @@ These are **not** published:
 
 ### 1a. Certificate Transparency in the local demo
 
-`scripts/demo-local.sh` also starts a synthetic static CT log on `127.0.0.1:8090`. It holds real X.509 certificates generated locally, with a few lookalikes. The coordinator schedules 8 full tiles as 2-tile shards on workers that opted in. Afterwards the script prints the per-brand investigation report (`cybermesh ct report`). With the default policy, CT findings appear there and **not** in the release.
+`scripts/demo-local.sh` also starts a synthetic static CT log on `127.0.0.1:8090`. It holds real X.509 certificates generated locally, with a few lookalikes, and signs its checkpoints like a real log.
+- **The log grows.** It starts with 4 full tiles and grows by 2 every 4 seconds up to 8.
+- **The coordinator follows it.** It runs in follow mode (`poll_secs = 2`, `until_tile = 8`). Each polled checkpoint is verified and proven to extend the previous one, and each new tile is scheduled as it appears, as 2-tile shards on workers that opted in. The coordinator report shows `ct_checkpoints_verified` and `ct_next_tile`. Afterwards the script prints the per-brand investigation report (`cybermesh ct report`). With the default policy, CT findings appear there and **not** in the release.
 
 ## 2. Browser extension
 

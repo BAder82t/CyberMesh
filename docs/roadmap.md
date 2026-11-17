@@ -33,7 +33,6 @@ Verifiers publish the records they sign on a `records` gossip topic and store th
   - Prove late equivocation at independent verifiers.
 - **CT.**
   - Witness cosignatures on checkpoints (C2SP `tlog-witness`), to detect split views. Checkpoint signatures and tile-root proofs are done.
-  - Continuous tailing of new tiles.
   - RFC 6962 logs.
   - Owner-maintained brand infrastructure lists, needed before CT warnings can be enabled widely.
 - **Network.** Enable gossipsub peer scoring (invalid-message penalties), plus `/dns4` bootstrap and Kademlia discovery for more than 20 nodes.

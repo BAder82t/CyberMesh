@@ -118,6 +118,12 @@ pub struct Options {
     pub independent_verifiers: usize,
     /// The manifest's release quorum (the test network has verifiers at operators 0..=2).
     pub min_verifiers: u8,
+    /// Follow the CT log: `(poll interval, until_tile)`.
+    pub ct_follow: Option<(Duration, u64)>,
+    /// Grow the mock CT log after `delay` by `tiles` full tiles of demo entries.
+    pub ct_grow: Option<(Duration, usize)>,
+    /// Instead of growing, replace the log with a different (forked) tree of that size.
+    pub ct_fork: bool,
 }
 
 impl Default for Options {
@@ -137,6 +143,9 @@ impl Default for Options {
             ct_policy: CtPolicy::default(),
             independent_verifiers: 0,
             min_verifiers: 1,
+            ct_follow: None,
+            ct_grow: None,
+            ct_fork: false,
         }
     }
 }
@@ -203,7 +212,30 @@ impl Harness {
         // The mock log signs its checkpoint with its (public) demonstration key; the pinned
         // entry carries that key and the log's origin, so verification is real.
         let ct_info = o.ct_log.as_ref().map(|log| {
-            let (url, _h) = cybermesh_ct::mock::serve(Arc::clone(log), "127.0.0.1:0").unwrap();
+            let shared = Arc::new(std::sync::RwLock::new((**log).clone()));
+            let (url, _h) =
+                cybermesh_ct::mock::serve_shared(Arc::clone(&shared), "127.0.0.1:0").unwrap();
+            if let Some((delay, tiles)) = o.ct_grow {
+                // The log grows while the network runs, as a real log does (or, with
+                // `ct_fork`, is replaced by a different tree: rewritten history).
+                let fork = o.ct_fork;
+                std::thread::spawn(move || {
+                    std::thread::sleep(delay);
+                    let mut log = shared.write().unwrap();
+                    if fork {
+                        let total = usize::try_from(log.size / 256).unwrap() + tiles;
+                        let origin = log.origin.clone();
+                        *log = cybermesh_ct::mock::MockLog::build(
+                            &origin,
+                            &cybermesh_ct::mock::demo_entries(total),
+                        )
+                        .unwrap();
+                    } else {
+                        let more = cybermesh_ct::mock::demo_entries(tiles);
+                        log.extend(&more).unwrap();
+                    }
+                });
+            }
             log.log_info("mock-log", &url)
         });
         let ct = ct_info.as_ref().map(|info| CtSetup {
@@ -214,6 +246,13 @@ impl Harness {
             replication: o.ct_replication,
             policy: o.ct_policy.clone(),
             seed: [7u8; 32],
+            follow: o
+                .ct_follow
+                .map(|(poll, until)| cybermesh_node::coordinator::CtFollowSetup {
+                    poll,
+                    max_tiles_per_poll: 64,
+                    until_tile: Some(until),
+                }),
         });
         let setup = CoordinatorSetup {
             issuer: cybermesh_crypto::SecretKey::from_seed(&net.issuer.seed()),

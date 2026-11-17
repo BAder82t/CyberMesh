@@ -907,6 +907,7 @@ dependencies = [
  "cybermesh-node",
  "cybermesh-protocol",
  "cybermesh-verifier",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

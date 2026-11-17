@@ -27,7 +27,8 @@ pids=()
 cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
 # Synthetic static CT log (real X.509 certificates) on loopback, pinned in ct-logs evidence.
-"$BIN" dev mock-ct-log --addr 127.0.0.1:8090 --tiles 8 2> logs-mock-ct.log &
+# It starts with 4 full tiles and grows by 2 every 4 s up to 8; the coordinator follows it.
+"$BIN" dev mock-ct-log --addr 127.0.0.1:8090 --tiles 4 --grow-tiles 2 --grow-every-secs 4 --max-tiles 8 2> logs-mock-ct.log &
 pids+=($!)
 mkdir -p logs
 vpids=()
@@ -45,7 +46,7 @@ for cfg in worker-*.toml; do
 done
 echo "== started ${#vpids[@]} independent verifier(s) and $(ls worker-*.toml | wc -l | tr -d ' ') workers; running coordinator"
 "$BIN" coordinator run --config coordinator.toml > logs/coordinator-report.json 2> logs/coordinator.log
-python3 -I -c "import json;r=json.load(open('logs/coordinator-report.json'));print('coordinator:', {k:r[k] for k in ['tasks_issued','verified','disputed','insufficient','reassignments','faults','results_rejected','ct_tiles_verified','ct_entries_verified','ct_matches','ct_tiles_rescanned','records_published','records_received','records_refused']})"
+python3 -I -c "import json;r=json.load(open('logs/coordinator-report.json'));print('coordinator:', {k:r[k] for k in ['tasks_issued','verified','disputed','insufficient','reassignments','faults','results_rejected','ct_tiles_verified','ct_entries_verified','ct_matches','ct_tiles_rescanned','ct_checkpoints_verified','ct_next_tile','ct_log_inconsistencies','records_published','records_received','records_refused']})"
 # Independent verifiers exit on their own once idle (idle_exit_secs).
 for p in "${vpids[@]:-}"; do [ -n "$p" ] && wait "$p"; done
 for f in logs/verifier-*-report.json; do

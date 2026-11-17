@@ -63,7 +63,7 @@ Workers whose signed results differ from the log or from the verifier's rescan g
   - Signature lines from unknown keys (witnesses, other key types) are ignored.
   - A bad signature by the pinned key rejects the checkpoint.
 - **Each tile root.** It is proven by recomputing the tree root of the signed size *through* that tile's level-1 entry, using the other hashes from the log's hash tiles at levels 0 and up. The result must equal the signed root.
-- **What this buys.** A CDN, mirror or network attacker can no longer substitute hash tiles or a checkpoint.
+- **What this buys.** A CDN, mirror or network attacker can no longer substitute hash tiles or a checkpoint. In follow mode, each new checkpoint must also provably extend the previous one, so a log that rewrites its history is detected over time.
 - **When verification fails.**
   - A checkpoint that does not verify, or is more than an hour old, or is dated in the future, means no log access: disagreement is disputed and nothing is confirmed.
   - A tile whose root cannot be proven (hash tiles unavailable) leaves the task `insufficient`, to be retried. The verifier's own rescan of such a tile is not used against workers, so withholding hash tiles and forging a data tile cannot get honest workers faulted.
@@ -137,13 +137,29 @@ Coordinator (`coordinator.toml`):
 ```toml
 [ct]
 log_id = "letsencrypt-willow-2027h1"
-tile_count = 64          # omit first_tile to scan the most recent full tiles
+tile_count = 64          # omit first_tile to start at the most recent full tiles
 tiles_per_task = 8
 replication = 2
+follow = true            # keep following the log as it grows (otherwise: scan once)
+poll_secs = 60           # checkpoint poll interval
+max_tiles_per_poll = 256 # new tiles scheduled per poll at most
+# until_tile = 5000000   # optional: stop (with exit_when_done) once tiles below this are settled
 
 [ct.policy]
 publish_warnings = false # investigation report only (recommended)
 ```
+
+**Following a log.** With `follow = true` the coordinator polls the log's checkpoint every `poll_secs` and schedules each newly completed full tile.
+- **Which checkpoints are accepted.** A checkpoint is accepted only if it is signed by the pinned key, at most an hour old, and **proven to extend the previous one**. The proof is an RFC 6962 consistency proof assembled from the log's hash tiles, and both signed roots are recomputed from it.
+  - A validly signed checkpoint that does not extend the previous one means the log rewrote its history, or is showing different trees to different viewers. It is counted (`ct_log_inconsistencies`) and logged, and the coordinator keeps the old head and schedules nothing from it.
+  - After 3 such checkpoints in a row, following **halts** (`ct_follow_halted`). A bounded run then ends and `coordinator run` exits with an error. After investigating, `cybermesh ct follow-reset --state <state_dir>/ct-follow.json` clears the saved head while keeping the resume point.
+  - A smaller, older checkpoint (a lagging mirror) is only treated as stale.
+  - Pending tasks are verified against a checkpoint that must itself extend the followed head, never against a forked view.
+- **Backlog limits.** At most `max_tiles_per_poll` tiles are scheduled per poll, and none while `4 × max_inflight` CT batches are already waiting. The rest wait for later polls (`ct_lag_tiles` in the report).
+- **Restarts and failures.** Progress is kept in `state_dir/ct-follow.json`: the last accepted signed head and the first tile not yet **verified**. A restart resumes there and checks the next checkpoint against the saved head.
+  - Batches that were abandoned (too few workers) or not verified after their attempts are scheduled again on later polls, up to 3 times.
+  - Tiles still unverified after that are counted (`ct_tiles_unverified`) and keep the resume point, so a later run scans them again. Tiles are never silently skipped.
+- **Live rates.** On real logs (2026-11-17), Let's Encrypt Willow 2027h1 and Google ParcelYard 2027h1 each grew by about one full tile per second. Both checkpoints in each pair verified, and the consistency proof between them took under a second (`cargo run -p cybermesh-ct --features http --example follow_log`).
 
 Worker (`[resources]` in `worker.toml`): `ct_scanning = true` and `ct_fetch_kib_per_sec = 256`.
 
@@ -155,4 +171,4 @@ Worker (`[resources]` in `worker.toml`): `ct_scanning = true` and `ct_fetch_kib_
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.
 - **Brand table.** The table needs owner-maintained "own infrastructure" lists, for example `microsoft-int.com`, before CT warnings can be enabled responsibly.
 - **Verifiers.** Independent verifiers check CT shards with their own log access and their own secret spot-check seeds, so their spot checks are independent of the coordinator's. A published CT warning needs the manifest's `min_verifiers` verifier operators.
-- **No continuous tailing.** The coordinator scans a configured range or the most recent tiles at start-up. Tailing new tiles continuously is the next step.
+- **One coordinator per log.** A single coordinator follows each log. Independent verifiers check its tasks but do not poll the log themselves.
