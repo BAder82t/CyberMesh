@@ -40,6 +40,7 @@ cybermesh-network.workspace = true
 cybermesh-node.workspace = true
 cybermesh-protocol = { workspace = true, features = ["testkit"] }
 cybermesh-verifier.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 

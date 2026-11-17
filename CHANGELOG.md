@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+- **CT follow mode** (`[ct] follow = true`). The coordinator tails a log as it grows:
+  - it polls the checkpoint and accepts only a fresh, pinned-key-signed checkpoint that provably extends the previous one (an RFC 6962 consistency proof from the log's hash tiles);
+  - it schedules newly completed tiles, with a per-poll cap and backlog limit;
+  - it resumes after a restart from `ct-follow.json` (last signed head and a settled low-water mark);
+  - it counts rewritten-history checkpoints (`ct_log_inconsistencies`) and does not follow them, halting after 3 in a row (`ct_follow_halted`; `coordinator run` then exits with an error);
+  - only verified tiles advance the resume point, and given-up batches are retried;
+  - `cybermesh ct follow-reset` clears the saved head while keeping the resume point.
+- `TileAuthenticator::prove_extends`; `MockLog::extend` and `serve_shared`, so a mock log can grow while served; `cybermesh dev mock-ct-log --grow-tiles/--grow-every-secs/--max-tiles`. The local demo's coordinator now follows a growing mock log.
 - **CT checkpoints are verified and tile roots are proven.**
   - `ct-logs` evidence now pins each log's `origin` and `public_key` (ECDSA P-256 SPKI). Real keys come from Google's CT log list v3.
   - The verifier accepts a checkpoint only with a valid RFC 6962 note signature by the pinned key.

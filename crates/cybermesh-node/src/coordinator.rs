@@ -29,7 +29,7 @@ use cybermesh_verifier::{
 };
 use serde::Serialize;
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::NodeError;
 use crate::config::CoordinatorConfig;
@@ -88,6 +88,32 @@ pub struct CtSetup {
     pub policy: CtPolicy,
     /// Secret seed for unpredictable spot checks.
     pub seed: [u8; 32],
+    /// Follow the log as it grows instead of scanning a fixed range once.
+    pub follow: Option<CtFollowSetup>,
+}
+
+/// Continuous tailing of a CT log (`[ct] follow = true`).
+#[derive(Debug, Clone)]
+pub struct CtFollowSetup {
+    /// How often the checkpoint is polled.
+    pub poll: Duration,
+    /// New tiles scheduled per poll at most (the rest wait for later polls).
+    pub max_tiles_per_poll: u64,
+    /// Stop following once every tile below this one is settled (bounded runs, demos).
+    pub until_tile: Option<u64>,
+}
+
+/// Consecutive inconsistent checkpoints after which following stops.
+const MAX_INCONSISTENT_POLLS: u32 = 3;
+
+/// Result of polling a followed log's checkpoint.
+enum PollOutcome {
+    /// Verified with the pinned key, fresh, and proven to extend the previous head.
+    Head(cybermesh_ct::Checkpoint),
+    /// Validly signed but not an extension of the previous head: the log rewrote history.
+    Inconsistent(String),
+    /// Unavailable, unverifiable or stale.
+    Failed(String),
 }
 
 /// Summary returned when the coordinator exits.
@@ -129,6 +155,19 @@ pub struct CoordinatorReport {
     pub records_received: u64,
     /// Records refused from the network (invalid, too old, from the future, store full).
     pub records_refused: u64,
+    /// Follow mode: checkpoints accepted (verified, fresh, consistent with the previous one).
+    pub ct_checkpoints_verified: u64,
+    /// Follow mode: polls that failed (unavailable, unverifiable or stale checkpoints).
+    pub ct_poll_failures: u64,
+    /// Follow mode: validly signed checkpoints that did not extend the previous one.
+    pub ct_log_inconsistencies: u64,
+    /// Follow mode: next tile to schedule, and full tiles not yet scheduled.
+    pub ct_next_tile: u64,
+    pub ct_lag_tiles: u64,
+    /// Follow mode: tiles given up for good in this run (left below the resume point).
+    pub ct_tiles_unverified: u64,
+    /// Follow mode: following stopped after repeated inconsistent checkpoints.
+    pub ct_follow_halted: bool,
     /// The other verifiers' records received (also in `received-records/`).
     #[serde(skip)]
     pub received: Vec<(Digest, VerificationRecord)>,
@@ -240,10 +279,12 @@ pub fn setup_from_config(
             if c.tiles_per_task == 0
                 || c.tiles_per_task > cybermesh_protocol::ct::MAX_TILES_PER_TASK
                 || c.replication == 0
+                || (c.follow && c.poll_secs == 0)
             {
-                return Err(NodeError::Config(
-                    "ct.tiles_per_task must be 1..=64 and ct.replication >= 1".into(),
-                ));
+                return Err(NodeError::Config(format!(
+                    "ct.tiles_per_task must be 1..={}, ct.replication >= 1 and ct.poll_secs >= 1",
+                    cybermesh_protocol::ct::MAX_TILES_PER_TASK
+                )));
             }
             Some(CtSetup {
                 log,
@@ -253,6 +294,11 @@ pub fn setup_from_config(
                 replication: c.replication,
                 policy: c.policy.clone(),
                 seed: random_bytes::<32>()?,
+                follow: c.follow.then(|| CtFollowSetup {
+                    poll: Duration::from_secs(c.poll_secs),
+                    max_tiles_per_poll: c.max_tiles_per_poll,
+                    until_tile: c.until_tile,
+                }),
             })
         }
     };
@@ -399,12 +445,15 @@ pub(crate) const MAX_CT_FINALIZING: usize = 2;
 /// data tiles it must re-scan. Runs on a blocking thread, never on the event loop.
 /// `log` is the pinned log the task names (None: no log access, so disagreement is
 /// disputed); `seed` is this verifier's secret spot-check seed.
+/// `anchor`: in follow mode, the coordinator's accepted head; the checkpoint used to verify
+/// must provably extend it, so pending tasks are never checked against a forked view.
 pub(crate) fn finalize_ct(
     v: CtTaskVerifier,
     engine: &Engine,
     log: Option<&CtLogInfo>,
     seed: &[u8; 32],
     now: u64,
+    anchor: Option<&cybermesh_ct::Checkpoint>,
 ) -> VerificationRecord {
     let src = log.and_then(|l| HttpTileSource::new(l, Duration::from_secs(30)).ok());
     // Without a checkpoint signed by the pinned key there is no trusted log access: the task
@@ -412,6 +461,9 @@ pub(crate) fn finalize_ct(
     let auth = match (&src, log) {
         (Some(s), Some(l)) => match fetch_verified_checkpoint(s, l).and_then(|cp| {
             cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+            if let Some(a) = anchor {
+                cybermesh_ct::proof::TileAuthenticator::new(s, cp.clone()).prove_extends(a)?;
+            }
             Ok(cp)
         }) {
             Ok(cp) => Some(cybermesh_ct::proof::TileAuthenticator::new(s, cp)),
@@ -528,6 +580,11 @@ struct Coordinator {
     ct_finalizing: usize,
     records_in: crate::records::RecordStore,
     records_out: crate::records::RecordPublisher,
+    follower: Option<crate::ct_follow::Follower>,
+    ct_polling: bool,
+    /// Consecutive polls whose checkpoint did not extend the accepted head.
+    ct_inconsistent_streak: u32,
+    ct_poll_tx: tokio::sync::mpsc::UnboundedSender<PollOutcome>,
 }
 
 impl Coordinator {
@@ -788,12 +845,20 @@ impl Coordinator {
                 let permits = Arc::clone(&self.ct_permits);
                 let tx = self.ct_finalized.clone();
                 let task_id = task_id.to_owned();
+                let anchor = self.follower.as_ref().and_then(|f| f.head().cloned());
                 tokio::spawn(async move {
                     let _permit = permits.acquire_owned().await.ok();
                     let now = ctx.now;
                     let record = tokio::task::spawn_blocking(move || {
                         let seed = ct.as_ref().map_or([0u8; 32], |c| c.seed);
-                        finalize_ct(v, &engine, ct.as_ref().map(|c| &c.log), &seed, now)
+                        finalize_ct(
+                            v,
+                            &engine,
+                            ct.as_ref().map(|c| &c.log),
+                            &seed,
+                            now,
+                            anchor.as_ref(),
+                        )
                     })
                     .await
                     .ok();
@@ -811,7 +876,12 @@ impl Coordinator {
         self.ct_finalizing = self.ct_finalizing.saturating_sub(1);
         match done.record {
             Some(r) => self.apply_record(&done.task_id, done.ctx, r),
-            None => warn!(task = %done.task_id, "CT verification failed internally; task dropped"),
+            None => {
+                warn!(task = %done.task_id, "CT verification failed internally; batch will be retried");
+                if let Some((first, count)) = done.ctx.batch.ct {
+                    self.ct_batch_finished(first, count, false);
+                }
+            }
         }
     }
 
@@ -868,10 +938,15 @@ impl Coordinator {
             info!(task = %task_id, status = ?record.status, next_attempt = b.attempt, "reassigning");
             self.report.reassignments += 1;
             self.pending.push_front(b);
-        } else if let Some(t) = batch.first_issued {
-            self.report
-                .settle_latency_ms
-                .push(u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX));
+        } else {
+            if let Some(t) = batch.first_issued {
+                self.report
+                    .settle_latency_ms
+                    .push(u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX));
+            }
+            if let Some((first, count)) = batch.ct {
+                self.ct_batch_finished(first, count, record.status == TaskStatus::Verified);
+            }
         }
         self.settled.retain(|_, s| s.forget_after > now);
         if self.settled.len() < 10_000 {
@@ -1024,6 +1099,130 @@ impl Coordinator {
         net.report(m, acc).await;
     }
 
+    /// A CT batch is finished (verified, or given up): advance the follow resume point.
+    /// Only a verified batch advances the resume point; a given-up one is retried later.
+    fn ct_batch_finished(&mut self, first_tile: u64, count: u32, verified: bool) {
+        if let Some(f) = &mut self.follower {
+            if verified {
+                f.verified(first_tile);
+            } else {
+                f.gave_up(first_tile, count);
+            }
+            self.report.ct_tiles_unverified = f.unverified_tiles();
+            if let Err(e) = f.persist() {
+                warn!(error = %e, "failed to persist CT follow state");
+            }
+        }
+    }
+
+    /// Polls the followed log's checkpoint on a blocking thread.
+    fn start_ct_poll(&mut self) {
+        let (Some(ct), Some(f)) = (&self.s.ct, &self.follower) else {
+            return;
+        };
+        self.ct_polling = true;
+        let log = ct.log.clone();
+        let head = f.head().cloned();
+        let now = self.s.clock.now();
+        let tx = self.ct_poll_tx.clone();
+        // The outcome is always sent, even if the blocking poll panics, so polling resumes.
+        tokio::spawn(async move {
+            let outcome = tokio::task::spawn_blocking(move || {
+                let src = HttpTileSource::new(&log, Duration::from_secs(30))
+                    .map_err(|e| PollOutcome::Failed(e.to_string()))?;
+                let cp = fetch_verified_checkpoint(&src, &log)
+                    .and_then(|cp| {
+                        cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+                        Ok(cp)
+                    })
+                    .map_err(|e| PollOutcome::Failed(e.to_string()))?;
+                if let Some(h) = &head
+                    && cp.size < h.size
+                {
+                    // An older tree (a lagging mirror or CDN), not a rewrite: just stale.
+                    return Err(PollOutcome::Failed(format!(
+                        "checkpoint size {} is older than the accepted head {}",
+                        cp.size, h.size
+                    )));
+                }
+                if let Some(h) = head {
+                    cybermesh_ct::proof::TileAuthenticator::new(&src, cp.clone())
+                        .prove_extends(&h)
+                        .map_err(|e| match e {
+                            cybermesh_ct::CtError::Unauthenticated(m) => {
+                                PollOutcome::Inconsistent(m)
+                            }
+                            other => PollOutcome::Failed(other.to_string()),
+                        })?;
+                }
+                Ok(PollOutcome::Head(cp))
+            })
+            .await;
+            let outcome = match outcome {
+                Ok(Ok(o) | Err(o)) => o,
+                Err(e) => PollOutcome::Failed(format!("poll panicked: {e}")),
+            };
+            let _ = tx.send(outcome);
+        });
+    }
+
+    fn on_ct_poll(&mut self, outcome: PollOutcome) {
+        self.ct_polling = false;
+        let Some(f) = &mut self.follower else {
+            return;
+        };
+        let log_id = self
+            .s
+            .ct
+            .as_ref()
+            .map(|c| c.log.log_id.clone())
+            .unwrap_or_default();
+        match outcome {
+            PollOutcome::Head(cp) => {
+                let size = cp.size;
+                f.accept_head(cp);
+                self.ct_inconsistent_streak = 0;
+                self.report.ct_checkpoints_verified += 1;
+                let pending_ct = self.pending.iter().filter(|b| b.ct.is_some()).count();
+                // Given-up batches first (bounded retries), then newly completed tiles.
+                let mut batches = f.retries();
+                batches
+                    .extend(f.schedule(pending_ct + batches.len(), 4 * self.s.max_inflight.max(1)));
+                for (first, count) in &batches {
+                    self.pending.push_back(Batch {
+                        domains: Vec::new(),
+                        ct: Some((*first, *count)),
+                        attempt: 0,
+                        queued_at: Instant::now(),
+                        exclude: BTreeSet::new(),
+                        first_issued: None,
+                    });
+                }
+                self.report.ct_next_tile = f.next_tile();
+                self.report.ct_lag_tiles = f.lag();
+                if let Err(e) = f.persist() {
+                    warn!(error = %e, "failed to persist CT follow state");
+                }
+                if !batches.is_empty() {
+                    info!(log = %log_id, size, scheduled = batches.len(), next_tile = f.next_tile(), lag_tiles = f.lag(), "followed CT log grew");
+                }
+            }
+            PollOutcome::Inconsistent(e) => {
+                self.report.ct_log_inconsistencies += 1;
+                self.ct_inconsistent_streak += 1;
+                warn!(log = %log_id, error = %e, "CT log checkpoint does not extend the previous one: possible split view or rewritten history; not followed");
+                if self.ct_inconsistent_streak >= MAX_INCONSISTENT_POLLS {
+                    self.report.ct_follow_halted = true;
+                    error!(log = %log_id, "CT follow halted after repeated inconsistent checkpoints; investigate the log, then `cybermesh ct follow-reset`");
+                }
+            }
+            PollOutcome::Failed(e) => {
+                self.report.ct_poll_failures += 1;
+                warn!(log = %log_id, error = %e, "CT checkpoint poll failed");
+            }
+        }
+    }
+
     async fn on_heartbeat(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
         let now = self.s.clock.now();
         match verify_heartbeat(&m.data, &self.s.manifest, now, &self.limits) {
@@ -1116,7 +1315,29 @@ pub async fn run_coordinator(
             first_issued: None,
         })
         .collect();
-    if let Some(ct) = &setup.ct {
+    // Follow mode: schedule nothing now; the first checkpoint poll does (resuming from saved
+    // state if there is any).
+    let follower = match setup
+        .ct
+        .as_ref()
+        .and_then(|ct| ct.follow.as_ref().map(|f| (ct, f)))
+    {
+        Some((ct, f)) => {
+            let fl = crate::ct_follow::Follower::load_or_start(
+                &setup.state_dir.join("ct-follow.json"),
+                &ct.log.log_id,
+                ct.first_tile,
+                ct.tile_count,
+                f.until_tile,
+                ct.tiles_per_task,
+                f.max_tiles_per_poll,
+            )?;
+            info!(log = %ct.log.log_id, resume_from = fl.next_tile(), poll_secs = f.poll.as_secs(), "following CT log");
+            Some(fl)
+        }
+        None => None,
+    };
+    if let Some(ct) = setup.ct.as_ref().filter(|c| c.follow.is_none()) {
         let first = match ct.first_tile {
             Some(f) => Some(f),
             None => {
@@ -1162,6 +1383,7 @@ pub async fn run_coordinator(
     }
     info!(peer = %net.local_peer_id, batches = pending.len(), domains = setup.domains.len(), "coordinator started");
     let (ct_finalized, mut ct_finalized_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (ct_poll_tx, mut ct_poll_rx) = tokio::sync::mpsc::unbounded_channel::<PollOutcome>();
     let verifier_id = verifier_identity(&setup.manifest, &setup.verifier)?;
     let max_message = Limits::default().max_envelope_bytes;
     let records_in = crate::records::RecordStore::open(
@@ -1174,6 +1396,10 @@ pub async fn run_coordinator(
     let mut records_out = crate::records::RecordPublisher::new(max_message);
     records_out.load_recent(&setup.state_dir.join("records"), setup.clock.now());
     let mut c = Coordinator {
+        follower,
+        ct_polling: false,
+        ct_inconsistent_streak: 0,
+        ct_poll_tx,
         records_in,
         records_out,
         verifier_id,
@@ -1199,6 +1425,12 @@ pub async fn run_coordinator(
     let started = Instant::now();
     let mut warmed_up = c.s.start_after_workers == 0;
     let mut records_wait_since: Option<Instant> = None;
+    let mut follow_tick = tokio::time::interval(
+        c.s.ct
+            .as_ref()
+            .and_then(|ct| ct.follow.as_ref())
+            .map_or(Duration::from_secs(3600), |f| f.poll),
+    );
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
@@ -1222,6 +1454,8 @@ pub async fn run_coordinator(
                 None => break,
             },
             Some(done) = ct_finalized_rx.recv() => c.on_ct_finalized(done),
+            Some(outcome) = ct_poll_rx.recv() => c.on_ct_poll(outcome),
+            _ = follow_tick.tick(), if c.follower.is_some() && !c.ct_polling && !c.report.ct_follow_halted => c.start_ct_poll(),
             _ = manifest_tick.tick() => {
                 c.records_in.prune(c.s.clock.now());
                 if let Some(src) = c.s.manifest_source.clone() {
@@ -1291,6 +1525,9 @@ pub async fn run_coordinator(
                         if b.queued_at.elapsed() >= c.s.abandon_after {
                             warn!(domains = b.domains.len(), attempt = b.attempt, "abandoning batch: not enough distinct operators available");
                             c.report.domains_abandoned += b.domains.len();
+                            if let Some((first, count)) = b.ct {
+                                c.ct_batch_finished(first, count, false);
+                            }
                         } else {
                             c.pending.push_back(b);
                         }
@@ -1306,6 +1543,8 @@ pub async fn run_coordinator(
                     && c.pending.is_empty()
                     && c.inflight.is_empty()
                     && c.ct_finalizing == 0
+                    && (c.report.ct_follow_halted
+                        || c.follower.as_ref().is_none_or(crate::ct_follow::Follower::done))
                     // Wait for own records to go out only if peers need them for a quorum
                     // (with no other verifier subscribed, publishing cannot succeed).
                     && (c.records_needed() == 0 || c.records_out.is_idle())

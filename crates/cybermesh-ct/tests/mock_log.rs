@@ -179,3 +179,34 @@ fn checkpoints_and_tiles_that_the_log_did_not_sign_are_refused() {
     log.replace_file("checkpoint", text.into_bytes());
     assert!(fetch_verified_checkpoint(&log, &info).is_err());
 }
+
+#[test]
+fn a_growing_log_keeps_its_history_and_proves_it() {
+    let mut log = MockLog::build("ct.example/grow", &demo_entries(2)).unwrap();
+    let info = log.log_info("mock", "http://127.0.0.1/");
+    let before = fetch_verified_checkpoint(&log, &info).unwrap();
+    let tiles_before: Vec<Vec<u8>> = (0..2).map(|t| log.data_tile(t).unwrap()).collect();
+    log.extend(&demo_entries(3)).unwrap();
+    let after = fetch_verified_checkpoint(&log, &info).unwrap();
+    assert_eq!((before.size, after.size), (512, 1280));
+    for (t, bytes) in tiles_before.iter().enumerate() {
+        assert_eq!(
+            &log.data_tile(t as u64).unwrap(),
+            bytes,
+            "history unchanged"
+        );
+    }
+    // The new checkpoint provably extends the old one, and the old tree's partial tile is
+    // still served for clients that hold the old checkpoint.
+    let auth = TileAuthenticator::new(&log, after.clone());
+    auth.prove_extends(&before).unwrap();
+    assert_eq!(
+        auth.tile_root(4).unwrap(),
+        scan_tile(&log.data_tile(4).unwrap(), 4, &engine())
+            .unwrap()
+            .root
+            .0
+    );
+    let old_auth = TileAuthenticator::new(&log, before);
+    assert!(old_auth.tile_root(1).is_ok());
+}

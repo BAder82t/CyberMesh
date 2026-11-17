@@ -18,6 +18,13 @@ use crate::util::{self, write_json};
 
 #[derive(Subcommand, Debug)]
 pub enum CtCmd {
+    /// Clear the accepted checkpoint of a followed log (`ct-follow.json`) after investigating
+    /// an inconsistency, keeping the resume point so no tile is skipped.
+    FollowReset {
+        /// Path to the coordinator's `state_dir/ct-follow.json`.
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Show a pinned log's current checkpoint.
     Checkpoint {
         #[arg(long)]
@@ -171,6 +178,18 @@ pub fn run(c: CtCmd) -> Result<()> {
             if let Some(p) = json_out {
                 write_json(&p, &matches)?;
             }
+            Ok(())
+        }
+        CtCmd::FollowReset { state } => {
+            let mut s: cybermesh_node::ct_follow::FollowState = util::read_json(&state)?;
+            let old = s.head.take();
+            write_json(&state, &s)?;
+            println!(
+                "{}: accepted head cleared (was size {}); following resumes at tile {} and will accept the log's next valid checkpoint",
+                s.log_id,
+                old.map_or(0, |h| h.size),
+                s.resume_from
+            );
             Ok(())
         }
         CtCmd::Report {

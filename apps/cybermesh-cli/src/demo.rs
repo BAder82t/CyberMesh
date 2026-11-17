@@ -246,7 +246,7 @@ pub fn run(c: DemoCmd) -> Result<()> {
     };
     let ct_section = match &ct_log {
         Some(id) => format!(
-            "\n# Certificate Transparency monitoring (investigation report; publishing warnings is off by default).\n[ct]\nlog_id = \"{id}\"\nfirst_tile = 0\ntile_count = {ct_tiles}\ntiles_per_task = 2\nreplication = 2\n"
+            "\n# Certificate Transparency monitoring (investigation report; publishing warnings is off by default).\n# The coordinator follows the log as it grows (verified, fresh, consistent checkpoints).\n[ct]\nlog_id = \"{id}\"\nfirst_tile = 0\ntile_count = {ct_tiles}\ntiles_per_task = 2\nreplication = 2\nfollow = true\npoll_secs = 2\nuntil_tile = {ct_tiles}\n"
         ),
         None => String::new(),
     };

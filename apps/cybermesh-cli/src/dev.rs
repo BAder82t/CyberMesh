@@ -20,8 +20,17 @@ pub enum DevCmd {
     MockCtLog {
         #[arg(long, default_value = "127.0.0.1:8090")]
         addr: String,
+        /// Full tiles at start.
         #[arg(long, default_value_t = 8)]
         tiles: usize,
+        /// Grow by this many full tiles every `--grow-every-secs` (0: a static log).
+        #[arg(long, default_value_t = 0)]
+        grow_tiles: usize,
+        #[arg(long, default_value_t = 5)]
+        grow_every_secs: u64,
+        /// Stop growing at this many full tiles.
+        #[arg(long, default_value_t = 0)]
+        max_tiles: usize,
     },
     TestVectors {
         #[arg(long)]
@@ -70,13 +79,37 @@ fn outcome(
 pub fn run(c: DevCmd) -> Result<()> {
     let (out, NOW) = match c {
         DevCmd::TestVectors { out, now } => (out, now),
-        DevCmd::MockCtLog { addr, tiles } => {
+        DevCmd::MockCtLog {
+            addr,
+            tiles,
+            grow_tiles,
+            grow_every_secs,
+            max_tiles,
+        } => {
             let log = cybermesh_ct::mock::MockLog::build(
                 "ct.cybermesh.test/mock",
                 &cybermesh_ct::mock::demo_entries(tiles),
             )?;
-            let (url, handle) = cybermesh_ct::mock::serve(std::sync::Arc::new(log), &addr)?;
+            let shared = std::sync::Arc::new(std::sync::RwLock::new(log));
+            let (url, handle) =
+                cybermesh_ct::mock::serve_shared(std::sync::Arc::clone(&shared), &addr)?;
             eprintln!("mock static CT log with {} entries at {url}", tiles * 256);
+            if grow_tiles > 0 {
+                // Grows like a real log: history unchanged, a new signed checkpoint each time.
+                std::thread::spawn(move || {
+                    let mut now = tiles;
+                    while now + grow_tiles <= max_tiles.max(tiles) {
+                        std::thread::sleep(std::time::Duration::from_secs(grow_every_secs));
+                        let more = cybermesh_ct::mock::demo_entries(grow_tiles);
+                        let ok = shared.write().map(|mut l| l.extend(&more).is_ok());
+                        if !matches!(ok, Ok(true)) {
+                            break;
+                        }
+                        now += grow_tiles;
+                        eprintln!("mock CT log grew to {} full tiles", now);
+                    }
+                });
+            }
             let _ = handle.join();
             return Ok(());
         }

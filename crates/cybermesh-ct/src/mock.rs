@@ -9,7 +9,7 @@
 //! pin it. It protects nothing: anyone can sign as the mock log.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 
 use base64::Engine as _;
@@ -59,6 +59,8 @@ pub struct MockLog {
     pub size: u64,
     /// Checkpoint origin (and signature key name).
     pub origin: String,
+    /// All leaf hashes, in order (kept so the log can grow).
+    leaves: Vec<[u8; 32]>,
 }
 
 /// Signs a checkpoint body as a static CT log: an RFC 6962 `TreeHeadSignature` as a C2SP
@@ -122,15 +124,29 @@ fn tbs_of(der: &[u8]) -> Result<Vec<u8>, CtError> {
 impl MockLog {
     /// Builds a log; `entries.len()` must be a multiple of 256 (full tiles only).
     pub fn build(origin: &str, entries: &[MockEntry]) -> Result<Self, CtError> {
+        let mut log = Self {
+            files: BTreeMap::new(),
+            size: 0,
+            origin: origin.to_owned(),
+            leaves: Vec::new(),
+        };
+        log.extend(entries)?;
+        Ok(log)
+    }
+
+    /// Appends entries (a multiple of 256) as a real log grows: existing data tiles and full
+    /// hash tiles are unchanged, earlier partial hash tiles stay available, and a new
+    /// checkpoint is signed.
+    pub fn extend(&mut self, entries: &[MockEntry]) -> Result<(), CtError> {
         if entries.is_empty() || !entries.len().is_multiple_of(256) {
             return Err(CtError::Malformed(
                 "mock log needs a multiple of 256 entries".into(),
             ));
         }
         let key = KeyPair::generate().map_err(|e| CtError::Malformed(e.to_string()))?;
-        let mut files = BTreeMap::new();
-        let mut all_leaves = Vec::with_capacity(entries.len());
-        for (t, chunk) in entries.chunks(256).enumerate() {
+        let first_tile = self.leaves.len() / 256;
+        for (j, chunk) in entries.chunks(256).enumerate() {
+            let t = first_tile + j;
             let mut data = Vec::new();
             for (i, e) in chunk.iter().enumerate() {
                 let index = (t * 256 + i) as u64;
@@ -154,19 +170,20 @@ impl MockLog {
                     )
                 };
                 data.extend_from_slice(&leaf);
-                all_leaves.push(hash);
+                self.leaves.push(hash);
             }
-            files.insert(data_tile_path(t as u64), data);
+            self.files.insert(data_tile_path(t as u64), data);
         }
         // Hash tiles at every level: level L holds hashes of complete subtrees of 256^L
         // leaves; the last tile of a level may be partial.
-        let mut nodes: Vec<[u8; 32]> = all_leaves.clone();
+        let mut nodes: Vec<[u8; 32]> = self.leaves.clone();
         let mut level: u8 = 0;
         while !nodes.is_empty() {
             let mut next = Vec::new();
             for (n, chunk) in nodes.chunks(256).enumerate() {
                 let width = (chunk.len() < 256).then(|| u8::try_from(chunk.len()).unwrap_or(255));
-                files.insert(hash_tile_path(level, n as u64, width), chunk.concat());
+                self.files
+                    .insert(hash_tile_path(level, n as u64, width), chunk.concat());
                 if chunk.len() == 256 {
                     next.push(merkle::root(chunk));
                 }
@@ -174,17 +191,13 @@ impl MockLog {
             nodes = next;
             level += 1;
         }
-        let size = entries.len() as u64;
-        let root = merkle::root(&all_leaves);
-        files.insert(
+        self.size = self.leaves.len() as u64;
+        let root = merkle::root(&self.leaves);
+        self.files.insert(
             "checkpoint".into(),
-            sign_checkpoint(origin, size, &root)?.into_bytes(),
+            sign_checkpoint(&self.origin, self.size, &root)?.into_bytes(),
         );
-        Ok(Self {
-            files,
-            size,
-            origin: origin.to_owned(),
-        })
+        Ok(())
     }
 
     /// The `ct-logs` evidence entry for this log served at `monitoring_url`.
@@ -222,6 +235,14 @@ impl TileSource for MockLog {
 
 /// Serves a mock log on a loopback address. Returns the monitoring prefix URL.
 pub fn serve(log: Arc<MockLog>, addr: &str) -> Result<(String, JoinHandle<()>), CtError> {
+    serve_shared(Arc::new(RwLock::new((*log).clone())), addr)
+}
+
+/// Serves a mock log that may grow while it is served ([`MockLog::extend`] under the lock).
+pub fn serve_shared(
+    log: Arc<RwLock<MockLog>>,
+    addr: &str,
+) -> Result<(String, JoinHandle<()>), CtError> {
     let server = tiny_http::Server::http(addr).map_err(|e| CtError::Http(e.to_string()))?;
     let local = server
         .server_addr()
@@ -231,8 +252,9 @@ pub fn serve(log: Arc<MockLog>, addr: &str) -> Result<(String, JoinHandle<()>), 
     let handle = std::thread::spawn(move || {
         for req in server.incoming_requests() {
             let path = req.url().trim_start_matches('/').to_owned();
-            let resp = match log.files.get(&path) {
-                Some(b) => tiny_http::Response::from_data(b.clone()),
+            let body = log.read().ok().and_then(|l| l.files.get(&path).cloned());
+            let resp = match body {
+                Some(b) => tiny_http::Response::from_data(b),
                 None => tiny_http::Response::from_data(Vec::new()).with_status_code(404),
             };
             let _ = req.respond(resp);

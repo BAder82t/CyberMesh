@@ -209,3 +209,66 @@ async fn an_independent_verifier_checks_ct_shards_against_the_log_itself() {
     assert!(rel.lookup(TOKEN_ONLY).is_none());
     assert!(ct.iter().any(|(r, _)| r.status == TaskStatus::Verified));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_coordinator_follows_a_growing_log() {
+    // The log starts with 2 full tiles and gains 2 more while the network runs; the
+    // coordinator follows it (verified, fresh, consistent checkpoints) until tile 4.
+    let mut o = options(None);
+    o.ct_log = Some(Arc::new(
+        MockLog::build("ct.example/test", &demo_entries(2)).unwrap(),
+    ));
+    o.ct_tiles = 2;
+    o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_grow = Some((Duration::from_secs(3), 2));
+    let h = Harness::start(o);
+    let (_net, report, _, dir) = h.finish(Duration::from_secs(120)).await;
+    assert_eq!(report.ct_tiles_verified, 4, "{report:?}");
+    assert_eq!(report.ct_next_tile, 4);
+    assert!(
+        report.ct_checkpoints_verified >= 2,
+        "it saw the log grow: {report:?}"
+    );
+    assert_eq!(report.ct_log_inconsistencies, 0);
+    let mut tiles: Vec<u64> = report
+        .records
+        .iter()
+        .filter_map(|(_, r)| r.ct.as_ref())
+        .flat_map(|c| c.first_tile..c.first_tile + u64::from(c.tile_count))
+        .collect();
+    tiles.sort_unstable();
+    tiles.dedup();
+    assert_eq!(tiles, vec![0, 1, 2, 3]);
+    // Progress was saved for a restart: everything below tile 4 is settled.
+    let state: cybermesh_node::ct_follow::FollowState = serde_json::from_slice(
+        &std::fs::read(dir.path().join("coordinator/ct-follow.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state.resume_from, 4);
+    assert_eq!(state.head.map(|h| h.size), Some(1024));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_that_rewrites_history_is_not_followed() {
+    // After 3 s the log is replaced by a different, larger tree signed with the same key:
+    // validly signed checkpoints that do not extend the accepted one.
+    let mut o = options(None);
+    o.ct_log = Some(Arc::new(
+        MockLog::build("ct.example/test", &demo_entries(2)).unwrap(),
+    ));
+    o.ct_tiles = 2;
+    o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_grow = Some((Duration::from_secs(3), 2));
+    o.ct_fork = true;
+    let h = Harness::start(o);
+    let (_net, report, _, _dir) = h.finish(Duration::from_secs(120)).await;
+    assert!(report.ct_log_inconsistencies >= 3, "{report:?}");
+    assert!(
+        report.ct_follow_halted,
+        "a bounded run ends instead of hanging"
+    );
+    assert_eq!(
+        report.ct_next_tile, 2,
+        "nothing scheduled from the rewritten tree"
+    );
+}

@@ -478,7 +478,7 @@ impl Verifier {
                 tokio::spawn(async move {
                     let _permit = permits.acquire_owned().await.ok();
                     let record = tokio::task::spawn_blocking(move || {
-                        finalize_ct(v, &engine, log.as_ref(), &seed, now)
+                        finalize_ct(v, &engine, log.as_ref(), &seed, now, None)
                     })
                     .await
                     .ok();

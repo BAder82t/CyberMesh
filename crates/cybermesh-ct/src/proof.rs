@@ -178,6 +178,34 @@ impl<'a> TileAuthenticator<'a> {
         Ok(claimed)
     }
 
+    /// Proves that this (verified) checkpoint's tree extends `older`, an earlier verified
+    /// checkpoint of the same log: an RFC 6962 consistency proof is assembled from the log's
+    /// hash tiles and both signed roots are recomputed from it (RFC 9162 §2.1.4.2). A log that
+    /// rewrote or forked its history cannot pass. Equal sizes need equal roots.
+    pub fn prove_extends(&self, older: &Checkpoint) -> Result<(), CtError> {
+        let (m, n) = (older.size, self.checkpoint.size);
+        if m > n {
+            return Err(CtError::Unauthenticated(format!(
+                "checkpoint size {n} is smaller than an earlier verified size {m}"
+            )));
+        }
+        let mut ranges = Vec::new();
+        if m > 0 && m < n {
+            subproof_ranges(m, 0, n, true, &mut ranges);
+        }
+        let proof = ranges
+            .iter()
+            .map(|(a, b)| self.mth(*a, *b))
+            .collect::<Result<Vec<Hash>, CtError>>()?;
+        if merkle::verify_consistency(m, n, &older.root, &self.checkpoint.root, &proof) {
+            Ok(())
+        } else {
+            Err(CtError::Unauthenticated(format!(
+                "checkpoint of size {n} is not consistent with the earlier checkpoint of size {m}"
+            )))
+        }
+    }
+
     /// The root of the whole tree recomputed from the hash tiles (equals the signed root for
     /// a consistent log).
     pub fn tree_root(&self) -> Result<Hash, CtError> {
@@ -185,6 +213,25 @@ impl<'a> TileAuthenticator<'a> {
             return Ok(merkle::empty_root());
         }
         self.mth(0, self.checkpoint.size)
+    }
+}
+
+/// The ranges whose tree hashes form the RFC 6962 consistency proof `SUBPROOF(m, D[a:b], complete)`.
+fn subproof_ranges(m: u64, a: u64, b: u64, complete: bool, out: &mut Vec<(u64, u64)>) {
+    let n = b - a;
+    if m == n {
+        if !complete {
+            out.push((a, b));
+        }
+        return;
+    }
+    let k = largest_power_of_two_below(n);
+    if m <= k {
+        subproof_ranges(m, a, a + k, complete, out);
+        out.push((a + k, b));
+    } else {
+        subproof_ranges(m - k, a + k, b, false, out);
+        out.push((a, a + k));
     }
 }
 
@@ -222,8 +269,13 @@ mod tests {
             let leaves: Vec<Hash> = (0..n)
                 .map(|i| merkle::leaf_hash(&i.to_be_bytes()))
                 .collect();
+            Self::from_leaves(&leaves)
+        }
+
+        fn from_leaves(leaves: &[Hash]) -> Self {
+            let n = leaves.len() as u64;
             let mut files = BTreeMap::new();
-            let mut nodes = leaves.clone();
+            let mut nodes = leaves.to_vec();
             let mut level = 0u8;
             while !nodes.is_empty() {
                 let mut next = Vec::new();
@@ -239,7 +291,7 @@ mod tests {
             }
             Self {
                 files,
-                root: merkle::root(&leaves),
+                root: merkle::root(leaves),
                 n,
             }
         }
@@ -320,6 +372,56 @@ mod tests {
                 .collect();
             assert_eq!(auth.tile_root(t).unwrap(), merkle::root(&leaves), "t = {t}");
         }
+    }
+
+    /// A tree of `n` leaves sharing only its first `fork_at` leaves with [`HashLog::new`].
+    fn forked(n: u64, fork_at: u64) -> HashLog {
+        let leaves: Vec<Hash> = (0..n)
+            .map(|i| {
+                let v = if i >= fork_at { i + 1_000_000 } else { i };
+                merkle::leaf_hash(&v.to_be_bytes())
+            })
+            .collect();
+        HashLog::from_leaves(&leaves)
+    }
+
+    #[test]
+    fn consistency_between_checkpoints_is_proven_from_tiles() {
+        for (m, n) in [
+            (1u64, 2u64),
+            (256, 257),
+            (300, 70_000),
+            (65_536, 70_000),
+            (69_999, 70_000),
+            (70_000, 70_000),
+        ] {
+            let old = HashLog::new(m);
+            let new = HashLog::new(n);
+            let auth = TileAuthenticator::new(&new, new.checkpoint());
+            auth.prove_extends(&old.checkpoint())
+                .unwrap_or_else(|e| panic!("{m} -> {n}: {e}"));
+        }
+        // A log that rewrote history (entries from 50,000 on differ) cannot prove it extends
+        // the earlier tree, even with all of its own tiles served correctly.
+        let old = HashLog::new(60_000);
+        let rewritten = forked(70_000, 50_000);
+        let auth = TileAuthenticator::new(&rewritten, rewritten.checkpoint());
+        assert!(
+            auth.tile_root(1).is_ok(),
+            "the new tree itself is consistent"
+        );
+        assert!(matches!(
+            auth.prove_extends(&old.checkpoint()),
+            Err(CtError::Unauthenticated(_))
+        ));
+        // Shrinking, or the same size with a different root, is refused.
+        let small = HashLog::new(1000);
+        let auth = TileAuthenticator::new(&small, small.checkpoint());
+        assert!(
+            auth.prove_extends(&HashLog::new(2000).checkpoint())
+                .is_err()
+        );
+        assert!(auth.prove_extends(&forked(1000, 10).checkpoint()).is_err());
     }
 
     #[test]
