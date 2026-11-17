@@ -6,7 +6,9 @@ use cybermesh_crypto::{Digest, Envelope, canonical};
 use cybermesh_intelligence::*;
 use cybermesh_protocol::testkit::{TestNetwork, test_key};
 use cybermesh_protocol::*;
-use cybermesh_verifier::{Classification, DomainOutcome, TaskStatus, VerificationRecord};
+use cybermesh_verifier::{
+    Classification, DomainOutcome, TaskStatus, VerificationRecord, VerifierId,
+};
 
 const NOW: u64 = 1_800_000_000;
 
@@ -37,9 +39,24 @@ fn outcome(domain: &str, c: Classification, score: u16) -> DomainOutcome {
 }
 
 fn record(task: &str, outcomes: Vec<DomainOutcome>, at: u64) -> (Digest, VerificationRecord) {
+    record_by("org-a", "verifier", task, outcomes, at)
+}
+
+/// A record signed by verifier `key_label` of operator `op`.
+fn record_by(
+    op: &str,
+    key_label: &str,
+    task: &str,
+    outcomes: Vec<DomainOutcome>,
+    at: u64,
+) -> (Digest, VerificationRecord) {
     let r = VerificationRecord {
         v: 1,
         network_id: "cybermesh-test".into(),
+        verifier: VerifierId {
+            key: test_key(key_label).key_id(),
+            operator: OperatorId::new(op).unwrap(),
+        },
         task_id: task.into(),
         attempt: 0,
         task_digest: Digest::of(task.as_bytes()),
@@ -71,6 +88,7 @@ fn params(seq: u64) -> BuildParams {
         issued_at: NOW,
         ttl_secs: 7 * 86_400,
         max_record_age_secs: 30 * 86_400,
+        min_verifiers: 1,
     }
 }
 
@@ -450,4 +468,254 @@ fn consumer_detects_forks_and_bad_text() {
     bad.entries[0].reasons[0].detail = "click <here>\u{7}".replace("\\u{7}", "\u{7}");
     bad.entries[0].reasons[0].detail.push('\u{7}');
     assert!(verify_release(&signed(&net, &bad, &[0, 1]), &root, NOW, None).is_err());
+}
+
+// ---- Verifier quorum (min_verifiers) ----
+
+const X: &str = "examplebank-login.phish.localhost";
+
+fn quorum(k: usize) -> BuildParams {
+    BuildParams {
+        min_verifiers: k,
+        ..params(1)
+    }
+}
+
+fn action(recs: &[(Digest, VerificationRecord)], k: usize) -> Option<Action> {
+    build_release(recs, &[], &quorum(k))
+        .unwrap()
+        .lookup(X)
+        .map(|e| e.action)
+}
+
+#[test]
+fn one_verifier_can_neither_list_nor_escalate_alone() {
+    let a = record_by(
+        "org-a",
+        "verifier",
+        "a1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 30,
+    );
+    let b_warn = record_by(
+        "org-b",
+        "org-b-verifier",
+        "a1",
+        vec![outcome(X, Classification::Warn, 4900)],
+        NOW - 20,
+    );
+    let c_block = record_by(
+        "org-c",
+        "org-c-verifier",
+        "a1",
+        vec![outcome(X, Classification::Block, 9000)],
+        NOW - 10,
+    );
+    // Quorum 1 is the single-verifier behaviour.
+    assert_eq!(action(std::slice::from_ref(&a), 1), Some(Action::Block));
+    // Quorum 2: one verifier alone lists nothing.
+    assert_eq!(action(std::slice::from_ref(&a), 2), None);
+    // A second verifier saying warn lists it, but only as warn.
+    assert_eq!(action(&[a.clone(), b_warn.clone()], 2), Some(Action::Warn));
+    // Two verifiers saying block make it a block.
+    assert_eq!(
+        action(&[a.clone(), b_warn.clone(), c_block.clone()], 2),
+        Some(Action::Block)
+    );
+    assert_eq!(action(&[a, b_warn, c_block], 3), Some(Action::Warn));
+}
+
+#[test]
+fn only_recomputed_records_count_towards_a_quorum() {
+    // org-b lacks the task's evidence: it can only echo the workers, so it is not independent.
+    let a = record_by(
+        "org-a",
+        "verifier",
+        "t1",
+        vec![outcome(X, Classification::Warn, 4900)],
+        NOW - 20,
+    );
+    let (_, mut b) = record_by(
+        "org-b",
+        "org-b-verifier",
+        "t1",
+        vec![outcome(X, Classification::Warn, 4900)],
+        NOW - 10,
+    );
+    b.recomputed = false;
+    let b = (Digest::of(&canonical::to_vec(&b).unwrap()), b);
+    assert_eq!(action(&[a.clone(), b.clone()], 2), None);
+    // The single-verifier behaviour (quorum 1) is unchanged.
+    assert_eq!(action(&[b], 1), Some(Action::Warn));
+}
+
+#[test]
+fn evidence_cites_each_record_with_its_own_task_and_stays_within_limits() {
+    let a = record_by(
+        "org-a",
+        "verifier",
+        "task-a",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 20,
+    );
+    let b = record_by(
+        "org-b",
+        "org-b-verifier",
+        "task-b",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 10,
+    );
+    let rel = build_release(&[a.clone(), b.clone()], &[], &quorum(2)).unwrap();
+    let ev = &rel.lookup(X).unwrap().evidence;
+    assert!(ev.iter().any(|r| r.digest == a.0 && r.id == "task-a"));
+    assert!(ev.iter().any(|r| r.digest == b.0 && r.id == "task-b"));
+    // Many pinned sources: the quorum's records are still cited and the cap holds.
+    let many = |rec: (Digest, VerificationRecord)| {
+        let mut r = rec.1;
+        r.evidence = (0..20)
+            .map(|i| (format!("src-{i:02}"), Digest::of(&[i])))
+            .collect();
+        (Digest::of(&canonical::to_vec(&r).unwrap()), r)
+    };
+    let (a, b) = (many(a), many(b));
+    let rel = build_release(&[a.clone(), b.clone()], &[], &quorum(2)).unwrap();
+    let ev = &rel.lookup(X).unwrap().evidence;
+    assert_eq!(ev.len(), 16);
+    assert!(ev.iter().any(|r| r.digest == a.0) && ev.iter().any(|r| r.digest == b.0));
+    let bytes = signed(&net(), &rel, &[0, 1]);
+    let root = TrustRoot::from_manifest(&net().manifest);
+    verify_release(&bytes, &root, NOW, None).unwrap();
+}
+
+#[test]
+fn quorum_counts_operators_not_keys() {
+    let a1 = record_by(
+        "org-a",
+        "verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 20,
+    );
+    let a2 = record_by(
+        "org-a",
+        "org-a-second-verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 10,
+    );
+    assert_eq!(action(&[a1, a2], 2), None);
+}
+
+#[test]
+fn withdrawn_support_below_quorum_delists() {
+    let a = record_by(
+        "org-a",
+        "verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 30,
+    );
+    let b = record_by(
+        "org-b",
+        "org-b-verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 30,
+    );
+    let c = record_by(
+        "org-c",
+        "org-c-verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 30,
+    );
+    // org-b's newer record no longer lists it.
+    let b_later = record_by(
+        "org-b",
+        "org-b-verifier",
+        "t2",
+        vec![outcome(X, Classification::None, 100)],
+        NOW - 5,
+    );
+    assert_eq!(action(&[a.clone(), b.clone(), b_later.clone()], 2), None);
+    // With three verifiers, one withdrawal leaves the quorum intact.
+    assert_eq!(action(&[a, b, c, b_later], 2), Some(Action::Block));
+}
+
+#[test]
+fn quorum_entries_cite_every_supporting_record_and_ignore_input_order() {
+    let a = record_by(
+        "org-a",
+        "verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 30,
+    );
+    let b = record_by(
+        "org-b",
+        "org-b-verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 9500)],
+        NOW - 20,
+    );
+    let forward = build_release(&[a.clone(), b.clone()], &[], &quorum(2)).unwrap();
+    let backward = build_release(&[b.clone(), a.clone()], &[], &quorum(2)).unwrap();
+    assert_eq!(forward, backward);
+    let e = forward.lookup(X).unwrap();
+    let cited: Vec<Digest> = e
+        .evidence
+        .iter()
+        .filter(|r| r.kind == EvidenceKind::Verification)
+        .map(|r| r.digest)
+        .collect();
+    assert!(cited.contains(&a.0) && cited.contains(&b.0));
+    assert!(forward.inputs.contains(&a.0) && forward.inputs.contains(&b.0));
+    // Content comes from the weaker supporting outcome.
+    assert_eq!(e.risk_score_bp, 9500);
+}
+
+#[test]
+fn relisting_after_an_upheld_appeal_needs_a_fresh_quorum() {
+    let decision = AppealDecision {
+        v: PROTOCOL_VERSION,
+        network_id: "cybermesh-test".into(),
+        appeal_id: "appeal-1".into(),
+        indicator: X.into(),
+        outcome: AppealOutcome::Upheld,
+        rationale: "owner verified".into(),
+        decided_at: NOW - 100,
+    };
+    let a_new = record_by(
+        "org-a",
+        "verifier",
+        "t2",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 10,
+    );
+    let b_old = record_by(
+        "org-b",
+        "org-b-verifier",
+        "t1",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 200,
+    );
+    let b_new = record_by(
+        "org-b",
+        "org-b-verifier",
+        "t2",
+        vec![outcome(X, Classification::Block, 10_000)],
+        NOW - 5,
+    );
+    let rel = build_release(
+        &[a_new.clone(), b_old],
+        std::slice::from_ref(&decision),
+        &quorum(2),
+    )
+    .unwrap();
+    assert!(
+        rel.lookup(X).is_none(),
+        "only one verifier confirmed after the decision"
+    );
+    let rel = build_release(&[a_new, b_new], &[decision], &quorum(2)).unwrap();
+    assert_eq!(rel.lookup(X).map(|e| e.action), Some(Action::Block));
 }

@@ -86,6 +86,36 @@ A third independent internal review covered the `ct-shard-scan` task type: the C
 | LOW | `ct scan` added the tile range without an overflow check. | `checked_add`. | — |
 | LOW | Entries without a `leaf_index` extension were accepted, so entries were not bound to their position. | The extension is required (static-ct-api mandates it). A real Let's Encrypt tile still parses. | `parse_data_tile` tests; one-tile check against Willow 2027h1 |
 
+## Fourth pass: independent verifiers (v0.2 branch)
+
+An independent internal review covered the multi-verifier change:
+- the verifier node;
+- the record identity binding;
+- the release quorum;
+- manifest `min_verifiers`.
+
+It found no CRITICAL issues, and it confirmed that:
+- record relabelling is refused;
+- operators, not keys, are counted;
+- the build is deterministic and cannot panic;
+- a single verifier can neither list nor escalate an entry, apart from finding 1 below.
+
+| Severity | Finding | Fix | Test or evidence |
+|---|---|---|---|
+| HIGH | A verifier lacking the task's engine or evidence still signed `Verified` warn records (`recomputed: false`). A colluding issuer could pin evidence the honest verifier lacks and borrow its signature for the quorum. | With a quorum of 2 or more, only recomputed records count. The verifier node reports such tasks as `tasks_incompatible`. | `only_recomputed_records_count_towards_a_quorum` |
+| MEDIUM | The verifier inserted every result, even rejected junk, into its fail-closed replay cache. An authenticated peer could fill it and lock out new tasks. | Only accepted results, and only followed tasks, enter the cache. | code review |
+| MEDIUM | The early-result buffer was bounded by count only (about 1 GiB of 256 KiB results), and late results for settled tasks were buffered. | Budgets of 1,024 results, 16 MiB and 32 per worker; settled tasks are remembered and their late results dropped. | `early_results_are_bounded_per_worker_and_in_bytes` |
+| MEDIUM | Followed tasks and CT verifications were unbounded, and many deadlines in one tick could stall the event loop. | At most 1,024 tasks followed, 16 settled per tick, and 8 CT verifications running or queued. | code review |
+| MEDIUM | Tasks were keyed by (id, attempt). A different task reusing the id, from another enrolled issuer, could take the real task's place. | Keyed by (id, attempt, task digest). Results are routed by the digest they answer. | code review |
+| MEDIUM | `release build` ignored the governance root's `min_sequence`, so an older manifest with a weaker quorum could be supplied. The quorum is enforced only by builders. | The floor is honoured. Documented that co-signers must rebuild from records with the current manifest. | `docs/architecture.md` §3.4a |
+| LOW | `min_verifiers` validation counted revoked verifier keys, and it rejected manifests without verifiers even at 1. | Only non-revoked operators are counted, and 1 is always accepted. | `min_verifiers_is_bounded_by_verifier_operators_and_omitted_when_one` |
+| LOW | Evidence could cite only one supporting record when many sources were pinned, and every citation used the representative record's task id. | Supporting records are cited first, each with its own task id, and the total stays at 16 or fewer. | `evidence_cites_each_record_with_its_own_task_and_stays_within_limits` |
+| LOW | The replay check on result payload digests never matched, because a different digest was inserted. | The same payload digest is inserted and checked. | code review |
+
+Kept as is:
+- **One bad record file aborts `release build`.** This is fail-closed on purpose: a signer should notice, not silently skip records.
+- **Independent verifiers do not prove late equivocation.** This is on the roadmap.
+
 ## Accepted or deferred (documented residual risk)
 
 - **Manifest state on restart.** Fixed on the v0.2 branch: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.
@@ -93,5 +123,6 @@ A third independent internal review covered the `ct-shard-scan` task type: the C
 - **Synchronous analysis.** `assess_task` runs on the worker's async loop. It costs about 1 ms per 32-domain task.
 - **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced.
 - **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It is a compile-time proc-macro reached through libp2p.
-- **Single verifier per network in the MVP.** Run verifiers at two or more organisations (roadmap).
+- **Quorum enforced by builders only.** Browsers never see records, so they cannot check `min_verifiers`. Co-signers must rebuild rather than sign a payload someone else built.
+- **Verifier quorum is opt-in.** Independent verifiers and the manifest's `min_verifiers` exist on the v0.2 branch. With `min_verifiers = 1`, the default for compatibility, a single verifier is still trusted as in v0.1. Networks should set 2 or more and run at least one more verifier than that.
 - **Late CT equivocation during finalisation.** CT tasks are finalised in the background. A second, conflicting result that arrives in that window (usually seconds) is ignored rather than recorded as provable equivocation. Results that arrive before or after the window are handled as for domain tasks.

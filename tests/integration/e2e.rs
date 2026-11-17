@@ -46,6 +46,7 @@ async fn full_pipeline_over_libp2p() {
         issued_at: now,
         ttl_secs: 86_400,
         max_record_age_secs: 86_400,
+        min_verifiers: 1,
     };
     let rel_a = build_release(&report.records, &[], &params).unwrap();
     let mut reversed = report.records.clone();

@@ -10,6 +10,14 @@ use cybermesh_protocol::testkit::{TestNetwork, sign_bytes, test_key};
 use cybermesh_protocol::*;
 use cybermesh_verifier::*;
 
+/// The test network's own verifier (operator `org-a`).
+fn vid() -> VerifierId {
+    VerifierId {
+        key: test_key("verifier").key_id(),
+        operator: OperatorId::new("org-a").unwrap(),
+    }
+}
+
 const NOW: u64 = 1_800_000_000;
 const PHISH: &str = "examplebank-secure-login.phish.localhost";
 const LEXICAL: &str = "examplebank-account-verify.phish.localhost";
@@ -100,6 +108,7 @@ impl Fixture {
         TaskVerifier::new(
             self.task.clone(),
             self.task_digest,
+            vid(),
             Policy::default(),
             Limits::default(),
         )
@@ -261,6 +270,7 @@ fn colluders_cannot_turn_a_feed_false_positive_on_a_popular_domain_into_a_block(
     let mut v = TaskVerifier::new(
         task.clone(),
         task_digest,
+        vid(),
         Policy::default(),
         Limits::default(),
     )
@@ -317,7 +327,9 @@ fn unsafe_policies_are_refused() {
             ..Policy::default()
         },
     ] {
-        assert!(TaskVerifier::new(f.task.clone(), f.task_digest, p, Limits::default()).is_err());
+        assert!(
+            TaskVerifier::new(f.task.clone(), f.task_digest, vid(), p, Limits::default()).is_err()
+        );
     }
 }
 

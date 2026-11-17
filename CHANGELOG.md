@@ -10,7 +10,10 @@
 - Optional `min_sequence` in the governance root: a floor for manifest sequences, also for nodes without stored state.
 - `cybermesh ct report` output now has a `coverage` section listing truncated and log-inconsistent tiles.
 
+- **Independent verifiers** (`cybermesh verifier run`). Other organisations follow tasks and results, recompute with their own engine, evidence, CT log access and spot-check seed, and sign their own records. With the new manifest field `min_verifiers`, a release lists a domain only if that many distinct verifier operators agree, and `block` only if that many say `block`. `release build` takes one `--records` directory per verifier and checks each record's named verifier against its signer and the manifest. The local demo runs a verifier at organisation B with `min_verifiers = 2`.
+
 ### Changed
+- `VerificationRecord` carries `verifier: {key, operator}` in its signed payload. `BuildParams` has `min_verifiers`.
 - Engine 0.4.0: plain truncations of brand tokens are no longer lookalikes. This came from real CT false positives.
 - Heartbeats carry `capabilities`, and verification records carry an optional `ct` section. This is a wire-format change: v0.1.0 nodes cannot interoperate with v0.2.0 nodes.
 - `ENGINE_VERSION` now records the pinned `x509-parser` version (`0.4.0+psl.2.1.255+idna.1.1.0+x509.0.18.1`).

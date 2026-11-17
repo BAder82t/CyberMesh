@@ -82,12 +82,24 @@ pub struct DomainOutcome {
     pub rationale: String,
 }
 
+/// The verifier that produced a record. It is part of the signed payload, so records from
+/// different verifiers never share a digest, and loaders check it against the envelope's
+/// signer and the trust manifest. Release quorums count `operator`s, not keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifierId {
+    pub key: KeyId,
+    pub operator: OperatorId,
+}
+
 /// Auditable result of verifying one task. Signed by the verifier when persisted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationRecord {
     pub v: u16,
     pub network_id: String,
+    /// Who verified (must equal the envelope signer when loaded).
+    pub verifier: VerifierId,
     pub task_id: String,
     pub attempt: u32,
     pub task_digest: Digest,

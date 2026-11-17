@@ -7,6 +7,9 @@
 //! * [`coordinator`]: the approved task issuer plus result verifier. It assigns each task to
 //!   workers of distinct operators, verifies and settles results, reassigns on timeouts and
 //!   writes signed verification records for release builders.
+//! * [`verifier`]: an independent verifier run by another organisation. It follows tasks
+//!   and results, settles every task with its own engine, evidence and key, and signs its
+//!   own records; releases need records from `min_verifiers` distinct verifier operators.
 //! * [`governor`]: CPU, memory, load and working-hour policy for workers.
 
 #![forbid(unsafe_code)]
@@ -15,6 +18,7 @@ pub mod config;
 pub mod coordinator;
 pub mod files;
 pub mod governor;
+pub mod verifier;
 pub mod worker;
 
 #[cfg(feature = "adversary-sim")]

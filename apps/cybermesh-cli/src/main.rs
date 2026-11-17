@@ -61,6 +61,9 @@ enum Cmd {
     /// Coordinator (task issuer + result verifier).
     #[command(subcommand)]
     Coordinator(CoordinatorCmd),
+    /// Independent verifier run by another organisation (verifies and signs its own records).
+    #[command(subcommand)]
+    Verifier(VerifierCmd),
     /// Threat-intelligence releases.
     #[command(subcommand)]
     Release(release_cmd::ReleaseCmd),
@@ -127,6 +130,15 @@ enum WorkerCmd {
     Stop {
         #[arg(long)]
         control_dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum VerifierCmd {
+    /// Run an independent verifier.
+    Run {
+        #[arg(long)]
+        config: PathBuf,
     },
 }
 
@@ -227,6 +239,14 @@ async fn main() -> Result<()> {
             let report =
                 cybermesh_node::coordinator::run_coordinator(setup, shutdown_signal().await)
                     .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
+        Cmd::Verifier(VerifierCmd::Run { config }) => {
+            let cfg = cybermesh_node::config::VerifierConfig::load(&config)?;
+            let setup = cybermesh_node::verifier::setup_from_config(&cfg, clock)?;
+            let report =
+                cybermesh_node::verifier::run_verifier(setup, shutdown_signal().await).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }

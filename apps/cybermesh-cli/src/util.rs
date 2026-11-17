@@ -30,8 +30,10 @@ pub fn write_json<T: serde::Serialize>(path: &Path, v: &T) -> Result<()> {
     write(path, &b)
 }
 
+/// Verifies a manifest against the governance root, honouring the root's `min_sequence`
+/// floor (so an old manifest with a weaker `min_verifiers` cannot be substituted).
 pub fn load_manifest(manifest: &Path, root: &Path, now: u64) -> Result<TrustManifest> {
     let root: GovernanceRoot = read_json(root)?;
     let env = Envelope::parse(&read(manifest)?, 32 * 1024 * 1024)?;
-    Ok(TrustManifest::verify(&env, &root, now, 0)?)
+    Ok(TrustManifest::verify(&env, &root, now, root.min_sequence)?)
 }

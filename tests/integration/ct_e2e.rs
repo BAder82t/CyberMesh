@@ -31,6 +31,7 @@ fn release(
             issued_at: SystemClock.now(),
             ttl_secs: 86_400,
             max_record_age_secs: 86_400,
+            min_verifiers: 1,
         },
     )
     .unwrap()
@@ -153,4 +154,58 @@ async fn fabricated_ct_match_is_never_published() {
         "{report:?}"
     );
     assert!(rel.lookup(LOOKALIKE).is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_independent_verifier_checks_ct_shards_against_the_log_itself() {
+    let h = Harness::start(Options {
+        independent_verifiers: 1,
+        ..options(Some("omit-matches"))
+    });
+    let (net, report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
+    let v = &verifiers[0];
+    let ct: Vec<_> = v
+        .records
+        .iter()
+        .filter_map(|(_, r)| r.ct.as_ref().map(|c| (r, c)))
+        .collect();
+    assert!(!ct.is_empty(), "{v:?}");
+    // Its own log checks and its own spot checks (its own secret seed).
+    assert!(
+        ct.iter()
+            .all(|(_, c)| c.tiles_checked_against_log == c.tile_count)
+    );
+    assert!(ct.iter().all(|(_, c)| !c.tiles_rescanned.is_empty()));
+    // The lying worker is caught by this verifier too.
+    assert!(
+        v.records
+            .iter()
+            .flat_map(|(_, r)| r.faults.iter())
+            .any(|f| f.operator.as_str() == "org-m" && f.kind == FaultKind::IncorrectResult),
+        "{v:?}"
+    );
+    // With a quorum of 2, the published CT warning needs both verifiers.
+    let all: Vec<_> = report
+        .records
+        .iter()
+        .chain(v.records.iter())
+        .cloned()
+        .collect();
+    let rel = build_release(
+        &all,
+        &[],
+        &BuildParams {
+            network_id: net.network_id.clone(),
+            sequence: 1,
+            previous: None,
+            issued_at: SystemClock.now(),
+            ttl_secs: 86_400,
+            max_record_age_secs: 86_400,
+            min_verifiers: 2,
+        },
+    )
+    .unwrap();
+    assert_eq!(rel.lookup(LOOKALIKE).map(|e| e.action), Some(Action::Warn));
+    assert!(rel.lookup(TOKEN_ONLY).is_none());
+    assert!(ct.iter().any(|(r, _)| r.status == TaskStatus::Verified));
 }

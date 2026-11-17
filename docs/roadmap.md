@@ -10,8 +10,16 @@ co-signed offline-verifiable releases, browser extension, Merkle log with local 
 OpenTimestamps anchoring, Docker and local demos, internal security review, evaluation.
 
 ## v0.2: harden the pilot
-- **Multiple verifiers.** Run verifiers at two or more organisations, require records from at least two verifiers for `block`, and persist manifest state, detecting manifest equivocation.
-- **Manifest state.** Persist the highest manifest sequence seen across restarts. Runtime reload with live revocation shipped in v0.1.0.
+- **Multiple verifiers.** Shipped on the `feat/multi-verifier` branch:
+  - independent verifier nodes (`cybermesh verifier run`);
+  - records that name their verifier;
+  - a governance-set `min_verifiers` release quorum (listing and `block` both need it).
+
+  Still open:
+  - distributing records between organisations over the network (today they are files collected by release signers);
+  - letting the coordinator act on faults proven by other verifiers;
+  - proving late equivocation at independent verifiers.
+- **Manifest state.** Shipped with CT monitoring: nodes persist the highest manifest sequence, and the governance root can set a `min_sequence` floor. Runtime reload with live revocation shipped in v0.1.0.
 - **Network.** Enable gossipsub peer scoring (invalid-message penalties), plus `/dns4` bootstrap and Kademlia discovery for more than 20 nodes.
 - **Witnessed transparency log.** Organisations co-sign log checkpoints using the C2SP `tlog-checkpoint` and `tlog-cosignature` formats. Consistency is checked before co-signing.
 - **Build integrity.** Signed, reproducible binary releases with attestations (SLSA provenance) and a published verification procedure.

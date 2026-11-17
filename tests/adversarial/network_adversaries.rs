@@ -27,6 +27,7 @@ async fn run_with(mode: &'static str) -> cybermesh_node::coordinator::Coordinato
         issued_at: SystemClock.now(),
         ttl_secs: 86_400,
         max_record_age_secs: 86_400,
+        min_verifiers: 1,
     };
     let rel = build_release(&report.records, &[], &params).unwrap();
     assert_eq!(

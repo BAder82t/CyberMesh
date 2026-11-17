@@ -11,7 +11,7 @@ How the network works:
 
 1. **Contribute.** Each organisation runs an opt-in worker, capped at about 1 % of one CPU core. It only accepts signed, allow-listed analysis tasks, never runs code from the network, and never touches internal data. Measured usage was 0.03–0.28 % CPU and 9–14 MiB of memory.
 2. **Analyse.** Workers run a deterministic, explainable engine over public signals and sign their findings.
-3. **Verify.** Findings from independent organisations are checked by recomputation, not by voting. A participant that submits a wrong signed answer is caught with proof and quarantined. Colluding organisations cannot force a site to be blocked.
+3. **Verify.** Findings from independent organisations are checked by recomputation, not by voting. Verification itself can run at several organisations, and the network sets how many must agree before anything is published. A participant that submits a wrong signed answer is caught with proof and quarantined. Colluding organisations cannot force a site to be blocked.
 4. **Protect.** Verified findings are published as signed intelligence that several organisations co-sign. Users' browsers verify it offline and warn before a dangerous site opens. No browsing data leaves the device, and protection continues during outages.
 5. **Audit.** Every published release is recorded in a Merkle transparency log. The log can optionally be anchored to a public timestamping chain, but anchoring is never needed for protection.
 
@@ -55,9 +55,11 @@ flowchart LR
     RA[Release signer A]
   end
   RB[Release signer B]
+  VB[Independent verifier B]
   C -- signed tasks (gossipsub) --> WA & WB1 & WB2 & WC
-  WA & WB1 & WB2 & WC -- signed results --> C
+  WA & WB1 & WB2 & WC -- signed results --> C & VB
   C -- signed verification records --> RA & RB
+  VB -- own signed records --> RA & RB
   RA & RB -- co-signed release --> CDN[(Static hosting)]
   CDN -- release.json --> EXT[Browser extension<br/>offline verification]
   RA -. digest .-> LOG[(Merkle log)] -. checkpoint .-> ANCHOR[(Local chain / OpenTimestamps)]
@@ -100,7 +102,7 @@ test page for a fictional bank — to see the warning. A step-by-step walkthroug
 | `crates/cybermesh-intelligence` | Deterministic, multi-signed releases; appeals and corrections; rollback; offline verification |
 | `crates/cybermesh-anchor` | RFC 9162 Merkle log and proofs, anchoring trait, local test chain, OpenTimestamps codec/client |
 | `crates/cybermesh-network` | Permissioned libp2p gossipsub transport (Noise, allowlist, rate limits, bounded queues) |
-| `crates/cybermesh-node` | Worker runtime with resource governor; coordinator runtime |
+| `crates/cybermesh-node` | Worker runtime with resource governor; coordinator and independent verifier runtimes |
 | `apps/cybermesh-cli` | `cybermesh` command-line tool |
 | `apps/browser-extension` | Chromium MV3 extension (offline verification, warnings, strict mode) |
 | `tests/` | End-to-end, adversarial and performance tests over real libp2p |
@@ -115,7 +117,7 @@ not created as separate crates; see [docs/architecture.md](docs/architecture.md#
 
 Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Three independent internal
 reviews (two security passes and one correctness review) were performed and their findings fixed; they are summarised in
-[docs/security-review.md](docs/security-review.md). A further internal review of the CT monitoring code (v0.2 branch) is
+[docs/security-review.md](docs/security-review.md). Further internal reviews of the CT monitoring code and of independent verifiers (v0.2 branch) are
 summarised there too. No external audit has been performed.
 
 ## Licence

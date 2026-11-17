@@ -12,12 +12,14 @@ The script runs these steps, and each one corresponds to an item of the MVP brie
 
 | Step | What happens |
 |---|---|
-| Setup | `cybermesh demo init` generates three governance keys (2-of-3), five organisations (A–D honest, M simulated compromised), six workers, a coordinator (issuer + verifier) and three release keys (2-of-3). It then signs the manifest. |
+| Setup | `cybermesh demo init` generates three governance keys (2-of-3), five organisations (A–D honest, M simulated compromised), six workers, a coordinator (issuer + verifier), an **independent verifier at organisation B**, and three release keys (2-of-3). It signs a manifest with `min_verifiers = 2`. |
+| Independent verifier | Organisation B's verifier follows every task and result, recomputes each task with its own engine and signs its own records. It catches the compromised worker on its own. |
 | Workers | Six worker processes start. Each enforces a 1 % CPU budget, a 200 MiB memory budget and a 64 KiB/s outbound budget. |
 | Tasks | The coordinator issues signed tasks. Each task goes to three workers of distinct organisations. |
 | Analysis | Workers analyse the domains in `datasets/demo/domains.txt` with the deterministic engine. |
 | Malicious worker | Organisation M's worker signs forged "malicious" verdicts. The verifier recomputes the task and records a provable `IncorrectResult` fault, then quarantines the worker. The affected task is reassigned and verified by honest organisations. |
-| Release | Organisations A and B build the release **independently**. `cmp` shows the payloads are byte-identical. Both co-sign the release. |
+| Quorum check | A release built from the coordinator's records alone has **0 entries**: one verifier organisation is not enough. |
+| Release | Organisations A and B build the release **independently** from both verifiers' records. `cmp` shows the payloads are byte-identical. Both co-sign the release. |
 | Verification | `release verify` checks the 2-of-3 distinct-operator signatures offline and records the anti-rollback state. |
 | Anchoring | The release digest is appended to the Merkle log. The checkpoint is anchored on the local test chain. An inclusion proof is produced and verified offline. |
 | Serving | `public/release.json` and the phishing test page are served on `127.0.0.1:8088`. |
@@ -72,7 +74,7 @@ Each container mounts:
 - **only its own key**, read-only;
 - only its own state directory, read-write.
 
-The two release signers run as separate containers, each holding one organisation's key. The web container sees only the published files. Docker Engine 26 or later is required, for volume subpaths.
+The two release signers run as separate containers, each holding one organisation's key. The Docker demo runs only the coordinator's verifier (`min_verifiers = 1`). The local demo (§1) shows independent verifiers and the quorum. The web container sees only the published files. Docker Engine 26 or later is required, for volume subpaths.
 
 The containers run as a non-root user with:
 - a read-only root filesystem;

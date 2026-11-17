@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::policy::{Classification, Policy};
 use crate::record::{
     AcceptedResult, DomainOutcome, FaultKind, FaultRecord, MAX_REJECTED, RejectedResult,
-    TaskStatus, VerificationRecord,
+    TaskStatus, VerificationRecord, VerifierId,
 };
 use crate::task::SubmitOutcome;
 
@@ -129,6 +129,7 @@ struct Held {
 pub struct CtTaskVerifier {
     task: CtScanTask,
     task_digest: Digest,
+    verifier: VerifierId,
     input_digest: Digest,
     policy: CtPolicy,
     classify: Policy,
@@ -144,6 +145,7 @@ impl CtTaskVerifier {
     pub fn new(
         task: CtScanTask,
         task_digest: Digest,
+        verifier: VerifierId,
         policy: CtPolicy,
         classify: Policy,
         limits: Limits,
@@ -158,6 +160,7 @@ impl CtTaskVerifier {
         Ok(Self {
             task,
             task_digest,
+            verifier,
             input_digest,
             policy,
             classify,
@@ -635,6 +638,7 @@ impl CtTaskVerifier {
         VerificationRecord {
             v: PROTOCOL_VERSION,
             network_id: self.task.network_id.clone(),
+            verifier: self.verifier,
             task_id: self.task.task_id.clone(),
             attempt: self.task.attempt,
             task_digest: self.task_digest,

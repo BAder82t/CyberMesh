@@ -97,6 +97,20 @@ pub struct TrustManifest {
     pub members: Vec<Member>,
     pub release_signers: KeySet,
     pub revocations: Vec<Revocation>,
+    /// Distinct verifier operators whose verified records must agree before an indicator is
+    /// published (and, for `block`, must each classify it `block`). Omitted when 1, the
+    /// single-verifier behaviour of v0.1.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub min_verifiers: u8,
+}
+
+fn one() -> u8 {
+    1
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_one(v: &u8) -> bool {
+    *v == 1
 }
 
 /// Pinned governance keys (trust anchor), distributed out of band with node configuration.
@@ -216,7 +230,25 @@ impl TrustManifest {
                 return Err(ProtocolError::invalid("duplicate release signer key"));
             }
         }
+        // A quorum above 1 must be reachable by non-revoked verifiers of distinct operators.
+        // (1 is the v0.1 behaviour and is always accepted.)
+        if self.min_verifiers == 0
+            || (self.min_verifiers > 1
+                && usize::from(self.min_verifiers) > self.verifier_operators().len())
+        {
+            return Err(ProtocolError::invalid(
+                "min_verifiers must be between 1 and the number of operators with non-revoked verifier keys",
+            ));
+        }
         Ok(())
+    }
+
+    /// Distinct operators holding a non-revoked verifier key.
+    #[must_use]
+    pub fn verifier_operators(&self) -> BTreeSet<&OperatorId> {
+        self.members_with_role(Role::Verifier)
+            .map(|m| &m.operator)
+            .collect()
     }
 
     #[must_use]

@@ -19,6 +19,7 @@ use cybermesh_node::coordinator::{
     CoordinatorReport, CoordinatorSetup, prepare_domains, run_coordinator,
 };
 use cybermesh_node::governor::ResourcePolicy;
+use cybermesh_node::verifier::{VerifierReport, VerifierSetup, run_verifier};
 use cybermesh_node::worker::{WorkerSetup, WorkerStatus, run_worker};
 use cybermesh_protocol::testkit::TestNetwork;
 use cybermesh_protocol::{Clock, SystemClock};
@@ -95,6 +96,8 @@ fn free_port() -> u16 {
 pub struct Harness {
     pub net: TestNetwork,
     pub coordinator: JoinHandle<CoordinatorReport>,
+    /// Independent verifiers (operators 1 and 2 of the test network).
+    pub verifiers: Vec<(watch::Sender<bool>, JoinHandle<VerifierReport>)>,
     pub workers: Vec<(usize, watch::Sender<bool>, JoinHandle<WorkerStatus>)>,
     pub coord_shutdown: watch::Sender<bool>,
     pub dir: tempfile::TempDir,
@@ -115,6 +118,8 @@ pub struct Options {
     pub ct_tiles_per_task: u32,
     pub ct_replication: usize,
     pub ct_policy: CtPolicy,
+    /// Independent verifier nodes to run (0..=2), at operators 1 and 2.
+    pub independent_verifiers: usize,
 }
 
 impl Default for Options {
@@ -132,6 +137,7 @@ impl Default for Options {
             ct_tiles_per_task: 2,
             ct_replication: 2,
             ct_policy: CtPolicy::default(),
+            independent_verifiers: 0,
         }
     }
 }
@@ -153,7 +159,7 @@ fn test_resources() -> ResourcePolicy {
 pub fn start_worker(
     net: &TestNetwork,
     i: usize,
-    bootstrap: &Multiaddr,
+    bootstrap: &[Multiaddr],
     dir: &std::path::Path,
     adversary: Option<&str>,
     ct_url: Option<&str>,
@@ -165,7 +171,7 @@ pub fn start_worker(
         manifest: net.manifest.clone(),
         engine: Engine::new(evidence_with_ct(ct_url)),
         listen: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
-        bootstrap: vec![bootstrap.clone()],
+        bootstrap: bootstrap.to_vec(),
         state_dir: dir.join(&w.label),
         control_dir: dir.join(&w.label).join("control"),
         heartbeat: Duration::from_millis(700),
@@ -233,16 +239,59 @@ impl Harness {
             ct,
         };
         let (ctx, crx) = watch::channel(false);
+        // Independent verifiers dial the coordinator; workers dial both, so results reach a
+        // verifier directly as well as through the coordinator.
+        let mut verifiers = Vec::new();
+        let mut worker_bootstrap = vec![addr.clone()];
+        for (key, op) in net.other_verifiers.iter().take(o.independent_verifiers) {
+            let vport = free_port();
+            let vpeer = cybermesh_network::peer_id_of(&key.public_key()).unwrap();
+            worker_bootstrap.push(
+                format!("/ip4/127.0.0.1/tcp/{vport}/p2p/{vpeer}")
+                    .parse()
+                    .unwrap(),
+            );
+            let vsetup = VerifierSetup {
+                key: cybermesh_crypto::SecretKey::from_seed(&key.seed()),
+                manifest: net.manifest.clone(),
+                engine: Engine::new(evidence_with_ct(ct_url.as_deref())),
+                listen: vec![format!("/ip4/127.0.0.1/tcp/{vport}").parse().unwrap()],
+                bootstrap: vec![addr.clone()],
+                state_dir: dir.path().join(format!("verifier-{op}")),
+                result_timeout: o.result_timeout,
+                policy: Policy::default(),
+                ct_policy: o.ct_policy.clone(),
+                // A different secret seed from the coordinator's.
+                ct_seed: [9u8; 32],
+                clock: Arc::new(SystemClock),
+                gossip_heartbeat: Duration::from_millis(100),
+                manifest_source: None,
+                idle_exit: Some(Duration::from_secs(3)),
+            };
+            let (vtx, vrx) = watch::channel(false);
+            verifiers.push((
+                vtx,
+                tokio::spawn(async move { run_verifier(vsetup, vrx).await.unwrap() }),
+            ));
+        }
         let coordinator = tokio::spawn(async move { run_coordinator(setup, crx).await.unwrap() });
         let mut workers = Vec::new();
         for i in 0..net.workers.len() {
             let adv = o.adversaries.iter().find(|(w, _)| *w == i).map(|(_, m)| *m);
-            let (tx, h) = start_worker(&net, i, &addr, dir.path(), adv, ct_url.as_deref());
+            let (tx, h) = start_worker(
+                &net,
+                i,
+                &worker_bootstrap,
+                dir.path(),
+                adv,
+                ct_url.as_deref(),
+            );
             workers.push((i, tx, h));
         }
         Self {
             net,
             coordinator,
+            verifiers,
             workers,
             coord_shutdown: ctx,
             dir,
@@ -259,10 +308,35 @@ impl Harness {
         Vec<WorkerStatus>,
         tempfile::TempDir,
     ) {
+        let (net, report, statuses, _, dir) = self.finish_all(within).await;
+        (net, report, statuses, dir)
+    }
+
+    /// As [`Harness::finish`], also waiting for the independent verifiers to go idle.
+    pub async fn finish_all(
+        self,
+        within: Duration,
+    ) -> (
+        TestNetwork,
+        CoordinatorReport,
+        Vec<WorkerStatus>,
+        Vec<VerifierReport>,
+        tempfile::TempDir,
+    ) {
         let report = tokio::time::timeout(within, self.coordinator)
             .await
             .expect("coordinator did not finish in time")
             .unwrap();
+        let mut verifier_reports = Vec::new();
+        for (tx, h) in self.verifiers {
+            // Each verifier exits once idle; it may still be settling its last tasks.
+            let r = tokio::time::timeout(Duration::from_secs(60), h)
+                .await
+                .expect("verifier did not finish in time")
+                .unwrap();
+            let _ = tx.send(true);
+            verifier_reports.push(r);
+        }
         let mut statuses = Vec::new();
         for (_, tx, h) in self.workers {
             let _ = tx.send(true);
@@ -271,6 +345,6 @@ impl Harness {
             }
         }
         let _ = self.coord_shutdown;
-        (self.net, report, statuses, self.dir)
+        (self.net, report, statuses, verifier_reports, self.dir)
     }
 }

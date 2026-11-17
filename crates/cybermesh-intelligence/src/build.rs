@@ -8,7 +8,9 @@ use crate::model::{
     Action, Confidence, Correction, CorrectionKind, EvidenceKind, EvidenceRef, MatchScope, Reason,
     ReleaseRef, ThreatEntry, ThreatRelease,
 };
-use crate::{GENERATOR, MAX_ENTRIES, MAX_RELEASE_TTL_SECS, verify::ReleaseError};
+use crate::{
+    GENERATOR, MAX_ENTRIES, MAX_RELEASE_TTL_SECS, verify::MAX_EVIDENCE, verify::ReleaseError,
+};
 
 /// Parameters fixed by the publishers. All time values are explicit inputs (never read from
 /// the clock), which is what makes generation deterministic.
@@ -21,18 +23,22 @@ pub struct BuildParams {
     pub ttl_secs: u64,
     /// Verification records older than this (relative to `issued_at`) are not included.
     pub max_record_age_secs: u64,
+    /// Distinct verifier operators that must agree before an indicator is listed (from the
+    /// trust manifest's `min_verifiers`; 0 is treated as 1).
+    pub min_verifiers: usize,
 }
 
 fn rank(o: &DomainOutcome) -> (u8, u16) {
-    let a = match o.classification {
-        Classification::Block => 2,
-        Classification::Warn => 1,
-        Classification::None => 0,
-    };
-    (a, o.risk_score_bp)
+    (rank_of(o.classification), o.risk_score_bp)
 }
 
-fn entry_from(o: &DomainOutcome, rec: &VerificationRecord, rec_digest: Digest) -> ThreatEntry {
+/// Builds an entry from the representative outcome `o` (in record `rec`), citing every
+/// supporting verification record (`(record digest, task id)`, sorted).
+fn entry_from(
+    o: &DomainOutcome,
+    rec: &VerificationRecord,
+    support: &[(Digest, &str)],
+) -> ThreatEntry {
     let (action, confidence) = match o.classification {
         Classification::Block => (Action::Block, Confidence::High),
         _ => (Action::Warn, Confidence::Medium),
@@ -46,21 +52,25 @@ fn entry_from(o: &DomainOutcome, rec: &VerificationRecord, rec_digest: Digest) -
             detail: f.detail.clone(),
         })
         .collect();
-    let mut evidence: Vec<EvidenceRef> = rec
-        .evidence
+    // Supporting verification records first (they carry the quorum), then the evidence
+    // snapshots they were computed from; never more than consumers accept.
+    let mut evidence: Vec<EvidenceRef> = support
         .iter()
-        .map(|(id, d)| EvidenceRef {
-            kind: EvidenceKind::Snapshot,
-            id: id.clone(),
+        .take(MAX_EVIDENCE - 1)
+        .map(|(d, task)| EvidenceRef {
+            kind: EvidenceKind::Verification,
+            id: (*task).to_owned(),
             digest: *d,
         })
         .collect();
-    evidence.push(EvidenceRef {
-        kind: EvidenceKind::Verification,
-        id: rec.task_id.clone(),
-        digest: rec_digest,
-    });
+    let room = MAX_EVIDENCE - evidence.len();
+    evidence.extend(rec.evidence.iter().take(room).map(|(id, d)| EvidenceRef {
+        kind: EvidenceKind::Snapshot,
+        id: id.clone(),
+        digest: *d,
+    }));
     evidence.sort();
+    evidence.dedup();
     ThreatEntry {
         indicator: o.domain.clone(),
         scope: MatchScope::HostAndSubdomains,
@@ -167,11 +177,28 @@ fn finish(
 
 /// Builds a release from verification records and governance appeal decisions.
 ///
-/// Deterministic: input order does not matter. For each domain the outcome of the most
-/// recently verified record wins (ties: stronger classification, then smaller record
-/// digest), so a newer "no longer risky" verdict de-lists a domain. Record digests are
-/// recomputed from the records; a mismatching caller digest is an error. Appeal decisions
-/// must already have been verified against the governance root by the caller.
+/// Deterministic: input order does not matter.
+///
+/// - **Per verifier.** For each verifier *operator* and domain, the outcome of that
+///   operator's most recently verified record counts (ties: stronger classification, then
+///   smaller record digest), so a newer "no longer risky" verdict withdraws that operator's
+///   support.
+/// - **Quorum.** A domain is listed only if at least `min_verifiers` distinct verifier
+///   operators currently classify it `warn` or `block`. It is `block` only if at least
+///   `min_verifiers` of them classify it `block`; otherwise it is downgraded to `warn`. A
+///   single verifier can therefore neither add nor escalate an entry once the quorum is 2+.
+/// - **Independence.** With a quorum of 2 or more, only records the verifier *recomputed*
+///   count. A verifier that lacks the task's engine or evidence can only echo the workers'
+///   agreement, which adds no independent check.
+/// - **Content.** Reasons and scores come from the supporting outcome with the weakest
+///   classification and lowest score (ties: smallest record digest); every supporting record
+///   is cited as evidence.
+///
+/// Record digests are recomputed from the records; a mismatching caller digest is an error.
+/// The caller must have checked each record's envelope signature and that
+/// `record.verifier` is the signer and its operator per the trust manifest (as
+/// `cybermesh release build` does). Appeal decisions must already have been verified against
+/// the governance root by the caller.
 pub fn build_release(
     records: &[(Digest, VerificationRecord)],
     decisions: &[AppealDecision],
@@ -188,14 +215,19 @@ pub fn build_release(
         }
         let fresh = r.verified_at <= params.issued_at
             && r.verified_at.saturating_add(params.max_record_age_secs) >= params.issued_at;
-        if r.network_id == params.network_id && r.status == TaskStatus::Verified && fresh {
+        let independent = params.min_verifiers <= 1 || r.recomputed;
+        if r.network_id == params.network_id
+            && r.status == TaskStatus::Verified
+            && fresh
+            && independent
+        {
             usable.push((actual, r));
         }
     }
     usable.sort_by_key(|a| a.0);
     usable.dedup_by(|a, b| a.0 == b.0);
 
-    // domain -> (verified_at, rank, record digest, outcome, record)
+    // (domain, verifier operator) -> (verified_at, rank, record digest, outcome, record)
     type Cand<'a> = (
         u64,
         (u8, u16),
@@ -203,30 +235,65 @@ pub fn build_release(
         &'a DomainOutcome,
         &'a VerificationRecord,
     );
-    let mut best: BTreeMap<&str, Cand<'_>> = BTreeMap::new();
+    let mut latest: BTreeMap<(&str, &str), Cand<'_>> = BTreeMap::new();
     for (digest, rec) in &usable {
         for o in &rec.outcomes {
             let key = (rec.verified_at, rank(o));
-            let replace = best
-                .get(o.domain.as_str())
-                .is_none_or(|cur| key > (cur.0, cur.1));
-            if replace {
-                best.insert(o.domain.as_str(), (key.0, key.1, *digest, o, rec));
+            let slot = (o.domain.as_str(), rec.verifier.operator.as_str());
+            if latest.get(&slot).is_none_or(|cur| key > (cur.0, cur.1)) {
+                latest.insert(slot, (key.0, key.1, *digest, o, rec));
             }
         }
     }
+    let mut by_domain: BTreeMap<&str, Vec<Cand<'_>>> = BTreeMap::new();
+    for ((domain, _), c) in latest {
+        by_domain.entry(domain).or_default().push(c);
+    }
+    let quorum = params.min_verifiers.max(1);
     let mut entries: BTreeMap<String, (ThreatEntry, u64)> = BTreeMap::new();
     let mut used = BTreeSet::new();
-    for (domain, (verified_at, _, digest, o, rec)) in best {
-        if o.classification == Classification::None {
+    for (domain, cands) in by_domain {
+        let at_least = |c: Classification| -> Vec<&Cand<'_>> {
+            cands.iter().filter(|x| rank(x.3).0 >= rank_of(c)).collect()
+        };
+        let blocks = at_least(Classification::Block);
+        let listed = at_least(Classification::Warn);
+        let mut support = if blocks.len() >= quorum {
+            blocks
+        } else if listed.len() >= quorum {
+            listed
+        } else {
             continue;
-        }
-        used.insert(digest);
-        entries.insert(domain.to_owned(), (entry_from(o, rec, digest), verified_at));
+        };
+        // Representative: weakest supporting outcome (a warn when the level is warn).
+        support.sort_by_key(|c| (c.1, c.2));
+        let rep = support[0];
+        // Re-listing after an upheld appeal needs a quorum verified after the decision.
+        let mut times: Vec<u64> = support.iter().map(|c| c.0).collect();
+        times.sort_unstable_by(|a, b| b.cmp(a));
+        let verified_at = times[quorum - 1];
+        let mut cited: Vec<(Digest, &str)> = support
+            .iter()
+            .map(|c| (c.2, c.4.task_id.as_str()))
+            .collect();
+        cited.sort();
+        used.extend(cited.iter().map(|c| c.0));
+        entries.insert(
+            domain.to_owned(),
+            (entry_from(rep.3, rep.4, &cited), verified_at),
+        );
     }
     let mut corrections = BTreeSet::new();
     apply_appeals(&mut entries, &mut corrections, decisions, params);
     finish(params, used.into_iter().collect(), entries, corrections)
+}
+
+fn rank_of(c: Classification) -> u8 {
+    match c {
+        Classification::Block => 2,
+        Classification::Warn => 1,
+        Classification::None => 0,
+    }
 }
 
 /// Publishes the content of an earlier release under a new, higher sequence number.
