@@ -21,8 +21,11 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
   - a governance-set `min_verifiers` release quorum (listing and `block` both need it).
 - **Manifest state.** Nodes persist the highest manifest sequence, and the governance root can set a `min_sequence` floor. Runtime reload with live revocation shipped in v0.1.0.
 
-## v0.2.1 (this release): independent verifier in the Docker demo
+## v0.2.1: independent verifier in the Docker demo
 The Docker Compose demo runs organisation B's independent verifier in its own hardened container, with `min_verifiers = 2`, matching the local demo. It is wire-compatible with v0.2.0.
+
+## v0.2.2 (this release): verification records over the network
+Verifiers publish the records they sign on a `records` gossip topic and store the others' records. Each organisation's release signer builds from its own node alone. It is wire-compatible with v0.2.x: older nodes ignore the topic.
 
 ## Next: harden the pilot
 - **Verifiers.**
