@@ -69,6 +69,9 @@ pub struct CoordinatorConfig {
     /// Exit after every batch has been settled.
     #[serde(default)]
     pub exit_when_done: bool,
+    /// Wait for this many live workers before issuing the first task (0: do not wait).
+    #[serde(default)]
+    pub start_after_workers: usize,
     #[serde(default)]
     pub policy: Policy,
     /// Certificate Transparency monitoring (optional).

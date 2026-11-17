@@ -57,6 +57,10 @@ pub struct CoordinatorSetup {
     /// A batch that cannot be assigned to enough distinct operators for this long is
     /// abandoned (counted in the report) so it never blocks the queue indefinitely.
     pub abandon_after: Duration,
+    /// Issue nothing until this many distinct workers are live (heartbeats received), or
+    /// until `abandon_after` has passed since start. 0 starts as soon as enough operators
+    /// are live for a task. Gives late-starting workers a fair share of the first batches.
+    pub start_after_workers: usize,
     pub policy: Policy,
     pub clock: Arc<dyn Clock>,
     pub gossip_heartbeat: Duration,
@@ -256,6 +260,7 @@ pub fn setup_from_config(
             liveness_secs: cfg.liveness_secs,
             max_inflight: cfg.max_inflight,
             exit_when_done: cfg.exit_when_done,
+            start_after_workers: cfg.start_after_workers,
             abandon_after: Duration::from_secs(cfg.result_timeout_secs.saturating_mul(10).max(30)),
             policy: cfg.policy.clone(),
             clock,
@@ -482,6 +487,20 @@ impl Coordinator {
         {
             warn!(error = %e, "failed to persist reputation");
         }
+    }
+
+    /// Workers that are currently live, enrolled and running a compatible engine.
+    fn live_workers(&self) -> usize {
+        let now = self.s.clock.now();
+        self.workers
+            .iter()
+            .filter(|(k, w)| {
+                w.active
+                    && w.compatible
+                    && now.saturating_sub(w.last_seen) <= self.s.liveness_secs
+                    && self.s.manifest.key_with_role(k, Role::Worker).is_some()
+            })
+            .count()
     }
 
     fn choose_assignees(
@@ -1069,6 +1088,8 @@ pub async fn run_coordinator(
         settled: HashMap::new(),
     };
     let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let started = Instant::now();
+    let mut warmed_up = c.s.start_after_workers == 0;
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
@@ -1130,9 +1151,24 @@ pub async fn run_coordinator(
                 // Try each pending batch at most once per tick; a batch that cannot be
                 // assigned goes to the back so it never blocks the others, and is abandoned
                 // after `abandon_after`.
+                if !warmed_up
+                    && (c.live_workers() >= c.s.start_after_workers
+                        || started.elapsed() >= c.s.abandon_after)
+                {
+                    warmed_up = true;
+                    info!(live = c.live_workers(), "starting to issue tasks");
+                    // Waiting for workers does not count towards abandoning a batch.
+                    for b in &mut c.pending {
+                        b.queued_at = Instant::now();
+                    }
+                }
                 let mut attempts = c.pending.len();
                 let manifest_valid = c.s.clock.now() < c.s.manifest.expires_at;
-                while manifest_valid && c.inflight.len() < c.s.max_inflight && attempts > 0 {
+                while warmed_up
+                    && manifest_valid
+                    && c.inflight.len() < c.s.max_inflight
+                    && attempts > 0
+                {
                     attempts -= 1;
                     let Some(b) = c.pending.pop_front() else { break };
                     if let Err(b) = c.issue(&net, b).await {

@@ -232,6 +232,9 @@ impl Harness {
             max_inflight: 4,
             exit_when_done: true,
             abandon_after: o.abandon_after,
+            // Every worker, including simulated adversaries, takes part from the first task;
+            // otherwise a slow start leaves the adversary unassigned and the test vacuous.
+            start_after_workers: net.workers.len(),
             policy: Policy::default(),
             clock,
             gossip_heartbeat: Duration::from_millis(100),
@@ -258,7 +261,9 @@ impl Harness {
                 listen: vec![format!("/ip4/127.0.0.1/tcp/{vport}").parse().unwrap()],
                 bootstrap: vec![addr.clone()],
                 state_dir: dir.path().join(format!("verifier-{op}")),
-                result_timeout: o.result_timeout,
+                // Verifiers are not latency-critical: give stragglers longer than the
+                // coordinator does (they settle early once every assignee has answered).
+                result_timeout: o.result_timeout * 2,
                 policy: Policy::default(),
                 ct_policy: o.ct_policy.clone(),
                 // A different secret seed from the coordinator's.

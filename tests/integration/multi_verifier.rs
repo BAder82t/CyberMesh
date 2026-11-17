@@ -128,7 +128,29 @@ async fn independent_verifiers_prove_faults_themselves() {
         .cloned()
         .collect();
     let rel = build_release(&all, &[], &params(&net.network_id, 3)).unwrap();
-    assert_eq!(rel.lookup(PHISH).map(|e| e.action), Some(Action::Block));
+    let summary: Vec<_> = verifiers
+        .iter()
+        .map(|v| {
+            (
+                v.operator.clone(),
+                v.tasks_seen,
+                v.verified,
+                v.insufficient,
+                v.results_accepted,
+                v.results_buffered_early,
+                v.results_dropped,
+                v.net_dropped_rate_limited + v.net_dropped_queue_full,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rel.lookup(PHISH).map(|e| e.action),
+        Some(Action::Block),
+        "coordinator verified {} insufficient {} reassignments {}; verifiers (op, seen, verified, insufficient, accepted, early, dropped, net dropped): {summary:?}",
+        report.verified,
+        report.insufficient,
+        report.reassignments
+    );
     assert!(rel.lookup("www.google.com").is_none());
     assert!(rel.lookup("mail.example.org").is_none());
 }

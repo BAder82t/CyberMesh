@@ -102,6 +102,10 @@ pub struct VerifierReport {
     pub results_buffered_early: u64,
     /// Early results dropped because a budget was full, and late results for settled tasks.
     pub results_dropped: u64,
+    pub net_bytes_in: u64,
+    pub net_bytes_out: u64,
+    pub net_dropped_rate_limited: u64,
+    pub net_dropped_queue_full: u64,
     #[serde(skip)]
     pub records: Vec<(Digest, VerificationRecord)>,
 }
@@ -663,6 +667,11 @@ pub async fn run_verifier(
         }
     }
     v.persist_reputation();
+    let snap = net.stats.snapshot();
+    v.report.net_bytes_in = snap.bytes_in;
+    v.report.net_bytes_out = snap.bytes_out;
+    v.report.net_dropped_rate_limited = snap.dropped_rate_limited;
+    v.report.net_dropped_queue_full = snap.dropped_queue_full;
     let _ = files::write_json(&v.s.state_dir.join("verifier-report.json"), &v.report);
     net.shutdown().await;
     Ok(v.report)

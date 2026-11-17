@@ -101,7 +101,7 @@ trust from the coordinator.
    listen = ["/ip4/0.0.0.0/tcp/4200"]
    # Dial the coordinator *and* workers, so no single relay can withhold results from you.
    bootstrap = ["/ip4/198.51.100.10/tcp/4100/p2p/12D3Koo..."]
-   result_timeout_secs = 15
+   result_timeout_secs = 30 # longer than the coordinator's; it settles early when all answered
 
    [policy]                 # your own classification policy
    min_operators = 3

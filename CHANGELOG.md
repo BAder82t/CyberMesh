@@ -14,6 +14,7 @@
 
 ### Changed
 - `VerificationRecord` carries `verifier: {key, operator}` in its signed payload. `BuildParams` has `min_verifiers`.
+- Coordinator `start_after_workers`: issue nothing until that many workers are live (fallback: `abandon_after`). The test harness and the demo wait for all their workers, which fixes flaky adversarial network tests in CI where the simulated adversary was never assigned a task.
 - Engine 0.4.0: plain truncations of brand tokens are no longer lookalikes. This came from real CT false positives.
 - Heartbeats carry `capabilities`, and verification records carry an optional `ct` section. This is a wire-format change: v0.1.0 nodes cannot interoperate with v0.2.0 nodes.
 - `ENGINE_VERSION` now records the pinned `x509-parser` version (`0.4.0+psl.2.1.255+idna.1.1.0+x509.0.18.1`).

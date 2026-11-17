@@ -250,6 +250,7 @@ pub fn run(c: DemoCmd) -> Result<()> {
         ),
         None => String::new(),
     };
+    let n_workers = workers.len();
     let coord_toml = format!(
         r#"# CyberMesh coordinator (issuer + verifier) for organisation org-a.
 network_id = "{network_id}"
@@ -269,6 +270,8 @@ max_attempts = 3
 liveness_secs = 45
 max_inflight = 4
 exit_when_done = true
+# Wait for every worker (including the simulated compromised one) before issuing.
+start_after_workers = {n_workers}
 
 [policy]
 min_operators = 3
@@ -299,7 +302,8 @@ evidence_dir = "evidence"
 state_dir = "state/verifier-{org}"
 listen = ["/ip4/127.0.0.1/tcp/{port}"]
 bootstrap = ["{coord_addr}"]
-result_timeout_secs = 15
+# Longer than the coordinator's: verifiers settle early once every assignee answered.
+result_timeout_secs = 30
 idle_exit_secs = 8
 
 [policy]
