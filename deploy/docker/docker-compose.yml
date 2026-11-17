@@ -1,5 +1,7 @@
-# Local CyberMesh demonstration: one coordinator (org-a) and six workers from five
-# organisations, one of them simulating a compromised operator (org-m). Run via
+# Local CyberMesh demonstration: one coordinator (org-a), an independent verifier (org-b)
+# and six workers from five organisations, one of them simulating a compromised operator
+# (org-m). The manifest requires records from 2 verifier organisations (min_verifiers = 2),
+# so a release needs both the coordinator's and org-b's verification. Run via
 # deploy/docker/demo.sh. Requires Docker Engine >= 26 (volume subpaths).
 #
 # Isolation: every service mounts the shared, non-secret material read-only, ONLY its own
@@ -42,7 +44,7 @@ services:
         done
         # Per-node state (mounted read-write only into that node) plus empty mount points
         # inside the read-only shared tree.
-        for s in coordinator a1 b1 b2 c1 d1 m1; do mkdir -p "/demo/state/$$s" "/demo/shared/state/$$s"; done
+        for s in coordinator verifier-org-b a1 b1 b2 c1 d1 m1; do mkdir -p "/demo/state/$$s" "/demo/shared/state/$$s"; done
     networks: {mesh: {}}
 
   coordinator:
@@ -67,6 +69,32 @@ services:
         read_only: false
         volume: { subpath: state/coordinator }
     networks: {mesh: {ipv4_address: 172.28.0.10}}
+
+  # Organisation B's independent verifier: follows tasks and results, recomputes every task
+  # with its own engine and evidence, signs its own records with its own key, and exits
+  # once idle (idle_exit_secs in its config).
+  verifier-org-b:
+    <<: *hardening
+    command: ["verifier", "run", "--config", "/demo/verifier-org-b.toml"]
+    restart: "no"
+    profiles: [run]
+    volumes:
+      - type: volume
+        source: demo
+        target: /demo
+        read_only: true
+        volume: { subpath: shared }
+      - type: volume
+        source: demo
+        target: /demo/keys
+        read_only: true
+        volume: { subpath: secrets/verifier-org-b }
+      - type: volume
+        source: demo
+        target: /demo/state/verifier-org-b
+        read_only: false
+        volume: { subpath: state/verifier-org-b }
+    networks: {mesh: {ipv4_address: 172.28.0.20}}
 
   worker-a1:
     <<: *hardening
@@ -242,6 +270,11 @@ services:
         volume: { subpath: state/coordinator }
       - type: volume
         source: demo
+        target: /demo/state/verifier-org-b
+        read_only: true
+        volume: { subpath: state/verifier-org-b }
+      - type: volume
+        source: demo
         target: /demo/public
         read_only: false
         volume: { subpath: shared/public }
@@ -268,6 +301,11 @@ services:
         target: /demo/state/coordinator
         read_only: true
         volume: { subpath: state/coordinator }
+      - type: volume
+        source: demo
+        target: /demo/state/verifier-org-b
+        read_only: true
+        volume: { subpath: state/verifier-org-b }
       - type: volume
         source: demo
         target: /demo/public

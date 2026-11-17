@@ -26,7 +26,6 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
   - Distribute records between organisations over the network. Today they are files collected by release signers.
   - Let the coordinator act on faults proven by other verifiers.
   - Prove late equivocation at independent verifiers.
-  - Run independent verifiers in the Docker demo.
 - **CT.**
   - Checkpoint signature and consistency verification.
   - Continuous tailing of new tiles.

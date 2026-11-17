@@ -65,7 +65,7 @@ npm ci && npm run build -- --trust-root ../../demo-out/trust-root.json --release
 ## 4. Docker Compose
 
 ```bash
-deploy/docker/demo.sh up     # build image, start 6 workers, run coordinator, release, anchor, serve
+deploy/docker/demo.sh up     # build image, start org-b's verifier and 6 workers, run coordinator, release, anchor, serve
 deploy/docker/demo.sh down   # remove containers and the demo volume
 ```
 
@@ -74,7 +74,12 @@ Each container mounts:
 - **only its own key**, read-only;
 - only its own state directory, read-write.
 
-The two release signers run as separate containers, each holding one organisation's key. The Docker demo runs only the coordinator's verifier (`min_verifiers = 1`). The local demo (§1) shows independent verifiers and the quorum. The web container sees only the published files. Docker Engine 26 or later is required, for volume subpaths.
+- **Independent verifier.** Organisation B's verifier runs in its own container (`verifier-org-b`, 172.28.0.20) with only its own verifier key. It follows tasks and results, recomputes every task, and writes its own signed records to its own state directory. It exits once idle.
+- **Quorum.** The manifest requires `min_verifiers = 2`. Organisation A's release container first shows that the coordinator's records alone publish nothing. Both release signers then build from the coordinator's and organisation B's records. Each release container mounts both verifiers' record directories read-only.
+- **Release signers.** The two release signers run as separate containers, each holding one organisation's key.
+- **Web.** The web container sees only the published files.
+
+Docker Engine 26 or later is required, for volume subpaths.
 
 The containers run as a non-root user with:
 - a read-only root filesystem;

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- The Docker Compose demo runs organisation B's independent verifier in its own hardened container, with only its own key and its own state. The manifest requires `min_verifiers = 2`, and the release containers show the quorum check: the coordinator's records alone publish nothing. Both signers then build from both verifiers' records.
+
+### Changed
+- `cybermesh demo init --independent-verifiers` defaults to 1 in both local and docker modes. Docker mode supports 0 or 1.
+
 ## v0.2.0 (2026-11-17, research pre-release)
 
 **Not production-ready; no external audit.** v0.1.0 and v0.2.0 nodes cannot interoperate (wire-format changes below).

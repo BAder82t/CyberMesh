@@ -5,19 +5,29 @@ cd "$(dirname "$0")"
 C="docker compose -f docker-compose.yml"
 if [ "${1:-up}" = "down" ]; then $C --profile run --profile tools --profile web down -v; exit 0; fi
 $C build init
+echo "== independent verifier of organisation B (own key, own records)"
+$C --profile run up -d verifier-org-b
 $C up -d worker-a1 worker-b1 worker-b2 worker-c1 worker-d1 worker-m1
 sleep 3
 echo "== coordinator (runs until all tasks settle)"
 $C --profile run run --rm coordinator | tail -n 30
+echo "== waiting for the independent verifier to settle its last tasks"
+code=$(docker wait "$($C --profile run ps -a -q verifier-org-b)")
+if [ "$code" != "0" ]; then $C --profile run logs --tail 40 verifier-org-b; echo "verifier exited with $code" >&2; exit 1; fi
+$C --profile tools run --rm status 'grep -E "\"(operator|tasks_seen|verified|insufficient|faults|results_accepted|tasks_incompatible)\"" /state/verifier-org-b/verifier-report.json'
 echo "== organisation A builds and signs the release (only its own release key is mounted)"
 $C --profile tools run --rm release-org-a '
 set -e; NOW=$(date +%s); echo "$NOW" > issued_at
-cybermesh release build --records /demo/state/coordinator/records --manifest /demo/manifest.json --root /demo/governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.a
+echo "quorum check: the coordinator records alone (one verifier organisation) publish nothing"
+cybermesh release build --records /demo/state/coordinator/records --manifest /demo/manifest.json --root /demo/governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.coordinator-only
+rm release-1.coordinator-only
+echo "both verifier organisations (coordinator at org-a, independent verifier at org-b):"
+cybermesh release build --records /demo/state/coordinator/records --records /demo/state/verifier-org-b/records --manifest /demo/manifest.json --root /demo/governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.a
 cybermesh release sign --payload release-1.a --key /demo/keys/release-org-a.key.json --out release-1.json'
 echo "== organisation B rebuilds independently, compares bytes, co-signs, verifies, anchors"
 $C --profile tools run --rm release-org-b '
 set -e; NOW=$(cat issued_at)
-cybermesh release build --records /demo/state/coordinator/records --manifest /demo/manifest.json --root /demo/governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.b
+cybermesh release build --records /demo/state/coordinator/records --records /demo/state/verifier-org-b/records --manifest /demo/manifest.json --root /demo/governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.b
 cmp release-1.a release-1.b && echo "identical payloads"
 cybermesh release sign --payload release-1.b --key /demo/keys/release-org-b.key.json --merge release-1.json --out release-1.json
 cybermesh release verify --release release-1.json --trust-root /demo/trust-root.json
