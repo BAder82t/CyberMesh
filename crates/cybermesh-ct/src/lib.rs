@@ -67,13 +67,23 @@ pub trait TileSource: Send + Sync {
         let level1 = n / 256;
         let offset = usize::try_from(n % 256).unwrap_or(0);
         let full_level1 = full_data_tiles / 256;
-        let bytes = if level1 < full_level1 {
-            self.level1_tile(level1, None)?
+        let (bytes, expected) = if level1 < full_level1 {
+            (self.level1_tile(level1, None)?, 256 * 32)
         } else {
             let width = u8::try_from(full_data_tiles % 256)
                 .map_err(|_| CtError::Malformed("width".into()))?;
-            self.level1_tile(level1, Some(width))?
+            (
+                self.level1_tile(level1, Some(width))?,
+                usize::from(width) * 32,
+            )
         };
+        // A hash tile has exactly one 32-byte hash per covered data tile.
+        if bytes.len() != expected {
+            return Err(CtError::Malformed(format!(
+                "level-1 tile has {} bytes, expected {expected}",
+                bytes.len()
+            )));
+        }
         let start = offset * 32;
         let slice = bytes
             .get(start..start + 32)

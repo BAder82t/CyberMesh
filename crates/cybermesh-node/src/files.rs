@@ -114,7 +114,10 @@ pub fn load_manifest_checked(
     };
     let root: GovernanceRoot = read_json(root_path)?;
     let env = Envelope::parse(&read_bytes(manifest_path)?, MAX_FILE as usize)?;
-    let min = state.as_ref().map_or(0, |s| s.sequence);
+    let min = state
+        .as_ref()
+        .map_or(0, |s| s.sequence)
+        .max(root.min_sequence);
     let m = TrustManifest::verify(&env, &root, now, min)?;
     let d = manifest_digest(&m)?;
     match &state {
@@ -208,6 +211,33 @@ mod tests {
             load_manifest_checked(&mp, &rp, &sp, now).is_err(),
             "equivocation refused"
         );
+    }
+
+    #[test]
+    fn governance_root_floor_protects_a_fresh_node() {
+        // No state file (first start, or the state directory was lost): the root's
+        // `min_sequence` still refuses an old manifest.
+        let dir = tempfile::tempdir().unwrap();
+        let now = 1_800_000_000;
+        let mut net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], now);
+        let (mp, rp, sp) = (
+            dir.path().join("manifest.json"),
+            dir.path().join("root.json"),
+            dir.path().join("manifest-state.json"),
+        );
+        write_atomic(&mp, &net.manifest_envelope.to_vec().unwrap()).unwrap();
+        net.root.min_sequence = net.manifest.sequence + 1;
+        write_json(&rp, &net.root).unwrap();
+        assert!(load_manifest_checked(&mp, &rp, &sp, now).is_err());
+        assert!(!sp.exists());
+        net.root.min_sequence = net.manifest.sequence;
+        write_json(&rp, &net.root).unwrap();
+        load_manifest_checked(&mp, &rp, &sp, now).unwrap();
+        // A root without the field (older files) parses with floor 0.
+        net.root.min_sequence = 0;
+        let text =
+            String::from_utf8(cybermesh_crypto::canonical::to_vec(&net.root).unwrap()).unwrap();
+        assert!(!text.contains("min_sequence"));
     }
 
     #[test]

@@ -98,3 +98,61 @@ fn tampered_tile_bytes_change_the_commitment() {
         assert_ne!(t.root, honest.root);
     }
 }
+
+#[test]
+fn caps_keep_the_highest_risk_matches_and_commit_every_name() {
+    use cybermesh_protocol::ct::{MAX_MATCHES_PER_ENTRY, MAX_MATCHES_PER_TILE};
+    // Entry 3 carries many brand-token decoys plus one strong typosquat; entries 10..30 each
+    // carry one lookalike, so the tile exceeds the per-tile cap as well.
+    let decoys: Vec<String> = (0..12)
+        .map(|i| format!("paypal-cdn{i}.example-org.com"))
+        .chain(["paypa1-secure-login-verify.example-shop.net".to_owned()])
+        .collect();
+    let entries: Vec<MockEntry> = (0..256)
+        .map(|i| MockEntry {
+            names: match i {
+                3 => decoys.clone(),
+                10..30 => vec![format!("examp1ebank-login{i}.example.net")],
+                _ => vec![format!("host{i}.example-org.com")],
+            },
+            precert: false,
+        })
+        .collect();
+    let log = MockLog::build("ct.example/caps", &entries).unwrap();
+    let e = engine();
+    let t = scan_tile(&log.data_tile(0).unwrap(), 0, &e).unwrap();
+    assert!(t.truncated);
+    assert_eq!(t.matches.len(), MAX_MATCHES_PER_TILE);
+    assert!(t.matches.iter().filter(|m| m.index == 3).count() <= MAX_MATCHES_PER_ENTRY);
+    // Sorted by (index, name) after priority selection.
+    assert!(
+        t.matches
+            .windows(2)
+            .all(|w| (w[0].index, &w[0].name) < (w[1].index, &w[1].name))
+    );
+    // Every kept match outranks every dropped candidate (risk first).
+    let kept_min = t.matches.iter().map(|m| m.risk_score_bp).min().unwrap();
+    let strong = e
+        .assess("paypa1-secure-login-verify.example-shop.net")
+        .unwrap();
+    assert!(strong.risk_score_bp >= kept_min);
+    assert!(
+        t.matches
+            .iter()
+            .any(|m| m.name == "paypa1-secure-login-verify.example-shop.net"),
+        "the decoys must not push the strongest name out"
+    );
+    // All names are counted and committed, not only the matches.
+    assert_eq!(t.names, 256 - 1 + 13);
+    let again = scan_tile(&log.data_tile(0).unwrap(), 0, &e).unwrap();
+    assert_eq!(t, again, "deterministic");
+    let mut other = entries.clone();
+    other[200].names = vec!["host200-renamed.example-org.com".into()];
+    let log2 = MockLog::build("ct.example/caps", &other).unwrap();
+    let t2 = scan_tile(&log2.data_tile(0).unwrap(), 0, &e).unwrap();
+    assert_eq!(t2.matches, t.matches);
+    assert_ne!(
+        t2.names_digest, t.names_digest,
+        "a non-matching name change is visible"
+    );
+}

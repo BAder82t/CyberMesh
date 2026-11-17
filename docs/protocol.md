@@ -81,7 +81,7 @@ TrustManifest {
 - The release-signer threshold lies in `1..=n`.
 - Revoked keys hold no role anywhere.
 
-`OperatorId` is 2–32 characters from `[a-z0-9-]`. The `GovernanceRoot { network_id, threshold, keys }` is pinned out of band in node configuration and in consumers.
+`OperatorId` is 2–32 characters from `[a-z0-9-]`. The `GovernanceRoot { network_id, threshold, keys, min_sequence? }` is pinned out of band in node configuration and in consumers. Nodes refuse manifests below `min_sequence` (default 0) and below the highest sequence they have stored, so an old manifest cannot be replayed even to a node with an empty state directory.
 
 ## 3. Tasks
 
@@ -143,6 +143,33 @@ DomainAssessment { domain, risk_score_bp: 0..=10000, confidence_bp: 0..=10000,
 - assessments that differ from the verifier's recomputation (`incorrect-result`).
 
 `assessments_digest = H_tag("cybermesh/assessments/v1", canonical(assessments))` is the value compared across operators. Timestamps, nonces and usage are excluded from it.
+
+## 4a. CT shard scans
+
+```text
+CtScanTask { v: 1, network_id, task_id, attempt, issuer, issued_at, expires_at, nonce,
+             engine, evidence, log_id: [a-z0-9.-]{1,64}, first_tile: u64, tile_count: 1..=16,
+             assignees, min_operators }
+CtScanResult { v: 1, network_id, task_id, attempt, task_digest, input_digest, worker, operator,
+               engine, evidence, log_id, tiles: [TileScanResult consecutive, one per task tile],
+               completed_at, nonce, usage, fetched_bytes }
+TileScanResult { tile_index, leaf_count: 256, root: RFC 6962 MTH of the tile's leaf hashes,
+                 unparsed: u16, names: u32 <= 8192, names_digest,
+                 matches: [CtMatch sorted by (index, name)] <= 16, at most 4 per index,
+                 truncated }
+CtMatch { index (global entry index within the tile), name (normalised), risk_score_bp,
+          verdict, codes: [FindingCode] }
+```
+
+- **Payload types.** `application/vnd.cybermesh.ct-task+json;v=1` and `application/vnd.cybermesh.ct-result+json;v=1`. Both travel on the same gossip topics as domain tasks.
+- **Input digest.** `input_digest = H_tag("cybermesh/ct-task-input/v1", canonical({engine, evidence, log_id, first_tile, tile_count}))`.
+- **Leaf hash.** `SHA-256(0x00 || 0x00 || 0x00 || TimestampedEntry)`: the RFC 6962 leaf prefix, then `MerkleTreeLeaf` version and type.
+- **Tile root.** It equals the log's level-1 hash tile entry for that data tile.
+- **Names digest.** `SHA-256("cybermesh/ct-names/v1" || 0x00 || for each name: index (u64 BE) || len(name) (u64 BE) || name)`, over every normalised name of every parsed entry in entry order, then sorted and de-duplicated per entry, up to 8,192 names.
+- **Match selection.** Matches are capped at 4 per entry and 16 per tile. The kept matches are the highest by (risk descending, index, name). They are then sorted by (index, name). `truncated` is true when any cap applied.
+- **Entries.** Every `TileLeaf` must carry a `leaf_index` extension equal to its position.
+- **Heartbeats.** Heartbeats carry `capabilities: [TaskKind]`. Only workers advertising `ct-shard-scan` are assigned CT shards.
+- **Verification records.** Records of CT tasks carry `ct: {log_id, first_tile, tile_count, tiles_checked_against_log, tiles_rescanned, entries, unparsed, matches, truncated_tiles, log_inconsistent_tiles}`.
 
 ## 5. Heartbeats
 

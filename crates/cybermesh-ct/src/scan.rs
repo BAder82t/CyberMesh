@@ -3,11 +3,17 @@
 use cybermesh_analysis::{Engine, normalize_domain};
 use cybermesh_crypto::Digest;
 use cybermesh_protocol::FindingCode;
-use cybermesh_protocol::ct::{CtMatch, MAX_MATCHES_PER_TILE, TileScanResult};
+use cybermesh_protocol::ct::{
+    CtMatch, MAX_MATCHES_PER_ENTRY, MAX_MATCHES_PER_TILE, MAX_NAMES_PER_TILE, TileScanResult,
+};
+use sha2::{Digest as _, Sha256};
 
 use crate::names::certificate_names;
 use crate::tile::{parse_data_tile, tile_root};
 use crate::{CtError, TileSource};
+
+/// Domain separation for [`TileScanResult::names_digest`].
+const NAMES_DIGEST_TAG: &[u8] = b"cybermesh/ct-names/v1";
 
 /// Findings that indicate impersonation of a protected brand.
 #[must_use]
@@ -18,8 +24,24 @@ pub fn is_brand_signal(code: FindingCode) -> bool {
     )
 }
 
+/// Priority order for keeping matches when a cap applies: highest risk first, then entry
+/// index, then name. Total and deterministic.
+fn priority(a: &CtMatch, b: &CtMatch) -> std::cmp::Ordering {
+    b.risk_score_bp
+        .cmp(&a.risk_score_bp)
+        .then(a.index.cmp(&b.index))
+        .then_with(|| a.name.cmp(&b.name))
+}
+
 /// Scans one full data tile. Output depends only on the tile bytes, the tile index and the
 /// engine (version + evidence), so independent workers produce identical results.
+///
+/// - Every extracted name is committed in `names_digest` (entry index, name), up to
+///   [`MAX_NAMES_PER_TILE`] names per tile.
+/// - At most [`MAX_MATCHES_PER_ENTRY`] matches are kept per certificate and at most
+///   [`MAX_MATCHES_PER_TILE`] per tile, by priority (highest risk first), so a certificate
+///   with many decoy names cannot push a high-risk name out of the result.
+/// - `truncated` is set when any cap applied.
 pub fn scan_tile(
     bytes: &[u8],
     tile_index: u64,
@@ -28,16 +50,33 @@ pub fn scan_tile(
     let entries = parse_data_tile(bytes, tile_index)?;
     let root = Digest(tile_root(&entries));
     let mut unparsed: u16 = 0;
+    let mut names: u32 = 0;
+    let mut truncated = false;
+    let mut digest = Sha256::new();
+    digest.update(NAMES_DIGEST_TAG);
+    digest.update([0u8]);
     let mut matches = Vec::new();
     for e in &entries {
-        let Ok(names) = certificate_names(e) else {
+        let Ok(raw) = certificate_names(e) else {
             unparsed += 1;
             continue;
         };
-        for raw in names {
-            let Ok(domain) = normalize_domain(&raw) else {
-                continue;
-            };
+        let mut normalized: Vec<String> = raw
+            .iter()
+            .filter_map(|r| normalize_domain(r).ok())
+            .collect();
+        normalized.sort();
+        normalized.dedup();
+        let mut entry_matches = Vec::new();
+        for domain in normalized {
+            if names >= MAX_NAMES_PER_TILE {
+                truncated = true;
+                break;
+            }
+            names += 1;
+            digest.update(e.index.to_be_bytes());
+            digest.update((domain.len() as u64).to_be_bytes());
+            digest.update(domain.as_bytes());
             let a = engine
                 .assess(&domain)
                 .map_err(|err| CtError::Analysis(err.to_string()))?;
@@ -45,7 +84,7 @@ pub fn scan_tile(
                 let mut codes: Vec<FindingCode> = a.findings.iter().map(|f| f.code).collect();
                 codes.sort();
                 codes.dedup();
-                matches.push(CtMatch {
+                entry_matches.push(CtMatch {
                     index: e.index,
                     name: domain,
                     risk_score_bp: a.risk_score_bp,
@@ -54,16 +93,26 @@ pub fn scan_tile(
                 });
             }
         }
+        if entry_matches.len() > MAX_MATCHES_PER_ENTRY {
+            entry_matches.sort_by(priority);
+            entry_matches.truncate(MAX_MATCHES_PER_ENTRY);
+            truncated = true;
+        }
+        matches.append(&mut entry_matches);
+    }
+    if matches.len() > MAX_MATCHES_PER_TILE {
+        matches.sort_by(priority);
+        matches.truncate(MAX_MATCHES_PER_TILE);
+        truncated = true;
     }
     matches.sort_by(|a, b| (a.index, &a.name).cmp(&(b.index, &b.name)));
-    matches.dedup_by(|a, b| a.index == b.index && a.name == b.name);
-    let truncated = matches.len() > MAX_MATCHES_PER_TILE;
-    matches.truncate(MAX_MATCHES_PER_TILE);
     Ok(TileScanResult {
         tile_index,
         leaf_count: 256,
         root,
         unparsed,
+        names,
+        names_digest: Digest(digest.finalize().into()),
         matches,
         truncated,
     })

@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased (v0.2.0)
+
+### Added
+- `ct-shard-scan` task type: distributed Certificate Transparency monitoring of static CT API logs. It is opt-in per operator, reaches only pinned log endpoints, verifies against the logs' level-1 hash tiles with spot checks and confirm-before-publish, and produces an investigation report (`cybermesh ct report`). Publishing CT findings as warnings is opt-in and capped at `warn`.
+- `cybermesh ct checkpoint|scan|report`, `cybermesh dev mock-ct-log`, and CT in the local demo.
+- Persisted manifest state, so a restart cannot roll a node back to an older manifest.
+- `ct_tile` fuzz target.
+- Optional `min_sequence` in the governance root: a floor for manifest sequences, also for nodes without stored state.
+- `cybermesh ct report` output now has a `coverage` section listing truncated and log-inconsistent tiles.
+
+### Changed
+- Engine 0.4.0: plain truncations of brand tokens are no longer lookalikes. This came from real CT false positives.
+- Heartbeats carry `capabilities`, and verification records carry an optional `ct` section. This is a wire-format change: v0.1.0 nodes cannot interoperate with v0.2.0 nodes.
+- `ENGINE_VERSION` now records the pinned `x509-parser` version (`0.4.0+psl.2.1.255+idna.1.1.0+x509.0.18.1`).
+
+### Security
+- Fixes from an internal review of the CT code ([docs/security-review.md](docs/security-review.md), third pass):
+  - match caps chosen by risk;
+  - results that always fit one message (16 tiles per task);
+  - a names digest in every tile result;
+  - two spot checks, one biased to tiles with matches;
+  - CT scans and CT verification moved off the event loops;
+  - stricter HTTP and log URL handling;
+  - no faults when a log is itself inconsistent;
+  - required `leaf_index`;
+  - `x509-parser` pinned.
+
 ## v0.1.0 (research MVP)
 
 First public version. **Not production-ready; no external audit.**

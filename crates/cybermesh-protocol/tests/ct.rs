@@ -42,6 +42,8 @@ fn tile(i: u64) -> TileScanResult {
         leaf_count: 256,
         root: Digest::of(&i.to_be_bytes()),
         unparsed: 0,
+        names: 0,
+        names_digest: Digest::of(b"names"),
         matches: vec![],
         truncated: false,
     }
@@ -235,4 +237,97 @@ fn domain_task_kind_cannot_carry_ct() {
         )
         .is_err()
     );
+}
+
+/// Worst case: every tile saturated with maximum-length names must still fit one message.
+#[test]
+fn worst_case_result_fits_the_envelope_limit() {
+    let n = net();
+    let mut t = task(&n);
+    t.tile_count = MAX_TILES_PER_TASK;
+    let long = format!(
+        "{}.{}.{}.{}.example.com",
+        "a".repeat(60),
+        "b".repeat(60),
+        "c".repeat(60),
+        "d".repeat(45)
+    );
+    assert!(long.len() <= 253);
+    let tiles: Vec<TileScanResult> = (0..u64::from(MAX_TILES_PER_TASK))
+        .map(|i| {
+            let ti = t.first_tile + i;
+            let mut x = tile(ti);
+            x.names = MAX_NAMES_PER_TILE;
+            x.truncated = true;
+            x.matches = (0..MAX_MATCHES_PER_TILE as u64)
+                .map(|k| CtMatch {
+                    index: ti * 256 + k,
+                    name: long.clone(),
+                    risk_score_bp: 10_000,
+                    verdict: Verdict::Suspicious,
+                    codes: vec![
+                        FindingCode::BrandImpersonation,
+                        FindingCode::BrandLookalike,
+                        FindingCode::IdnHomograph,
+                        FindingCode::MixedScript,
+                        FindingCode::SuspiciousKeywords,
+                        FindingCode::ManyHyphens,
+                        FindingCode::DeepSubdomain,
+                        FindingCode::LongHostname,
+                        FindingCode::HighEntropy,
+                        FindingCode::DigitHeavy,
+                        FindingCode::SuspiciousTld,
+                    ],
+                })
+                .collect();
+            x
+        })
+        .collect();
+    let r = result(&n, &t, 0, tiles);
+    let bytes = sign_bytes(CT_RESULT, &r, &n.workers[0].key);
+    eprintln!("worst-case CT result envelope: {} bytes", bytes.len());
+    assert!(
+        bytes.len() < Limits::default().max_envelope_bytes,
+        "{} bytes",
+        bytes.len()
+    );
+    verify_ct_result(&bytes, &n.manifest, NOW, &Limits::default()).unwrap();
+}
+
+#[test]
+fn at_most_four_matches_per_entry() {
+    let n = net();
+    let t = task(&n);
+    let lo = t.first_tile * 256;
+    let mut tiles: Vec<TileScanResult> = (t.first_tile..t.first_tile + 8).map(tile).collect();
+    let m = |name: String| CtMatch {
+        index: lo + 5,
+        name,
+        risk_score_bp: 4000,
+        verdict: Verdict::Suspicious,
+        codes: vec![FindingCode::BrandLookalike],
+    };
+    tiles[0].matches = (0..=MAX_MATCHES_PER_ENTRY)
+        .map(|i| m(format!("a{i}.example.com")))
+        .collect();
+    let r = result(&n, &t, 0, tiles.clone());
+    let l = Limits::default();
+    assert!(
+        verify_ct_result(
+            &sign_bytes(CT_RESULT, &r, &n.workers[0].key),
+            &n.manifest,
+            NOW,
+            &l
+        )
+        .is_err()
+    );
+    tiles[0].matches.pop();
+    let r = result(&n, &t, 0, tiles);
+    verify_ct_result(
+        &sign_bytes(CT_RESULT, &r, &n.workers[0].key),
+        &n.manifest,
+        NOW,
+        &l,
+    )
+    .unwrap();
 }

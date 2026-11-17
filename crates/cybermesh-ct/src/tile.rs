@@ -147,8 +147,8 @@ fn leaf_index_extension(ext: &[u8]) -> Result<Option<u64>, CtError> {
     Ok(found)
 }
 
-/// Parses a full data tile (exactly 256 entries, no trailing bytes). Entries carrying a
-/// `leaf_index` extension must match their position.
+/// Parses a full data tile (exactly 256 entries, no trailing bytes). Every entry must carry
+/// a `leaf_index` extension equal to its position.
 pub fn parse_data_tile(bytes: &[u8], tile_index: u64) -> Result<Vec<Entry>, CtError> {
     let mut r = Reader { buf: bytes, pos: 0 };
     let first = tile_index
@@ -170,12 +170,20 @@ pub fn parse_data_tile(bytes: &[u8], tile_index: u64) -> Result<Vec<Entry>, CtEr
         };
         let ext = r.vec(2, 0, 0xffff)?;
         let timestamped_entry = &bytes[start..r.pos];
-        if let Some(li) = leaf_index_extension(ext)?
-            && li != index
-        {
-            return Err(CtError::Malformed(format!(
-                "entry at index {index} claims leaf_index {li}"
-            )));
+        // static-ct-api requires the extension: without it, entries are not bound to their
+        // position and a tile could be served at the wrong index.
+        match leaf_index_extension(ext)? {
+            Some(li) if li == index => {}
+            Some(li) => {
+                return Err(CtError::Malformed(format!(
+                    "entry at index {index} claims leaf_index {li}"
+                )));
+            }
+            None => {
+                return Err(CtError::Malformed(format!(
+                    "entry at index {index} has no leaf_index extension"
+                )));
+            }
         }
         if kind == EntryKind::Precert {
             r.vec(3, 1, MAX_CERT_BYTES)?; // pre_certificate (not needed: TBS is in the entry)

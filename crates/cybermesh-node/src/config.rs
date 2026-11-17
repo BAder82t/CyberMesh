@@ -175,3 +175,22 @@ impl CoordinatorConfig {
         Ok(c)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_ct_policy_table_uses_defaults() {
+        let c: CtScanConfig =
+            toml::from_str("log_id = \"x\"\ntile_count = 8\n[policy]\npublish_warnings = true\n")
+                .unwrap();
+        assert!(c.policy.publish_warnings);
+        assert_eq!(c.policy.min_operators, 2);
+        assert_eq!(c.tiles_per_task, 8);
+        assert!(
+            toml::from_str::<CtScanConfig>("log_id = \"x\"\ntile_count = 8\n[policy]\nbogus = 1\n")
+                .is_err()
+        );
+    }
+}

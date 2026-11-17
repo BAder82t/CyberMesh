@@ -89,24 +89,57 @@ pub struct CtLogInfo {
     pub monitoring_url: String,
 }
 
+/// Splits `host[:port]` or `[v6]:port` (the authority, up to the first `/`).
+fn split_authority(rest: &str) -> Option<(&str, Option<&str>)> {
+    let auth = rest.split('/').next()?;
+    if let Some(after) = auth.strip_prefix('[') {
+        let (inner, tail) = after.split_once(']')?;
+        let host = &auth[..inner.len() + 2];
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(tail.strip_prefix(':')?)
+        };
+        Some((host, port))
+    } else {
+        Some(match auth.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (auth, None),
+        })
+    }
+}
+
+/// A lowercase DNS name with at least two labels and a non-numeric TLD (no IP literals).
+fn is_dns_host(h: &str) -> bool {
+    let labels: Vec<&str> = h.split('.').collect();
+    h.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+        && labels
+            .last()
+            .is_some_and(|t| !t.bytes().all(|b| b.is_ascii_digit()))
+}
+
 impl CtLogInfo {
-    /// Validates the URL policy.
+    /// Validates the URL policy: `https://<dns name>[:port]/<path>/`, or plain HTTP to a
+    /// loopback address (tests and demos). No credentials, query, fragment, percent-encoding
+    /// or `..`.
     pub fn validate(&self) -> Result<(), String> {
         if !cybermesh_protocol::ct::is_valid_log_id(&self.log_id) {
             return Err(format!("invalid log id {}", self.log_id));
         }
         let u = self.monitoring_url.as_str();
-        let rest = if let Some(r) = u.strip_prefix("https://") {
-            r
+        let (rest, https) = if let Some(r) = u.strip_prefix("https://") {
+            (r, true)
         } else if let Some(r) = u.strip_prefix("http://") {
-            let host = r.split(['/', ':']).next().unwrap_or("");
-            if !(host == "127.0.0.1" || host == "localhost" || host == "[::1]") {
-                return Err(format!(
-                    "{}: plain http is only allowed for loopback",
-                    self.log_id
-                ));
-            }
-            r
+            (r, false)
         } else {
             return Err(format!("{}: monitoring URL must be https", self.log_id));
         };
@@ -114,18 +147,33 @@ impl CtLogInfo {
             && u.ends_with('/')
             && u.len() <= 256
             && u.bytes().all(|b| b.is_ascii_graphic())
-            && !rest.contains('@')
-            && !rest.contains("..")
-            && !rest.contains('?')
-            && !rest.contains('#');
-        if ok {
-            Ok(())
-        } else {
-            Err(format!(
+            && !rest.contains(['@', '?', '#', '%', '\\'])
+            && !rest.contains("..");
+        let Some((host, port)) = split_authority(rest).filter(|_| ok) else {
+            return Err(format!(
                 "{}: malformed monitoring URL (must end with '/')",
                 self.log_id
-            ))
+            ));
+        };
+        if port
+            .is_some_and(|p| p.is_empty() || p.len() > 5 || !p.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err(format!("{}: invalid port", self.log_id));
         }
+        if https {
+            if !is_dns_host(host) {
+                return Err(format!(
+                    "{}: https monitoring URL needs a DNS host name",
+                    self.log_id
+                ));
+            }
+        } else if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+            return Err(format!(
+                "{}: plain http is only allowed for loopback",
+                self.log_id
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -448,6 +496,21 @@ mod tests {
         );
         assert!(ok("file:///etc/").is_err());
         assert!(ok("http://127.0.0.1.evil.example/").is_err());
+        assert!(ok("http://[::1]:8090/").is_ok());
+        assert!(ok("http://[::1]/").is_ok());
+        assert!(ok("http://[::2]:8090/").is_err());
+        assert!(ok("https://mon.example.org:8443/a/").is_ok());
+        assert!(ok("https://mon.example.org:/a/").is_err(), "empty port");
+        assert!(ok("https://mon.example.org:84x/a/").is_err());
+        assert!(
+            ok("https://mon.example.org/%2e%2e/").is_err(),
+            "percent-encoding"
+        );
+        assert!(ok("https://10.0.0.1/").is_err(), "IP literal over https");
+        assert!(ok("https://[fe80::1]/").is_err(), "IPv6 literal over https");
+        assert!(ok("https://localhost/").is_err(), "single-label host");
+        assert!(ok("https://Mon.Example.org/").is_err(), "lowercase only");
+        assert!(ok("https://mon.example.org\\@x/").is_err());
     }
 
     #[test]

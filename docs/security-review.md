@@ -67,11 +67,31 @@ A second independent internal review covered code written after the first pass. 
 | LOW | Supply chain: base images, gitleaks image and the nightly fuzz toolchain were unpinned, the gitleaks allowlist was broad, and evaluation inputs were unverified. | Digests and versions pinned, allowlist narrowed, phishing snapshots verified against pinned SHA-256. | CI files |
 | LOW | `.dockerignore` missed `fuzz/target` and other outputs, giving a 642 MB build context. | Excluded. | — |
 
+## Third pass: Certificate Transparency monitoring (v0.2 branch)
+
+A third independent internal review covered the `ct-shard-scan` task type: the CT crate, the CT verifier, and the worker and coordinator changes. It found no CRITICAL issues. All findings below were fixed.
+
+| Severity | Finding | Fix | Test or evidence |
+|---|---|---|---|
+| HIGH | Matches beyond the per-tile cap were dropped in (index, name) order, so a certificate with many decoy brand names could push a real lookalike out of the result. Truncation was not visible in reports. | At most 4 matches per certificate and 16 per tile, kept by priority (highest risk first). Truncated tiles are listed in verification records and in `ct report`. | `caps_keep_the_highest_risk_matches_and_commit_every_name`, `at_most_four_matches_per_entry` |
+| HIGH | A legal maximal result (64 tiles × 256 matches) exceeded the 256 KiB message limit, so honest results for busy shards would be dropped. | 16 tiles per task, 16 matches per tile. The worst case is 181,928 bytes. | `worst_case_result_fits_the_envelope_limit` |
+| MEDIUM | A worker could copy roots from the log's hash tiles and report no matches without parsing anything. Only a spot check of a tile with matches would catch it. | Each tile result commits to the count and digest of every extracted name. Spot checks compare whole tile results. The default is now 2 checks, the second drawn from tiles that report matches. | `spot_checks_favour_tiles_with_reported_matches`; names-digest assertion in the caps test |
+| MEDIUM | The worker awaited the CT scan inside its event loop, so heartbeats, PAUSE/STOP and new tasks stalled for the whole scan, and throttling did not apply to it. | The scan runs on a background thread, one at a time. It waits while paused or throttled and stops on STOP, shutdown or task expiry. The result comes back over a channel. Domain tasks keep running meanwhile. | integration tests `ct_e2e` (3); local demo |
+| MEDIUM | HTTP accepted non-200 responses (for example a redirect body) and hash tiles of the wrong length. A log whose data and hash tiles disagree would have honest workers faulted. | HTTP 200 only, exact hash tile length. A root mismatch is a fault only once the verifier's own scan matches the log. Otherwise the tile is recorded as log-inconsistent, nobody is faulted and the task is disputed. | `an_inconsistent_log_faults_nobody_and_is_disputed`, `a_root_mismatch_the_verifier_cannot_settle_is_not_verified` |
+| MEDIUM | The coordinator finalised CT tasks with `block_in_place` on its event loop. Each finalisation may fetch several tiles (30 s timeout each). | Finalisation runs on blocking threads, at most 2 at a time. Records are applied through a channel, and `exit_when_done` waits for them. The start-up checkpoint fetch also moved off the loop. | integration tests; local demo |
+| MEDIUM | The lookalike check computed a quadratic edit distance for every (name part, brand token) pair, which hostile CT names can make expensive. | Length-difference precheck (distance ≥ length difference) and the de-leeting hoisted out of the loop. Output is unchanged. | `golden_vectors` unchanged |
+| MEDIUM | `x509-parser` was not pinned, yet it determines which names a CT scan extracts. Honest workers on different versions could disagree and be faulted. | Pinned to `=0.18.1` and recorded in `ENGINE_VERSION`. | engine version string |
+| LOW | CT log URL validation rejected `[::1]` by mistake and accepted percent-encoding and IP literals over HTTPS. | Authority parsed properly. HTTPS needs a lowercase DNS host name; ports must be numeric; `%` and `\` are refused. | `ct_log_url_policy` |
+| LOW | A node with an empty state directory accepted any valid, unexpired manifest, including an old one. | Optional `min_sequence` floor in the governance root. | `governance_root_floor_protects_a_fresh_node` |
+| LOW | `ct scan` added the tile range without an overflow check. | `checked_add`. | — |
+| LOW | Entries without a `leaf_index` extension were accepted, so entries were not bound to their position. | The extension is required (static-ct-api mandates it). A real Let's Encrypt tile still parses. | `parse_data_tile` tests; one-tile check against Willow 2027h1 |
+
 ## Accepted or deferred (documented residual risk)
 
-- **Manifest state on restart.** A node that restarts loads whatever manifest file is on disk; it does not persist the highest sequence it has seen across restarts.
+- **Manifest state on restart.** Fixed on the v0.2 branch: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.
 - **Extension trust root.** The extension's trust root is bundled, so a revoked release key is removed only by shipping an extension update.
 - **Synchronous analysis.** `assess_task` runs on the worker's async loop. It costs about 1 ms per 32-domain task.
 - **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced.
 - **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It is a compile-time proc-macro reached through libp2p.
 - **Single verifier per network in the MVP.** Run verifiers at two or more organisations (roadmap).
+- **Late CT equivocation during finalisation.** CT tasks are finalised in the background. A second, conflicting result that arrives in that window (usually seconds) is ignored rather than recorded as provable equivocation. Results that arrive before or after the window are handled as for domain tasks.

@@ -29,9 +29,14 @@ pub const CT_RESULT: &str = "application/vnd.cybermesh.ct-result+json;v=1";
 /// Entries per full data tile (static CT API).
 pub const TILE_WIDTH: u64 = 256;
 /// Upper bound on tiles per task.
-pub const MAX_TILES_PER_TASK: u32 = 64;
+pub const MAX_TILES_PER_TASK: u32 = 16;
 /// Upper bound on matches reported per tile (deterministic truncation beyond this).
-pub const MAX_MATCHES_PER_TILE: usize = 256;
+pub const MAX_MATCHES_PER_TILE: usize = 16;
+/// Upper bound on matches kept per log entry (a certificate with hundreds of brand-token SANs
+/// cannot crowd out other entries).
+pub const MAX_MATCHES_PER_ENTRY: usize = 4;
+/// Upper bound on names assessed per tile (bounds CPU on hostile certificates).
+pub const MAX_NAMES_PER_TILE: u32 = 8192;
 
 /// A signed CT shard-scan task.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,9 +118,16 @@ pub struct TileScanResult {
     pub root: Digest,
     /// Entries whose certificate could not be parsed (counted, still committed in `root`).
     pub unparsed: u16,
-    /// Sorted by (index, name); at most [`MAX_MATCHES_PER_TILE`].
+    /// Names extracted and assessed (at most [`MAX_NAMES_PER_TILE`]).
+    pub names: u32,
+    /// Digest of every (entry index, name) pair extracted from the tile. Producing it requires
+    /// downloading and parsing the tile, so a worker that only copies the log's hash tiles
+    /// is exposed by any spot check, not just by checks of tiles that contain matches.
+    pub names_digest: Digest,
+    /// Sorted by (index, name); at most [`MAX_MATCHES_PER_TILE`], chosen by priority
+    /// (highest risk first) when more matched.
     pub matches: Vec<CtMatch>,
-    /// True when more than [`MAX_MATCHES_PER_TILE`] names matched.
+    /// True when matches or names were capped; the tile is then incomplete for investigation.
     pub truncated: bool,
 }
 
@@ -283,11 +295,14 @@ pub fn verify_ct_result(
     }
     let mut prev_tile: Option<u64> = None;
     for t in &r.tiles {
-        if prev_tile.is_some_and(|p| t.tile_index != p + 1) {
+        if prev_tile.is_some_and(|p| p.checked_add(1) != Some(t.tile_index)) {
             return Err(ProtocolError::Invalid("tiles must be consecutive".into()));
         }
         prev_tile = Some(t.tile_index);
-        if u64::from(t.leaf_count) != TILE_WIDTH || u64::from(t.unparsed) > TILE_WIDTH {
+        if u64::from(t.leaf_count) != TILE_WIDTH
+            || u64::from(t.unparsed) > TILE_WIDTH
+            || t.names > MAX_NAMES_PER_TILE
+        {
             return Err(ProtocolError::Invalid("only full tiles are scanned".into()));
         }
         if t.matches.len() > MAX_MATCHES_PER_TILE {
@@ -296,7 +311,16 @@ pub fn verify_ct_result(
         let lo = t.tile_index.saturating_mul(TILE_WIDTH);
         let hi = lo.saturating_add(TILE_WIDTH);
         let mut prev: Option<(&u64, &str)> = None;
+        let mut per_entry = 0usize;
         for m in &t.matches {
+            per_entry = if prev.is_some_and(|p| *p.0 == m.index) {
+                per_entry + 1
+            } else {
+                1
+            };
+            if per_entry > MAX_MATCHES_PER_ENTRY {
+                return Err(ProtocolError::Invalid("too many matches per entry".into()));
+            }
             if m.index < lo || m.index >= hi || !is_normalized_domain(&m.name) {
                 return Err(ProtocolError::Invalid(
                     "match outside tile or invalid name".into(),

@@ -40,13 +40,15 @@ pub trait CtOracle {
     fn rescan(&self, log_id: &str, tile: u64) -> Option<TileScanResult>;
 }
 
-/// CT verification policy.
+/// CT verification policy. Missing fields take their defaults.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, default)]
 pub struct CtPolicy {
     /// Distinct operators that must agree on a shard (default 2: CT is advisory-only).
     pub min_operators: usize,
-    /// Tiles re-scanned per task by the verifier.
+    /// Tiles re-scanned per task by the verifier. The first pick is uniform over the task's
+    /// tiles (catches omission); the second is drawn from tiles some worker reported matches
+    /// for (catches fabrication); further picks are uniform.
     pub spot_check_tiles: usize,
     /// Check every tile root against the log's hash tiles.
     pub check_log_roots: bool,
@@ -81,7 +83,7 @@ impl Default for CtPolicy {
     fn default() -> Self {
         Self {
             min_operators: 2,
-            spot_check_tiles: 1,
+            spot_check_tiles: 2,
             check_log_roots: true,
             result_grace_secs: 60,
             publish_warnings: false,
@@ -106,6 +108,13 @@ pub struct CtScanDetail {
     /// All matches in the accepted tiles (brand signals, including below warn threshold),
     /// for investigation reports.
     pub matches: Vec<CtMatch>,
+    /// Accepted tiles whose matches or names were capped: investigation must re-scan them.
+    #[serde(default)]
+    pub truncated_tiles: Vec<u64>,
+    /// Tiles whose data, as served to the verifier, does not hash to the log's own level-1
+    /// hash. The log (or its CDN) is inconsistent; nobody is faulted and the task is disputed.
+    #[serde(default)]
+    pub log_inconsistent_tiles: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -347,14 +356,42 @@ impl CtTaskVerifier {
                 Some(r)
             };
 
+        // The log's own level-1 hashes. A verifier rescan is trusted only if its root equals
+        // the log's (when known): otherwise the log served inconsistent data and nobody can
+        // be proven wrong.
+        let mut roots: BTreeMap<u64, Digest> = BTreeMap::new();
+        let mut log_inconsistent: BTreeSet<u64> = BTreeSet::new();
+        let consistent = |roots: &BTreeMap<u64, Digest>, m: &TileScanResult| {
+            roots.get(&m.tile_index).is_none_or(|r| *r == m.root)
+        };
         if let Some(o) = oracle {
-            // (2) Commitments against the log's own hashes.
+            // (2) Commitments against the log's own hashes. A worker root that differs from
+            // the log is a fault only once the verifier's own scan of the data tile matches
+            // the log (an inconsistent log must not get honest workers quarantined).
             if self.policy.check_log_roots {
-                let mut roots: BTreeMap<u64, Digest> = BTreeMap::new();
                 for t in &tiles {
                     if let Some(r) = o.tile_root(&log_id, *t) {
                         roots.insert(*t, r);
                         checked_against_log += 1;
+                    }
+                }
+                let suspect: BTreeSet<u64> = self
+                    .held
+                    .values()
+                    .flat_map(|h| h.result.tiles.iter())
+                    .filter(|t| !consistent(&roots, t))
+                    .map(|t| t.tile_index)
+                    .collect();
+                let mut proven = BTreeSet::new();
+                for t in suspect {
+                    match rescan(t, &mut rescanned) {
+                        Some(mine) if consistent(&roots, &mine) => {
+                            proven.insert(t);
+                        }
+                        Some(_) => {
+                            log_inconsistent.insert(t);
+                        }
+                        None => {} // cannot prove either way: no fault, not verified below
                     }
                 }
                 self.fault_workers_where(
@@ -362,12 +399,22 @@ impl CtTaskVerifier {
                         h.result
                             .tiles
                             .iter()
-                            .any(|t| roots.get(&t.tile_index).is_some_and(|r| *r != t.root))
+                            .any(|t| proven.contains(&t.tile_index) && !consistent(&roots, t))
                     },
                     FaultKind::IncorrectResult,
                 );
             }
-            // (3) Unpredictable spot checks (catch omitted matches).
+            // (3) Unpredictable spot checks. Whole tile results are compared, including the
+            // digest of every extracted name, so omitted or altered matches are caught.
+            let reported: Vec<u64> = self
+                .held
+                .values()
+                .flat_map(|h| h.result.tiles.iter())
+                .filter(|t| !t.matches.is_empty())
+                .map(|t| t.tile_index)
+                .collect::<BTreeSet<u64>>()
+                .into_iter()
+                .collect();
             let mut picks = BTreeSet::new();
             for i in 0..self.policy.spot_check_tiles.min(tiles.len()) {
                 let d = Digest::tagged(
@@ -379,12 +426,21 @@ impl CtTaskVerifier {
                     ],
                 );
                 let r = u64::from_be_bytes(d.0[..8].try_into().unwrap_or([0u8; 8]));
-                picks.insert(tiles[usize::try_from(r % tiles.len() as u64).unwrap_or(0)]);
+                let pool = if i == 1 && !reported.is_empty() {
+                    &reported
+                } else {
+                    &tiles
+                };
+                picks.insert(pool[usize::try_from(r % pool.len() as u64).unwrap_or(0)]);
             }
             for t in picks {
                 let _ = rescan(t, &mut rescanned);
             }
-            let snapshot = rescanned.clone();
+            let snapshot: BTreeMap<u64, TileScanResult> = rescanned
+                .iter()
+                .filter(|(_, m)| consistent(&roots, m))
+                .map(|(k, m)| (*k, m.clone()))
+                .collect();
             self.fault_workers_where(
                 |h| {
                     h.result
@@ -474,6 +530,23 @@ impl CtTaskVerifier {
                 authoritative = full_rescan(&mut rescanned);
             }
         }
+        if authoritative
+            .as_ref()
+            .is_some_and(|a| a.iter().any(|t| !consistent(&roots, t)))
+        {
+            // Agreed roots differ from the log and the verifier could not settle it.
+            authoritative = None;
+        }
+        log_inconsistent.extend(
+            rescanned
+                .values()
+                .filter(|m| !consistent(&roots, m))
+                .map(|m| m.tile_index),
+        );
+        if !log_inconsistent.is_empty() {
+            // The verifier's own view of the log is not authenticated by the log's hashes.
+            authoritative = None;
+        }
         if let Some(auth) = &authoritative {
             let d = digest_of(auth);
             self.fault_workers_where(|h| Some(h.tiles_digest) != d, FaultKind::IncorrectResult);
@@ -489,17 +562,19 @@ impl CtTaskVerifier {
             .policy
             .min_operators
             .max(usize::from(self.task.min_operators));
-        let status = if authoritative.is_none() && distinct.len() > 1 {
-            TaskStatus::Disputed
-        } else if authoritative.is_some() && agreeing.len() >= required {
-            TaskStatus::Verified
-        } else {
-            TaskStatus::Insufficient
-        };
+        let status =
+            if !log_inconsistent.is_empty() || (authoritative.is_none() && distinct.len() > 1) {
+                TaskStatus::Disputed
+            } else if authoritative.is_some() && agreeing.len() >= required {
+                TaskStatus::Verified
+            } else {
+                TaskStatus::Insufficient
+            };
 
         let mut outcomes = Vec::new();
         let mut detail_matches = Vec::new();
         let (mut entries, mut unparsed) = (0u64, 0u64);
+        let mut truncated_tiles = Vec::new();
         if let (TaskStatus::Verified, Some(auth)) = (status, &authoritative) {
             let classify = Policy {
                 min_operators: self.policy.min_operators,
@@ -509,6 +584,9 @@ impl CtTaskVerifier {
             for t in auth {
                 entries += u64::from(t.leaf_count);
                 unparsed += u64::from(t.unparsed);
+                if t.truncated {
+                    truncated_tiles.push(t.tile_index);
+                }
                 let confirmed = rescanned.contains_key(&t.tile_index);
                 for m in &t.matches {
                     detail_matches.push(m.clone());
@@ -581,6 +659,8 @@ impl CtTaskVerifier {
                 entries,
                 unparsed,
                 matches: detail_matches,
+                truncated_tiles,
+                log_inconsistent_tiles: log_inconsistent.into_iter().collect(),
             }),
         }
     }

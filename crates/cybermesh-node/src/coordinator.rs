@@ -323,6 +323,55 @@ impl CtOracle for LogOracle<'_> {
     }
 }
 
+/// CT verifications finalizing at once (each may fetch and re-scan tiles from the log).
+const MAX_CT_FINALIZING: usize = 2;
+
+/// Settles a CT task against the log. Blocking: fetches the checkpoint, hash tiles and any
+/// data tiles it must re-scan. Runs on a blocking thread, never on the event loop.
+fn finalize_ct(
+    v: CtTaskVerifier,
+    engine: &Engine,
+    ct: Option<&CtSetup>,
+    now: u64,
+) -> VerificationRecord {
+    let oracle = ct.and_then(|c| {
+        let src = HttpTileSource::new(&c.log, Duration::from_secs(30)).ok()?;
+        let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
+        Some((
+            LogOracle {
+                src,
+                tree_size: cp.size,
+                engine,
+            },
+            c.seed,
+        ))
+    });
+    let seed = oracle.as_ref().map_or([0u8; 32], |(_, s)| *s);
+    v.finalize(
+        Some(engine),
+        oracle.as_ref().map(|(o, _)| o as &dyn CtOracle),
+        &seed,
+        now,
+    )
+}
+
+/// What `settle` needs to finish once a record exists.
+struct SettleCtx {
+    missing: Vec<KeyId>,
+    forget_after: u64,
+    task_digest: Digest,
+    attempt: u32,
+    batch: Batch,
+    now: u64,
+}
+
+/// A CT verification finished on a blocking thread (`None` if it panicked).
+struct CtFinalized {
+    task_id: String,
+    ctx: SettleCtx,
+    record: Option<VerificationRecord>,
+}
+
 struct Inflight {
     verifier: AnyVerifier,
     deadline: Instant,
@@ -370,6 +419,11 @@ struct Coordinator {
     /// Settled tasks: task id -> (forget after, worker -> accepted result digest). Lets the
     /// coordinator prove equivocation even when the conflicting result arrives late.
     settled: HashMap<String, SettledTask>,
+    engine_arc: Arc<Engine>,
+    ct_permits: Arc<tokio::sync::Semaphore>,
+    ct_finalized: tokio::sync::mpsc::UnboundedSender<CtFinalized>,
+    /// CT verifications running in the background (exit waits for them).
+    ct_finalizing: usize,
 }
 
 impl Coordinator {
@@ -592,40 +646,64 @@ impl Coordinator {
         let Some(inf) = self.inflight.remove(task_id) else {
             return;
         };
-        let missing = inf.verifier.missing();
-        let forget_after = inf.verifier.expires_at().saturating_add(3600);
-        let task_digest = inf.verifier.task_digest();
-        let attempt = inf.verifier.attempt();
-        let now = self.s.clock.now();
-        let record = match inf.verifier {
-            AnyVerifier::Domain(v) => v.finalize(Some(&self.s.engine), now),
-            AnyVerifier::Ct(v) => {
-                let engine = &self.s.engine;
-                let ct = self.s.ct.clone();
-                // Verification fetches tiles from the log (blocking I/O).
-                tokio::task::block_in_place(|| {
-                    let oracle = ct.as_ref().and_then(|c| {
-                        let src = HttpTileSource::new(&c.log, Duration::from_secs(30)).ok()?;
-                        let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
-                        Some((
-                            LogOracle {
-                                src,
-                                tree_size: cp.size,
-                                engine,
-                            },
-                            c.seed,
-                        ))
-                    });
-                    let seed = oracle.as_ref().map_or([0u8; 32], |(_, s)| *s);
-                    v.finalize(
-                        Some(engine),
-                        oracle.as_ref().map(|(o, _)| o as &dyn CtOracle),
-                        &seed,
-                        now,
-                    )
-                })
-            }
+        let ctx = SettleCtx {
+            missing: inf.verifier.missing(),
+            forget_after: inf.verifier.expires_at().saturating_add(3600),
+            task_digest: inf.verifier.task_digest(),
+            attempt: inf.verifier.attempt(),
+            batch: inf.batch,
+            now: self.s.clock.now(),
         };
+        match inf.verifier {
+            AnyVerifier::Domain(v) => {
+                let record = v.finalize(Some(&self.s.engine), ctx.now);
+                self.apply_record(task_id, ctx, record);
+            }
+            AnyVerifier::Ct(v) => {
+                // Verification fetches tiles from the log: run it off the event loop, with
+                // bounded concurrency, and apply the record when it comes back.
+                self.ct_finalizing += 1;
+                let engine = Arc::clone(&self.engine_arc);
+                let ct = self.s.ct.clone();
+                let permits = Arc::clone(&self.ct_permits);
+                let tx = self.ct_finalized.clone();
+                let task_id = task_id.to_owned();
+                tokio::spawn(async move {
+                    let _permit = permits.acquire_owned().await.ok();
+                    let now = ctx.now;
+                    let record = tokio::task::spawn_blocking(move || {
+                        finalize_ct(v, &engine, ct.as_ref(), now)
+                    })
+                    .await
+                    .ok();
+                    let _ = tx.send(CtFinalized {
+                        task_id,
+                        ctx,
+                        record,
+                    });
+                });
+            }
+        }
+    }
+
+    fn on_ct_finalized(&mut self, done: CtFinalized) {
+        self.ct_finalizing = self.ct_finalizing.saturating_sub(1);
+        match done.record {
+            Some(r) => self.apply_record(&done.task_id, done.ctx, r),
+            None => warn!(task = %done.task_id, "CT verification failed internally; task dropped"),
+        }
+    }
+
+    /// Records, persists and acts on a finished verification (reputation, retries).
+    fn apply_record(&mut self, task_id: &str, ctx: SettleCtx, record: VerificationRecord) {
+        let SettleCtx {
+            missing,
+            forget_after,
+            task_digest,
+            attempt,
+            batch,
+            now,
+        } = ctx;
         if let Some(ct) = &record.ct {
             self.report.ct_tiles_verified += if record.status == TaskStatus::Verified {
                 u64::from(ct.tile_count)
@@ -654,9 +732,9 @@ impl Coordinator {
             Err(e) => warn!(error = %e, "failed to persist verification record"),
         }
         let retry = record.status != TaskStatus::Verified
-            && (inf.batch.attempt as usize + 1) < self.s.max_attempts;
+            && (batch.attempt as usize + 1) < self.s.max_attempts;
         if retry {
-            let mut b = inf.batch.clone();
+            let mut b = batch;
             b.attempt += 1;
             b.queued_at = Instant::now();
             // Exclude non-responders and faulted workers from the next attempt.
@@ -666,7 +744,7 @@ impl Coordinator {
             info!(task = %task_id, status = ?record.status, next_attempt = b.attempt, "reassigning");
             self.report.reassignments += 1;
             self.pending.push_front(b);
-        } else if let Some(t) = inf.batch.first_issued {
+        } else if let Some(t) = batch.first_issued {
             self.report
                 .settle_latency_ms
                 .push(u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX));
@@ -901,11 +979,17 @@ pub async fn run_coordinator(
     if let Some(ct) = &setup.ct {
         let first = match ct.first_tile {
             Some(f) => Some(f),
-            None => tokio::task::block_in_place(|| {
-                let src = HttpTileSource::new(&ct.log, Duration::from_secs(30)).ok()?;
-                let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
-                Some(cp.full_tiles().saturating_sub(ct.tile_count))
-            }),
+            None => {
+                let (log, count) = (ct.log.clone(), ct.tile_count);
+                tokio::task::spawn_blocking(move || {
+                    let src = HttpTileSource::new(&log, Duration::from_secs(30)).ok()?;
+                    let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
+                    Some(cp.full_tiles().saturating_sub(count))
+                })
+                .await
+                .ok()
+                .flatten()
+            }
         };
         match first {
             Some(first) => {
@@ -931,7 +1015,12 @@ pub async fn run_coordinator(
         }
     }
     info!(peer = %net.local_peer_id, batches = pending.len(), domains = setup.domains.len(), "coordinator started");
+    let (ct_finalized, mut ct_finalized_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut c = Coordinator {
+        engine_arc: Arc::new(setup.engine.clone()),
+        ct_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CT_FINALIZING)),
+        ct_finalized,
+        ct_finalizing: 0,
         report: CoordinatorReport {
             domains_total: setup.domains.len(),
             ..CoordinatorReport::default()
@@ -967,6 +1056,7 @@ pub async fn run_coordinator(
                 Some(_) => {}
                 None => break,
             },
+            Some(done) = ct_finalized_rx.recv() => c.on_ct_finalized(done),
             _ = manifest_tick.tick() => {
                 if let Some(src) = c.s.manifest_source.clone() {
                     match files::reload_manifest(&src, &c.s.manifest, c.s.clock.now()) {
@@ -1021,7 +1111,11 @@ pub async fn run_coordinator(
                         }
                     }
                 }
-                if c.s.exit_when_done && c.pending.is_empty() && c.inflight.is_empty() {
+                if c.s.exit_when_done
+                    && c.pending.is_empty()
+                    && c.inflight.is_empty()
+                    && c.ct_finalizing == 0
+                {
                     break;
                 }
             }

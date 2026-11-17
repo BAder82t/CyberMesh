@@ -42,6 +42,13 @@ impl HttpTileSource {
             Err(ureq::Error::Status(404, _)) => return Err(CtError::NotFound(path.to_owned())),
             Err(e) => return Err(CtError::Http(e.to_string())),
         };
+        // Redirects are disabled, so a 3xx arrives here: only 200 carries a tile.
+        if resp.status() != 200 {
+            return Err(CtError::Http(format!(
+                "unexpected status {}",
+                resp.status()
+            )));
+        }
         let mut body = Vec::new();
         resp.into_reader()
             .take(max as u64 + 1)

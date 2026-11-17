@@ -125,6 +125,7 @@ pub fn run(c: DemoCmd) -> Result<()> {
         network_id: network_id.clone(),
         threshold: 2,
         keys: gov.iter().map(SecretKey::public_key).collect(),
+        min_sequence: 0,
     };
     let coord = key(&out, "coordinator")?;
 
@@ -221,7 +222,7 @@ pub fn run(c: DemoCmd) -> Result<()> {
     };
     let ct_section = match &ct_log {
         Some(id) => format!(
-            "\n# Certificate Transparency monitoring (findings are advisory warnings only).\n[ct]\nlog_id = \"{id}\"\nfirst_tile = 0\ntile_count = {ct_tiles}\ntiles_per_task = 2\nreplication = 2\n"
+            "\n# Certificate Transparency monitoring (investigation report; publishing warnings is off by default).\n[ct]\nlog_id = \"{id}\"\nfirst_tile = 0\ntile_count = {ct_tiles}\ntiles_per_task = 2\nreplication = 2\n"
         ),
         None => String::new(),
     };

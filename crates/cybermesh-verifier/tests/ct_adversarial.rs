@@ -324,3 +324,117 @@ fn binding_replay_and_equivocation() {
         SubmitOutcome::Rejected(_)
     ));
 }
+
+/// Oracle whose hash tile for `bad_tile` disagrees with its data tile (an inconsistent log or
+/// CDN), optionally unable to serve data tiles at all.
+struct SkewedOracle<'a> {
+    inner: Oracle<'a>,
+    bad_tile: u64,
+    can_rescan: bool,
+}
+
+impl CtOracle for SkewedOracle<'_> {
+    fn tile_root(&self, log: &str, tile: u64) -> Option<Digest> {
+        if tile == self.bad_tile {
+            return Some(Digest::of(b"hash tile disagrees with data tile"));
+        }
+        self.inner.tile_root(log, tile)
+    }
+    fn rescan(&self, log: &str, tile: u64) -> Option<TileScanResult> {
+        if self.can_rescan {
+            self.inner.rescan(log, tile)
+        } else {
+            None
+        }
+    }
+}
+
+#[test]
+fn an_inconsistent_log_faults_nobody_and_is_disputed() {
+    let f = fx(&[0, 1]);
+    let mut v = f.verifier(0);
+    for w in [0, 1] {
+        v.submit(&f.result(w, f.honest.clone()), &f.net.manifest, NOW + 2);
+    }
+    let oracle = SkewedOracle {
+        inner: f.oracle(),
+        bad_tile: 2,
+        can_rescan: true,
+    };
+    let rec = v.finalize(Some(&f.engine), Some(&oracle), b"seed", NOW + 3);
+    assert!(
+        rec.faults.is_empty(),
+        "honest workers are not blamed for the log"
+    );
+    assert_eq!(rec.status, TaskStatus::Disputed);
+    assert!(rec.outcomes.is_empty());
+    assert_eq!(rec.ct.unwrap().log_inconsistent_tiles, vec![2]);
+}
+
+#[test]
+fn a_root_mismatch_the_verifier_cannot_settle_is_not_verified() {
+    // Two colluders agree on a root that differs from the log; the verifier cannot fetch the
+    // data tile, so it can prove nothing, but agreement alone must not verify the task.
+    let f = fx(&[2, 3]);
+    let mut v = f.verifier(0);
+    let mut forged = f.honest.clone();
+    forged[3].root = Digest::of(b"not the log's tile");
+    for w in [2, 3] {
+        v.submit(&f.result(w, forged.clone()), &f.net.manifest, NOW + 2);
+    }
+    let oracle = SkewedOracle {
+        inner: f.oracle(),
+        bad_tile: u64::MAX,
+        can_rescan: false,
+    };
+    let rec = v.finalize(Some(&f.engine), Some(&oracle), b"seed", NOW + 3);
+    assert!(rec.faults.is_empty());
+    assert_ne!(rec.status, TaskStatus::Verified);
+    assert!(rec.outcomes.is_empty());
+}
+
+#[test]
+fn spot_checks_favour_tiles_with_reported_matches() {
+    // Colluders fabricate a match in an otherwise empty tile, for the investigation report
+    // (publishing off). With the default two spot checks, one drawn from tiles that report
+    // matches, they are caught far more often than by a single uniform pick (1 in 4).
+    let f = fx(&[2, 3]);
+    let mut forged = f.honest.clone();
+    forged[0].matches.push(CtMatch {
+        index: 7,
+        name: "paypa1-login-verify.example-shop.net".into(),
+        risk_score_bp: 5600,
+        verdict: Verdict::Suspicious,
+        codes: vec![FindingCode::BrandLookalike],
+    });
+    let trials = 64u32;
+    let mut caught = 0u32;
+    for seed in 0..trials {
+        let mut v = CtTaskVerifier::new(
+            f.task.clone(),
+            f.digest,
+            CtPolicy::default(),
+            Policy::default(),
+            Limits::default(),
+        )
+        .unwrap();
+        for w in [2, 3] {
+            v.submit(&f.result(w, forged.clone()), &f.net.manifest, NOW + 2);
+        }
+        let rec = v.finalize(
+            Some(&f.engine),
+            Some(&f.oracle()),
+            &seed.to_be_bytes(),
+            NOW + 3,
+        );
+        if rec.faults.len() == 2 {
+            caught += 1;
+            assert_ne!(rec.status, TaskStatus::Verified);
+        } else {
+            assert!(rec.faults.is_empty());
+        }
+    }
+    // Expected 1 - (3/4)(2/3) = 50 %.
+    eprintln!("caught {caught} of {trials}");
+    assert!(caught * 100 >= trials * 40, "caught {caught} of {trials}");
+}

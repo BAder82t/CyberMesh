@@ -38,6 +38,10 @@ These are **not** published:
 - `examplebank.test`, the legitimate brand domain;
 - unrelated hosts.
 
+### 1a. Certificate Transparency in the local demo
+
+`scripts/demo-local.sh` also starts a synthetic static CT log on `127.0.0.1:8090`. It holds real X.509 certificates generated locally, with a few lookalikes. The coordinator schedules 8 full tiles as 2-tile shards on workers that opted in. Afterwards the script prints the per-brand investigation report (`cybermesh ct report`). With the default policy, CT findings appear there and **not** in the release.
+
 ## 2. Browser extension
 
 ```bash

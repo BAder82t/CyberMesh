@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec};
@@ -166,6 +167,50 @@ impl Queued {
     }
 }
 
+/// Outcome of a background CT scan.
+enum CtOutcome {
+    Done(Vec<TileScanResult>, u64),
+    /// Cancelled (STOP, shutdown) or the task expired mid-scan.
+    Abandoned(&'static str),
+    Failed(String),
+}
+
+/// The single CT scan running in the background, if any.
+struct CtJob {
+    task: CtScanTask,
+    digest: Digest,
+    cancel: Arc<AtomicBool>,
+    cpu0: Duration,
+    t0: Instant,
+}
+
+/// Message from the scan thread back to the event loop.
+struct CtDone {
+    task_id: String,
+    outcome: CtOutcome,
+}
+
+/// Sleeps in short steps while `hold` is set or until `until`, returning false if the scan
+/// must stop (cancelled or past its deadline).
+fn ct_wait(
+    cancel: &AtomicBool,
+    hold: &AtomicBool,
+    until: Option<Instant>,
+    deadline: Instant,
+) -> bool {
+    loop {
+        if cancel.load(Ordering::Relaxed) || Instant::now() >= deadline {
+            return false;
+        }
+        let held = hold.load(Ordering::Relaxed);
+        let waiting = until.is_some_and(|u| Instant::now() < u);
+        if !held && !waiting {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 struct Worker {
     s: WorkerSetup,
     id: KeyId,
@@ -175,6 +220,10 @@ struct Worker {
     replay: ReplayCache,
     queue: VecDeque<Queued>,
     engine_arc: Arc<Engine>,
+    ct_job: Option<CtJob>,
+    /// Set while the governor pauses or throttles the worker; the scan thread waits.
+    ct_hold: Arc<AtomicBool>,
+    ct_done: tokio::sync::mpsc::UnboundedSender<CtDone>,
     outbox: VecDeque<Outgoing>,
     governor: Governor,
     status: WorkerStatus,
@@ -281,7 +330,10 @@ impl Worker {
             .push_back(Queued::Ct(v.message, v.payload_digest));
     }
 
-    async fn execute_ct(&mut self, net: &NetworkHandle, task: CtScanTask, digest: Digest) {
+    /// Starts a CT scan on a blocking thread. The event loop stays responsive; the scan
+    /// waits while the worker is paused or throttled, stops when cancelled or when the task
+    /// expires, and reports back over `ct_done`.
+    fn start_ct(&mut self, task: CtScanTask, digest: Digest) {
         if let Err(e) = self.engine_arc.check_pins(&task.engine, &task.evidence) {
             self.status.tasks_refused += 1;
             warn!(task = %task.task_id, error = %e, "refused CT task");
@@ -302,50 +354,97 @@ impl Worker {
         let engine = Arc::clone(&self.engine_arc);
         let kib = self.s.resources.ct_fetch_kib_per_sec;
         let (first, count) = (task.first_tile, task.tile_count);
-        let cpu0 = process_cpu();
-        let t0 = Instant::now();
-        let scanned =
-            tokio::task::spawn_blocking(move || -> Result<(Vec<TileScanResult>, u64), String> {
-                let src = HttpTileSource::new(&log, Duration::from_secs(30))
-                    .map_err(|e| e.to_string())?;
+        let remaining = task.expires_at.saturating_sub(self.s.clock.now());
+        let deadline = Instant::now() + Duration::from_secs(remaining);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (c, hold, tx, task_id) = (
+            Arc::clone(&cancel),
+            Arc::clone(&self.ct_hold),
+            self.ct_done.clone(),
+            task.task_id.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            let run = || -> CtOutcome {
+                let src = match HttpTileSource::new(&log, Duration::from_secs(30)) {
+                    Ok(s) => s,
+                    Err(e) => return CtOutcome::Failed(e.to_string()),
+                };
                 let started = Instant::now();
                 let mut out = Vec::with_capacity(count as usize);
                 let mut bytes = 0u64;
-                for n in first..first + u64::from(count) {
-                    let data = src.data_tile(n).map_err(|e| e.to_string())?;
+                let mut pace: Option<Instant> = None;
+                for n in first..first.saturating_add(u64::from(count)) {
+                    if !ct_wait(&c, &hold, pace, deadline) {
+                        return CtOutcome::Abandoned("cancelled or expired");
+                    }
+                    let data = match src.data_tile(n) {
+                        Ok(d) => d,
+                        Err(e) => return CtOutcome::Failed(e.to_string()),
+                    };
                     bytes += data.len() as u64;
-                    out.push(scan_tile(&data, n, &engine).map_err(|e| e.to_string())?);
+                    if !ct_wait(&c, &hold, None, deadline) {
+                        return CtOutcome::Abandoned("cancelled or expired");
+                    }
+                    match scan_tile(&data, n, &engine) {
+                        Ok(t) => out.push(t),
+                        Err(e) => return CtOutcome::Failed(e.to_string()),
+                    }
                     if kib > 0 {
                         let min = Duration::from_secs_f64(bytes as f64 / (kib as f64 * 1024.0));
-                        if let Some(wait) = min.checked_sub(started.elapsed()) {
-                            std::thread::sleep(wait);
-                        }
+                        pace = Some(started + min);
                     }
                 }
-                Ok((out, bytes))
-            })
-            .await;
-        let (tiles, fetched) = match scanned {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
+                CtOutcome::Done(out, bytes)
+            };
+            let outcome = run();
+            let _ = tx.send(CtDone { task_id, outcome });
+        });
+        self.ct_job = Some(CtJob {
+            task,
+            digest,
+            cancel,
+            cpu0: process_cpu(),
+            t0: Instant::now(),
+        });
+    }
+
+    /// Stops the running CT scan (STOP, shutdown).
+    fn cancel_ct(&mut self) {
+        if let Some(j) = &self.ct_job {
+            j.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    async fn finish_ct(&mut self, net: &NetworkHandle, done: CtDone) {
+        let Some(job) = self.ct_job.take_if(|j| j.task.task_id == done.task_id) else {
+            return;
+        };
+        let (task, digest) = (job.task, job.digest);
+        let (tiles, fetched) = match done.outcome {
+            CtOutcome::Done(t, b) => (t, b),
+            CtOutcome::Abandoned(why) => {
+                info!(task = %task.task_id, reason = why, "CT scan abandoned");
+                return;
+            }
+            CtOutcome::Failed(e) => {
                 self.status.tasks_refused += 1;
                 warn!(task = %task.task_id, error = %e, "CT scan failed");
                 return;
             }
-            Err(e) => {
-                self.status.tasks_refused += 1;
-                warn!(task = %task.task_id, error = %e, "CT scan panicked");
-                return;
-            }
         };
+        // Process CPU over the job's lifetime (includes concurrent domain tasks; informational).
         let usage = ResourceUsage {
-            cpu_micros: u64::try_from(process_cpu().saturating_sub(cpu0).as_micros())
+            cpu_micros: u64::try_from(process_cpu().saturating_sub(job.cpu0).as_micros())
                 .unwrap_or(u64::MAX),
-            wall_micros: u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX),
+            wall_micros: u64::try_from(job.t0.elapsed().as_micros()).unwrap_or(u64::MAX),
         };
+        if task.expires_at <= self.s.clock.now() {
+            return;
+        }
         let (Ok(input_digest), Ok(nonce)) = (task.input_digest(), generate_nonce()) else {
             return;
         };
+        let count = task.tile_count;
         let result = CtScanResult {
             v: PROTOCOL_VERSION,
             network_id: self.s.manifest.network_id.clone(),
@@ -426,7 +525,15 @@ impl Worker {
     }
 
     async fn execute_next(&mut self, net: &NetworkHandle) {
-        let Some(item) = self.queue.pop_front() else {
+        // One CT scan at a time; domain tasks keep running while it is in progress.
+        let next = if self.ct_job.is_some() {
+            self.queue
+                .iter()
+                .position(|q| matches!(q, Queued::Domain(..)))
+        } else {
+            Some(0)
+        };
+        let Some(item) = next.and_then(|i| self.queue.remove(i)) else {
             return;
         };
         let now = self.s.clock.now();
@@ -435,7 +542,7 @@ impl Worker {
         }
         let (task, digest) = match item {
             Queued::Domain(t, d) => (t, d),
-            Queued::Ct(t, d) => return self.execute_ct(net, t, d).await,
+            Queued::Ct(t, d) => return self.start_ct(t, d),
         };
         match self.build_result(&task, digest) {
             Ok(result) => {
@@ -578,6 +685,7 @@ pub async fn run_worker(
     info!(worker = %id.short(), %operator, peer = %net.local_peer_id, "worker started");
 
     let governor = Governor::new(setup.resources.clone(), &setup.control_dir);
+    let (ct_done, mut ct_rx) = tokio::sync::mpsc::unbounded_channel::<CtDone>();
     let heartbeat_every = setup.heartbeat;
     let mut w = Worker {
         status: WorkerStatus {
@@ -594,6 +702,9 @@ pub async fn run_worker(
         replay: ReplayCache::new(50_000),
         queue: VecDeque::new(),
         engine_arc: Arc::new(setup.engine.clone()),
+        ct_job: None,
+        ct_hold: Arc::new(AtomicBool::new(false)),
+        ct_done,
         outbox: VecDeque::new(),
         governor,
         cpu_resume_at: None,
@@ -625,6 +736,7 @@ pub async fn run_worker(
                     None => break,
                 }
             }
+            Some(done) = ct_rx.recv() => w.finish_ct(&net, done).await,
             _ = hb.tick() => w.heartbeat(&net).await,
             _ = manifest_tick.tick() => {
                 if let Some(src) = w.s.manifest_source.clone() {
@@ -659,6 +771,7 @@ pub async fn run_worker(
                         break;
                     }
                     Decision::Pause(r) => {
+                        w.ct_hold.store(true, Ordering::Relaxed);
                         if w.status.pause_reason != Some(r) {
                             info!(reason = ?r, "pausing");
                         }
@@ -673,6 +786,7 @@ pub async fn run_worker(
                                 w.cpu_resume_at.is_some()
                             }
                         };
+                        w.ct_hold.store(throttled, Ordering::Relaxed);
                         if throttled {
                             w.status.pause_reason = Some(PauseReason::CpuBudget);
                             w.status.state = "throttled".into();
@@ -691,6 +805,7 @@ pub async fn run_worker(
             }
         }
     }
+    w.cancel_ct();
     w.status.state = "stopped".into();
     w.write_status(&net);
     net.shutdown().await;

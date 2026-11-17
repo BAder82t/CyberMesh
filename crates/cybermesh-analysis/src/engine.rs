@@ -12,9 +12,9 @@ use crate::features::{
 /// Engine identifier carried in tasks and results.
 pub const ENGINE_NAME: &str = "cybermesh-lexical";
 /// Bumped on any change that can alter output for the same input. The suffix records the
-/// exact Public Suffix List and IDNA table versions compiled in (pinned with `=` in
-/// `Cargo.toml`), because they also determine output.
-pub const ENGINE_VERSION: &str = "0.4.0+psl.2.1.255+idna.1.1.0";
+/// exact Public Suffix List and IDNA table versions compiled in, and the X.509 parser used by
+/// CT scans (all pinned with `=` in `Cargo.toml`), because they also determine output.
+pub const ENGINE_VERSION: &str = "0.4.0+psl.2.1.255+idna.1.1.0+x509.0.18.1";
 
 /// The engine spec of this build.
 #[must_use]
@@ -449,17 +449,22 @@ fn lookalike_part<'a>(brand: &Brand, parts: &[&'a str]) -> Option<&'a str> {
         if p.len() < 4 {
             continue;
         }
+        let d = deleet(p);
         for t in &brand.tokens {
             if *p == t {
                 continue;
             }
-            let d = deleet(p);
             if d == *t {
                 return Some(p);
             }
             // A plain truncation of a token ("cloud" inside "icloud") is usually an ordinary
             // word, not a typosquat; it is not counted as a lookalike.
             if t.contains(*p) {
+                continue;
+            }
+            // Edit distance is at least the length difference: skip the quadratic
+            // computation when it cannot be 1 or 2 (bounds CPU on long CT names).
+            if p.len().abs_diff(t.len()) > 2 {
                 continue;
             }
             let dist = edit_distance(p, t);
