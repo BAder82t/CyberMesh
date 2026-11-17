@@ -61,6 +61,10 @@ pub struct CoordinatorSetup {
     /// until `abandon_after` has passed since start. 0 starts as soon as enough operators
     /// are live for a task. Gives late-starting workers a fair share of the first batches.
     pub start_after_workers: usize,
+    /// With `exit_when_done`: how long to keep running for the other verifiers' records of
+    /// the tasks this coordinator settled (so its organisation can build releases from its
+    /// own node), when the manifest requires more than one verifier.
+    pub records_wait: Duration,
     pub policy: Policy,
     pub clock: Arc<dyn Clock>,
     pub gossip_heartbeat: Duration,
@@ -116,6 +120,17 @@ pub struct CoordinatorReport {
     pub ct_entries_verified: u64,
     pub ct_matches: u64,
     pub ct_tiles_rescanned: u64,
+    /// Own records published on the `records` topic (including re-publications).
+    pub records_published: u64,
+    /// Own records too large for one network message (kept only as files).
+    pub records_too_large: u64,
+    /// Valid records of other verifiers received and stored in `received-records/`.
+    pub records_received: u64,
+    /// Records refused from the network (invalid, too old, from the future, store full).
+    pub records_refused: u64,
+    /// The other verifiers' records received (also in `received-records/`).
+    #[serde(skip)]
+    pub received: Vec<(Digest, VerificationRecord)>,
 }
 
 /// Fields shared by both result kinds, extracted for routing.
@@ -261,6 +276,7 @@ pub fn setup_from_config(
             max_inflight: cfg.max_inflight,
             exit_when_done: cfg.exit_when_done,
             start_after_workers: cfg.start_after_workers,
+            records_wait: Duration::from_secs(cfg.records_wait_secs),
             abandon_after: Duration::from_secs(cfg.result_timeout_secs.saturating_mul(10).max(30)),
             policy: cfg.policy.clone(),
             clock,
@@ -434,16 +450,18 @@ pub(crate) fn verifier_identity(
 }
 
 /// Signs and stores a verification record; returns its payload digest.
+/// Signs and stores a verification record. Returns its payload digest and the signed
+/// envelope bytes (also what is distributed on the `records` topic).
 pub fn persist_record(
     dir: &Path,
     record: &VerificationRecord,
     verifier: &SecretKey,
-) -> Result<Digest, NodeError> {
+) -> Result<(Digest, Vec<u8>), NodeError> {
     let bytes = canonical::to_vec(record)?;
-    let env = Envelope::sign(payload_type::VERIFICATION, &bytes, verifier);
+    let env = Envelope::sign(payload_type::VERIFICATION, &bytes, verifier).to_vec()?;
     let path = dir.join(format!("{}-{}.json", record.task_id, record.attempt));
-    files::write_atomic(&path, &env.to_vec()?)?;
-    Ok(Digest::of(&bytes))
+    files::write_atomic(&path, &env)?;
+    Ok((Digest::of(&bytes), env))
 }
 
 /// What the coordinator remembers about a settled task to prove late equivocation.
@@ -477,6 +495,8 @@ struct Coordinator {
     ct_finalized: tokio::sync::mpsc::UnboundedSender<CtFinalized>,
     /// CT verifications running in the background (exit waits for them).
     ct_finalizing: usize,
+    records_in: crate::records::RecordStore,
+    records_out: crate::records::RecordPublisher,
 }
 
 impl Coordinator {
@@ -798,7 +818,10 @@ impl Coordinator {
         }
         let dir = self.s.state_dir.join("records");
         match persist_record(&dir, &record, &self.s.verifier) {
-            Ok(d) => self.report.records.push((d, record.clone())),
+            Ok((d, env)) => {
+                self.records_out.queue(env, record.verified_at);
+                self.report.records.push((d, record.clone()));
+            }
             Err(e) => warn!(error = %e, "failed to persist verification record"),
         }
         let retry = record.status != TaskStatus::Verified
@@ -938,6 +961,38 @@ impl Coordinator {
         }
     }
 
+    /// Other verifier operators whose records each settled task needs for a release.
+    fn records_needed(&self) -> usize {
+        let quorum = usize::from(self.s.manifest.min_verifiers);
+        let available = self.s.manifest.verifier_operators().len();
+        quorum.min(available).saturating_sub(1)
+    }
+
+    async fn on_record(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
+        use crate::records::Received;
+        let now = self.s.clock.now();
+        let acc = match self.records_in.accept(&m.data, &self.s.manifest, now) {
+            Received::Stored { operator } => {
+                self.report.records_received += 1;
+                debug!(%operator, "verification record received");
+                Acceptance::Accept
+            }
+            Received::Duplicate | Received::Own => Acceptance::Ignore,
+            Received::Ignored(e) => {
+                // Not proof of misbehaviour (quota, clocks, manifest lag, local IO).
+                self.report.records_refused += 1;
+                debug!(error = %e, "verification record not stored");
+                Acceptance::Ignore
+            }
+            Received::Rejected(e) => {
+                self.report.records_refused += 1;
+                debug!(error = %e, "refused verification record");
+                Acceptance::Reject
+            }
+        };
+        net.report(m, acc).await;
+    }
+
     async fn on_heartbeat(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
         let now = self.s.clock.now();
         match verify_heartbeat(&m.data, &self.s.manifest, now, &self.limits) {
@@ -996,7 +1051,11 @@ pub async fn run_coordinator(
         listen: setup.listen.clone(),
         bootstrap: setup.bootstrap.clone(),
         allowed_peers: allowed_peers(&setup.manifest, &me),
-        subscribe: vec![topics.results.clone(), topics.presence.clone()],
+        subscribe: vec![
+            topics.results.clone(),
+            topics.presence.clone(),
+            topics.records.clone(),
+        ],
         heartbeat: setup.gossip_heartbeat,
         // Per-author allowance (cost = 1 + KiB). Workers cap their own outbound traffic
         // (64 KiB/s by default); the coordinator allows comfortably more than that so honest
@@ -1067,7 +1126,19 @@ pub async fn run_coordinator(
     info!(peer = %net.local_peer_id, batches = pending.len(), domains = setup.domains.len(), "coordinator started");
     let (ct_finalized, mut ct_finalized_rx) = tokio::sync::mpsc::unbounded_channel();
     let verifier_id = verifier_identity(&setup.manifest, &setup.verifier)?;
+    let max_message = Limits::default().max_envelope_bytes;
+    let records_in = crate::records::RecordStore::open(
+        &setup.state_dir.join("received-records"),
+        verifier_id.key.clone(),
+        &setup.manifest,
+        max_message,
+        setup.clock.now(),
+    )?;
+    let mut records_out = crate::records::RecordPublisher::new(max_message);
+    records_out.load_recent(&setup.state_dir.join("records"), setup.clock.now());
     let mut c = Coordinator {
+        records_in,
+        records_out,
         verifier_id,
         engine_arc: Arc::new(setup.engine.clone()),
         ct_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CT_FINALIZING)),
@@ -1090,6 +1161,7 @@ pub async fn run_coordinator(
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let started = Instant::now();
     let mut warmed_up = c.s.start_after_workers == 0;
+    let mut records_wait_since: Option<Instant> = None;
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
@@ -1100,6 +1172,8 @@ pub async fn run_coordinator(
                 Some(NetEvent::Message(m)) => {
                     if m.topic == c.topics.results {
                         c.on_result(&net, &m).await;
+                    } else if m.topic == c.topics.records {
+                        c.on_record(&net, &m).await;
                     } else if m.topic == c.topics.presence {
                         c.on_heartbeat(&net, &m).await;
                     } else {
@@ -1112,6 +1186,7 @@ pub async fn run_coordinator(
             },
             Some(done) = ct_finalized_rx.recv() => c.on_ct_finalized(done),
             _ = manifest_tick.tick() => {
+                c.records_in.prune(c.s.clock.now());
                 if let Some(src) = c.s.manifest_source.clone() {
                     match files::reload_manifest(&src, &c.s.manifest, c.s.clock.now()) {
                         files::Reload::Updated(m) => {
@@ -1128,6 +1203,10 @@ pub async fn run_coordinator(
                             }
                             // Revoked workers disappear from assignment immediately.
                             c.workers.retain(|k, _| m.key_with_role(k, Role::Worker).is_some());
+                            // Records of verifiers no longer enrolled are dropped.
+                            if let Err(e) = c.records_in.rescan(&m, c.s.clock.now()) {
+                                warn!(error = %e, "failed to re-check received records");
+                            }
                             c.s.manifest = m;
                         }
                         files::Reload::Equivocation => {
@@ -1180,17 +1259,49 @@ pub async fn run_coordinator(
                         }
                     }
                 }
+                c.records_out.republish_due(
+                    c.s.clock.now(),
+                    crate::records::REPUBLISH_EVERY,
+                    crate::records::REPUBLISH_WINDOW_SECS,
+                );
+                c.records_out.flush(&net, &c.topics.records).await;
                 if c.s.exit_when_done
                     && c.pending.is_empty()
                     && c.inflight.is_empty()
                     && c.ct_finalizing == 0
+                    // Wait for own records to go out only if peers need them for a quorum
+                    // (with no other verifier subscribed, publishing cannot succeed).
+                    && (c.records_needed() == 0 || c.records_out.is_idle())
                 {
-                    break;
+                    // Stay for the other verifiers' records (bounded), so this organisation's
+                    // release signer can build from this node alone.
+                    let started = *records_wait_since.get_or_insert_with(Instant::now);
+                    let own: Vec<(String, Digest)> = c
+                        .report
+                        .records
+                        .iter()
+                        .map(|(_, r)| (r.task_id.clone(), r.task_digest))
+                        .collect();
+                    let complete = crate::records::quorum_records_present(
+                        &c.records_in,
+                        &own,
+                        &c.verifier_id.operator,
+                        c.records_needed(),
+                    );
+                    if complete || started.elapsed() >= c.s.records_wait {
+                        if !complete {
+                            warn!("leaving before every task has the other verifiers' records");
+                        }
+                        break;
+                    }
                 }
             }
         }
     }
     let _ = files::write_json(&rep_path, &c.reputation);
+    c.report.records_published = c.records_out.published;
+    c.report.records_too_large = c.records_out.too_large;
+    c.report.received = std::mem::take(&mut c.records_in.received);
     let snap = net.stats.snapshot();
     c.report.net_bytes_in = snap.bytes_in;
     c.report.net_bytes_out = snap.bytes_out;

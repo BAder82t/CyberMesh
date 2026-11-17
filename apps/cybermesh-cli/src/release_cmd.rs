@@ -8,8 +8,7 @@ use cybermesh_intelligence::{
     verify_release,
 };
 use cybermesh_protocol::{
-    AppealDecision, AppealOutcome, GovernanceRoot, PROTOCOL_VERSION, Role, TrustManifest,
-    payload_type,
+    AppealDecision, AppealOutcome, GovernanceRoot, PROTOCOL_VERSION, TrustManifest, payload_type,
 };
 use cybermesh_verifier::VerificationRecord;
 
@@ -42,6 +41,9 @@ pub enum ReleaseCmd {
         /// Previous signed release (hash chain).
         #[arg(long)]
         previous: Option<PathBuf>,
+        /// Fail on any record file that does not verify (default: skip and name it).
+        #[arg(long)]
+        strict: bool,
         #[arg(long)]
         out: PathBuf,
     },
@@ -110,7 +112,17 @@ pub enum ReleaseCmd {
 }
 
 /// Loads verifier-signed records, checking each signature against the manifest.
-pub fn load_records(dir: &Path, m: &TrustManifest) -> Result<Vec<(Digest, VerificationRecord)>> {
+/// Loads the signed verification records in `dir` that verify against `m`.
+///
+/// A file that does not verify (for example a record of a verifier revoked since it was
+/// received, or one signed by a verifier this manifest does not know) is skipped and named on
+/// stderr. Skipping can only remove support, never add an entry, so the quorum still holds;
+/// with `strict`, any such file is an error instead.
+pub fn load_records(
+    dir: &Path,
+    m: &TrustManifest,
+    strict: bool,
+) -> Result<Vec<(Digest, VerificationRecord)>> {
     let mut out = Vec::new();
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
@@ -120,26 +132,22 @@ pub fn load_records(dir: &Path, m: &TrustManifest) -> Result<Vec<(Digest, Verifi
         .collect();
     entries.sort();
     for p in entries {
-        let env = Envelope::parse(&read(&p)?, 16 << 20)?;
-        let v = env
-            .verify(payload_type::VERIFICATION, 1, |id| {
-                m.key_with_role(id, Role::Verifier)
-            })
-            .with_context(|| format!("{}: not signed by an enrolled verifier", p.display()))?;
-        let rec: VerificationRecord = canonical::from_slice(&v.payload)?;
-        // The record names its verifier; it must be a signer, with the manifest's operator.
-        // Otherwise one verifier could pass its records off as another organisation's.
-        if !v.signers.contains(&rec.verifier.key)
-            || m.operator_of(&rec.verifier.key) != Some(&rec.verifier.operator)
-        {
-            bail!(
-                "{}: record claims verifier {} ({}), which did not sign it or belongs to another operator",
-                p.display(),
-                rec.verifier.key,
-                rec.verifier.operator
-            );
+        // Signature by an enrolled verifier, canonical record for this network, and the
+        // record's named verifier is its signer with the manifest's operator (otherwise one
+        // verifier could pass its records off as another organisation's).
+        match cybermesh_verifier::verify_record_envelope(&read(&p)?, m, 16 << 20) {
+            Ok((digest, rec)) => out.push((digest, rec)),
+            Err(e) if !strict => {
+                eprintln!(
+                    "skipping {}: not a valid verification record: {e}",
+                    p.display()
+                );
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e)
+                    .context(format!("{}: not a valid verification record", p.display())));
+            }
         }
-        out.push((Digest::of(&v.payload), rec));
     }
     Ok(out)
 }
@@ -185,13 +193,14 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
             ttl_secs,
             max_record_age_secs,
             previous,
+            strict,
             out,
         } => {
             let m = util::load_manifest(&manifest, &root, issued_at)?;
             let groot: GovernanceRoot = read_json(&root)?;
             let mut recs = Vec::new();
             for dir in &records {
-                recs.extend(load_records(dir, &m)?);
+                recs.extend(load_records(dir, &m, strict)?);
             }
             let decs = load_decisions(decisions.as_deref(), &groot)?;
             let prev = previous.as_deref().map(release_ref).transpose()?;
@@ -496,13 +505,19 @@ mod tests {
         };
         let ok = tempfile::tempdir().unwrap();
         write_record(ok.path(), "r", &net, b.clone(), b_key);
-        let loaded = load_records(ok.path(), &net.manifest).unwrap();
+        let loaded = load_records(ok.path(), &net.manifest, true).unwrap();
         assert_eq!(loaded[0].1.verifier, b);
 
         // org-a's verifier signs a record claiming to be org-b's.
         let forged = tempfile::tempdir().unwrap();
         write_record(forged.path(), "r", &net, b.clone(), &net.verifier);
-        assert!(load_records(forged.path(), &net.manifest).is_err());
+        assert!(load_records(forged.path(), &net.manifest, true).is_err());
+        // Without --strict the forged record is skipped, never accepted.
+        assert!(
+            load_records(forged.path(), &net.manifest, false)
+                .unwrap()
+                .is_empty()
+        );
 
         // org-b's key, but the record claims another operator.
         let relabelled = tempfile::tempdir().unwrap();
@@ -511,6 +526,11 @@ mod tests {
             operator: OperatorId::new("org-a").unwrap(),
         };
         write_record(relabelled.path(), "r", &net, wrong_op, b_key);
-        assert!(load_records(relabelled.path(), &net.manifest).is_err());
+        assert!(load_records(relabelled.path(), &net.manifest, true).is_err());
+        assert!(
+            load_records(relabelled.path(), &net.manifest, false)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

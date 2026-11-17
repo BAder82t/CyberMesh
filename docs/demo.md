@@ -19,7 +19,8 @@ The script runs these steps, and each one corresponds to an item of the MVP brie
 | Analysis | Workers analyse the domains in `datasets/demo/domains.txt` with the deterministic engine. |
 | Malicious worker | Organisation M's worker signs forged "malicious" verdicts. The verifier recomputes the task and records a provable `IncorrectResult` fault, then quarantines the worker. The affected task is reassigned and verified by honest organisations. |
 | Quorum check | A release built from the coordinator's records alone has **0 entries**: one verifier organisation is not enough. |
-| Release | Organisations A and B build the release **independently** from both verifiers' records. `cmp` shows the payloads are byte-identical. Both co-sign the release. |
+| Record exchange | The coordinator and organisation B's verifier publish their signed records over the network. Each stores the other's in `received-records/`. |
+| Release | Organisations A and B each build the release **from their own node only**: own records plus records received over the network. `cmp` shows the payloads are byte-identical. Both co-sign the release. |
 | Verification | `release verify` checks the 2-of-3 distinct-operator signatures offline and records the anti-rollback state. |
 | Anchoring | The release digest is appended to the Merkle log. The checkpoint is anchored on the local test chain. An inclusion proof is produced and verified offline. |
 | Serving | `public/release.json` and the phishing test page are served on `127.0.0.1:8088`. |
@@ -75,7 +76,12 @@ Each container mounts:
 - only its own state directory, read-write.
 
 - **Independent verifier.** Organisation B's verifier runs in its own container (`verifier-org-b`, 172.28.0.20) with only its own verifier key. It follows tasks and results, recomputes every task, and writes its own signed records to its own state directory. It exits once idle.
-- **Quorum.** The manifest requires `min_verifiers = 2`. Organisation A's release container first shows that the coordinator's records alone publish nothing. Both release signers then build from the coordinator's and organisation B's records. Each release container mounts both verifiers' record directories read-only.
+- **Quorum.** The manifest requires `min_verifiers = 2`. Organisation A's release container first shows that the coordinator's records alone publish nothing.
+- **Record exchange.** The verifiers exchange their records over the network, so each release container mounts **only its own organisation's** node state (read-only):
+  - organisation A mounts the coordinator's state;
+  - organisation B mounts its verifier's state.
+
+  Both build byte-identical releases.
 - **Release signers.** The two release signers run as separate containers, each holding one organisation's key.
 - **Web.** The web container sees only the published files.
 

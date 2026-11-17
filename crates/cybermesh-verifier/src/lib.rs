@@ -31,7 +31,7 @@ mod task;
 pub use policy::{Classification, Policy};
 pub use record::{
     AcceptedResult, DomainOutcome, FaultKind, FaultRecord, RejectedResult, TaskStatus,
-    VerificationRecord, VerifierId,
+    VerificationRecord, VerifierId, verify_record_envelope,
 };
 pub use reputation::{ReputationBook, WorkerStanding};
 pub use task::{SubmitOutcome, TaskVerifier};

@@ -64,6 +64,9 @@ pub enum NetError {
     Stopped,
     #[error("publish failed: {0}")]
     Publish(String),
+    /// The same message (author and bytes) was published recently; peers already have it.
+    #[error("duplicate message")]
+    Duplicate,
 }
 
 /// Application verdict on an inbound message.
@@ -342,7 +345,10 @@ pub fn spawn(keypair: identity::Keypair, cfg: NetConfig) -> Result<NetworkHandle
                                 .gossipsub
                                 .publish(IdentTopic::new(topic), data)
                                 .map(|_| ())
-                                .map_err(|e| NetError::Publish(e.to_string()));
+                                .map_err(|e| match e {
+                                    libp2p::gossipsub::PublishError::Duplicate => NetError::Duplicate,
+                                    other => NetError::Publish(other.to_string()),
+                                });
                             if res.is_ok() {
                                 NetStats::add(&task_stats.bytes_out, len);
                                 NetStats::add(&task_stats.messages_out, 1);

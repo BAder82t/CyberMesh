@@ -32,6 +32,8 @@ pub struct Topics {
     pub tasks: String,
     pub results: String,
     pub presence: String,
+    /// Signed verification records, exchanged between verifiers (workers do not subscribe).
+    pub records: String,
 }
 
 impl Topics {
@@ -41,6 +43,7 @@ impl Topics {
             tasks: format!("/cybermesh/{network_id}/v1/tasks"),
             results: format!("/cybermesh/{network_id}/v1/results"),
             presence: format!("/cybermesh/{network_id}/v1/presence"),
+            records: format!("/cybermesh/{network_id}/v1/records"),
         }
     }
 }

@@ -1,7 +1,9 @@
 # Local CyberMesh demonstration: one coordinator (org-a), an independent verifier (org-b)
 # and six workers from five organisations, one of them simulating a compromised operator
 # (org-m). The manifest requires records from 2 verifier organisations (min_verifiers = 2),
-# so a release needs both the coordinator's and org-b's verification. Run via
+# so a release needs both the coordinator's and org-b's verification. The verifiers exchange
+# their signed records over the network, so each organisation's release signer mounts ONLY its
+# own organisation's node state (records + received-records). Run via
 # deploy/docker/demo.sh. Requires Docker Engine >= 26 (volume subpaths).
 #
 # Isolation: every service mounts the shared, non-secret material read-only, ONLY its own
@@ -270,11 +272,6 @@ services:
         volume: { subpath: state/coordinator }
       - type: volume
         source: demo
-        target: /demo/state/verifier-org-b
-        read_only: true
-        volume: { subpath: state/verifier-org-b }
-      - type: volume
-        source: demo
         target: /demo/public
         read_only: false
         volume: { subpath: shared/public }
@@ -296,11 +293,6 @@ services:
         target: /demo/keys
         read_only: true
         volume: { subpath: secrets/release-org-b }
-      - type: volume
-        source: demo
-        target: /demo/state/coordinator
-        read_only: true
-        volume: { subpath: state/coordinator }
       - type: volume
         source: demo
         target: /demo/state/verifier-org-b

@@ -4,8 +4,9 @@
 #      and an independent verifier at org-b; releases need records from 2 verifier operators)
 #   2. start workers and the independent verifier, run the coordinator until every task is
 #      settled, wait for the independent verifier to finish
-#   3. build the release independently twice from both verifiers' records, co-sign by two
-#      organisations, verify offline
+#   3. verifiers exchange their signed records over the network; org-a and org-b each build
+#      the release from their own node's state only (own records + records received), get
+#      identical bytes, co-sign, verify offline
 #   4. append to the transparency log, anchor on the local test chain, verify the proof
 #   5. serve the release and the phishing test page for the browser extension
 # Usage: scripts/demo-local.sh [--keep-serving]
@@ -44,15 +45,13 @@ for cfg in worker-*.toml; do
 done
 echo "== started ${#vpids[@]} independent verifier(s) and $(ls worker-*.toml | wc -l | tr -d ' ') workers; running coordinator"
 "$BIN" coordinator run --config coordinator.toml > logs/coordinator-report.json 2> logs/coordinator.log
-python3 -I -c "import json;r=json.load(open('logs/coordinator-report.json'));print('coordinator:', {k:r[k] for k in ['tasks_issued','verified','disputed','insufficient','reassignments','faults','results_rejected','ct_tiles_verified','ct_entries_verified','ct_matches','ct_tiles_rescanned']})"
+python3 -I -c "import json;r=json.load(open('logs/coordinator-report.json'));print('coordinator:', {k:r[k] for k in ['tasks_issued','verified','disputed','insufficient','reassignments','faults','results_rejected','ct_tiles_verified','ct_entries_verified','ct_matches','ct_tiles_rescanned','records_published','records_received','records_refused']})"
 # Independent verifiers exit on their own once idle (idle_exit_secs).
 for p in "${vpids[@]:-}"; do [ -n "$p" ] && wait "$p"; done
 for f in logs/verifier-*-report.json; do
   [ -e "$f" ] || continue
-  python3 -I -c "import json,sys;r=json.load(open(sys.argv[1]));print('independent verifier', r['operator']+':', {k:r[k] for k in ['tasks_seen','verified','disputed','insufficient','faults','results_accepted','tasks_incompatible']})" "$f"
+  python3 -I -c "import json,sys;r=json.load(open(sys.argv[1]));print('independent verifier', r['operator']+':', {k:r[k] for k in ['tasks_seen','verified','disputed','insufficient','faults','results_accepted','tasks_incompatible','records_published','records_received','records_refused']})" "$f"
 done
-RECORDS=(--records state/coordinator/records)
-for d in state/verifier-*/records; do [ -d "$d" ] && RECORDS+=(--records "$d"); done
 echo "== CT investigation report (newly certified lookalike names per protected brand)"
 "$BIN" ct report --records state/coordinator/records --manifest manifest.json --root governance-root.json --evidence evidence --out ct-report.json
 echo "== worker status (resource usage measured by each worker)"
@@ -60,9 +59,11 @@ for cfg in worker-*.toml; do w=${cfg#worker-}; w=${w%.toml}; "$BIN" worker statu
 NOW=$(date +%s)
 echo "== quorum check: the coordinator's records alone (one verifier) publish nothing"
 "$BIN" release build --records state/coordinator/records --manifest manifest.json --root governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.coordinator-only.payload
-echo "== building release independently at org-a and org-b from both verifiers' records (must be byte-identical)"
-"$BIN" release build "${RECORDS[@]}" --manifest manifest.json --root governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.org-a.payload
-"$BIN" release build "${RECORDS[@]}" --manifest manifest.json --root governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.org-b.payload
+echo "== org-a and org-b each build the release from their OWN node only: own records + records received over the network (must be byte-identical)"
+"$BIN" release build --records state/coordinator/records --records state/coordinator/received-records --manifest manifest.json --root governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.org-a.payload
+B=state/verifier-org-b
+if [ ! -d "$B" ]; then B=state/coordinator; fi
+"$BIN" release build --records "$B/records" --records "$B/received-records" --manifest manifest.json --root governance-root.json --sequence 1 --issued-at "$NOW" --out release-1.org-b.payload
 cmp release-1.org-a.payload release-1.org-b.payload && echo "   identical payloads"
 "$BIN" release sign --payload release-1.org-a.payload --key keys/release-org-a.key.json --out release-1.json
 "$BIN" release sign --payload release-1.org-b.payload --key keys/release-org-b.key.json --merge release-1.json --out release-1.json

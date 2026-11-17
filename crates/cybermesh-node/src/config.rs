@@ -72,6 +72,9 @@ pub struct CoordinatorConfig {
     /// Wait for this many live workers before issuing the first task (0: do not wait).
     #[serde(default)]
     pub start_after_workers: usize,
+    /// With `exit_when_done`: seconds to wait for the other verifiers' records.
+    #[serde(default = "d_records_wait")]
+    pub records_wait_secs: u64,
     #[serde(default)]
     pub policy: Policy,
     /// Certificate Transparency monitoring (optional).
@@ -100,6 +103,9 @@ pub struct VerifierConfig {
     /// Exit after this many idle seconds once work was done (demos); omit to run until stopped.
     #[serde(default)]
     pub idle_exit_secs: Option<u64>,
+    /// With `idle_exit_secs`: further seconds to wait for the other verifiers' records.
+    #[serde(default = "d_records_wait")]
+    pub records_wait_secs: u64,
     #[serde(default)]
     pub policy: Policy,
     /// CT verification policy (spot checks with this verifier's own secret seed).
@@ -165,6 +171,10 @@ fn d_three() -> usize {
 fn d_ttl() -> u64 {
     300
 }
+fn d_records_wait() -> u64 {
+    60
+}
+
 fn d_result_timeout() -> u64 {
     20
 }

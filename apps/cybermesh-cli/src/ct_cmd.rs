@@ -166,7 +166,7 @@ pub fn run(c: CtCmd) -> Result<()> {
         } => {
             let m = util::load_manifest(&manifest, &root, util::now())?;
             let engine = Engine::new(EvidenceBundle::load(&evidence)?);
-            let recs = load_records(&records, &m)?;
+            let recs = load_records(&records, &m, false)?;
             let mut by_brand: BTreeMap<String, Vec<ReportItem>> = BTreeMap::new();
             let mut cov = Coverage::default();
             for (_, r) in &recs {
