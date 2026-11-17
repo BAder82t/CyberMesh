@@ -9,7 +9,7 @@ Deterministic engine, permissioned libp2p network, recomputation-based verificat
 co-signed offline-verifiable releases, browser extension, Merkle log with local and
 OpenTimestamps anchoring, Docker and local demos, internal security review, evaluation.
 
-## v0.2.0 (this release): CT monitoring and independent verifiers
+## v0.2.0: CT monitoring and independent verifiers
 - **Certificate Transparency monitoring.** The `ct-shard-scan` task type:
   - verification against the logs' own hash tiles, with spot checks and confirm-before-publish;
   - an investigation report.
@@ -20,6 +20,9 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
   - records that name their verifier;
   - a governance-set `min_verifiers` release quorum (listing and `block` both need it).
 - **Manifest state.** Nodes persist the highest manifest sequence, and the governance root can set a `min_sequence` floor. Runtime reload with live revocation shipped in v0.1.0.
+
+## v0.2.1 (this release): independent verifier in the Docker demo
+The Docker Compose demo runs organisation B's independent verifier in its own hardened container, with `min_verifiers = 2`, matching the local demo. It is wire-compatible with v0.2.0.
 
 ## Next: harden the pilot
 - **Verifiers.**
