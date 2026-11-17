@@ -15,6 +15,10 @@ name = "integration"
 path = "integration/e2e.rs"
 
 [[test]]
+name = "ct"
+path = "integration/ct_e2e.rs"
+
+[[test]]
 name = "adversarial"
 path = "adversarial/network_adversaries.rs"
 
@@ -26,6 +30,7 @@ path = "performance/scale.rs"
 cybermesh-analysis.workspace = true
 cybermesh-anchor.workspace = true
 cybermesh-crypto.workspace = true
+cybermesh-ct = { workspace = true, features = ["mock"] }
 cybermesh-intelligence.workspace = true
 cybermesh-network.workspace = true
 cybermesh-node.workspace = true

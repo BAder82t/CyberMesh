@@ -3,18 +3,23 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec};
 use cybermesh_crypto::{Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce};
+use cybermesh_ct::TileSource as _;
+use cybermesh_ct::http::HttpTileSource;
+use cybermesh_ct::scan_tile;
 use cybermesh_network::{
     Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed, peer_id_of,
 };
+use cybermesh_protocol::ct::{CtScanResult, CtScanTask, TileScanResult, verify_ct_task};
 use cybermesh_protocol::replay::ReplayCache;
-use cybermesh_protocol::validate::verify_task;
+use cybermesh_protocol::validate::{peek_payload_type, verify_task};
 use cybermesh_protocol::{
     Clock, Heartbeat, Limits, OperatorId, PROTOCOL_VERSION, ProtocolError, ResourceUsage,
-    TaskAnnouncement, TaskResult, TrustManifest, WorkerState, payload_type,
+    TaskAnnouncement, TaskKind, TaskResult, TrustManifest, WorkerState, payload_type,
 };
 use serde::Serialize;
 use tokio::sync::watch;
@@ -63,6 +68,8 @@ pub struct WorkerStatus {
     pub resources: ResourceSnapshot,
     pub net_bytes_in: u64,
     pub net_bytes_out: u64,
+    /// Bytes downloaded from CT logs.
+    pub ct_bytes_fetched: u64,
     pub net_dropped_rate_limited: u64,
     pub connected_peers: u64,
     pub updated_at: u64,
@@ -84,7 +91,12 @@ pub fn setup_from_config(
     clock: Arc<dyn Clock>,
 ) -> Result<WorkerSetup, NodeError> {
     let key = SecretKey::read_from_file(&cfg.key)?;
-    let (manifest, _root) = files::load_manifest(&cfg.manifest, &cfg.governance_root, clock.now())?;
+    let (manifest, _root) = files::load_manifest_checked(
+        &cfg.manifest,
+        &cfg.governance_root,
+        &cfg.state_dir.join("manifest-state.json"),
+        clock.now(),
+    )?;
     if manifest.network_id != cfg.network_id {
         return Err(NodeError::Config(
             "manifest is for a different network".into(),
@@ -140,6 +152,65 @@ struct Outgoing {
 }
 
 /// Worker state machine; the async loop in [`run_worker`] drives it.
+/// A queued, verified assignment.
+enum Queued {
+    Domain(TaskAnnouncement, Digest),
+    Ct(CtScanTask, Digest),
+}
+
+impl Queued {
+    fn expires_at(&self) -> u64 {
+        match self {
+            Queued::Domain(t, _) => t.expires_at,
+            Queued::Ct(t, _) => t.expires_at,
+        }
+    }
+}
+
+/// Outcome of a background CT scan.
+enum CtOutcome {
+    Done(Vec<TileScanResult>, u64),
+    /// Cancelled (STOP, shutdown) or the task expired mid-scan.
+    Abandoned(&'static str),
+    Failed(String),
+}
+
+/// The single CT scan running in the background, if any.
+struct CtJob {
+    task: CtScanTask,
+    digest: Digest,
+    cancel: Arc<AtomicBool>,
+    cpu0: Duration,
+    t0: Instant,
+}
+
+/// Message from the scan thread back to the event loop.
+struct CtDone {
+    task_id: String,
+    outcome: CtOutcome,
+}
+
+/// Sleeps in short steps while `hold` is set or until `until`, returning false if the scan
+/// must stop (cancelled or past its deadline).
+fn ct_wait(
+    cancel: &AtomicBool,
+    hold: &AtomicBool,
+    until: Option<Instant>,
+    deadline: Instant,
+) -> bool {
+    loop {
+        if cancel.load(Ordering::Relaxed) || Instant::now() >= deadline {
+            return false;
+        }
+        let held = hold.load(Ordering::Relaxed);
+        let waiting = until.is_some_and(|u| Instant::now() < u);
+        if !held && !waiting {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 struct Worker {
     s: WorkerSetup,
     id: KeyId,
@@ -147,7 +218,12 @@ struct Worker {
     topics: Topics,
     limits: Limits,
     replay: ReplayCache,
-    queue: VecDeque<(TaskAnnouncement, Digest)>,
+    queue: VecDeque<Queued>,
+    engine_arc: Arc<Engine>,
+    ct_job: Option<CtJob>,
+    /// Set while the governor pauses or throttles the worker; the scan thread waits.
+    ct_hold: Arc<AtomicBool>,
+    ct_done: tokio::sync::mpsc::UnboundedSender<CtDone>,
     outbox: VecDeque<Outgoing>,
     governor: Governor,
     status: WorkerStatus,
@@ -166,6 +242,10 @@ impl Worker {
         if now >= self.s.manifest.expires_at {
             // Never act on authority from an expired manifest.
             net.report(m, Acceptance::Ignore).await;
+            return;
+        }
+        if peek_payload_type(&m.data, &self.limits).as_deref() == Some(payload_type::CT_TASK) {
+            self.on_ct_task(net, m, now).await;
             return;
         }
         let v = match verify_task(&m.data, &self.s.manifest, now, &self.limits) {
@@ -200,7 +280,210 @@ impl Worker {
             return;
         }
         info!(task = %v.message.task_id, attempt = v.message.attempt, domains = v.message.domains.len(), "accepted assignment");
-        self.queue.push_back((v.message, v.payload_digest));
+        self.queue
+            .push_back(Queued::Domain(v.message, v.payload_digest));
+    }
+
+    async fn on_ct_task(
+        &mut self,
+        net: &NetworkHandle,
+        m: &cybermesh_network::InboundMessage,
+        now: u64,
+    ) {
+        let v = match verify_ct_task(&m.data, &self.s.manifest, now, &self.limits) {
+            Ok(v) => v,
+            Err(e) => {
+                self.status.messages_rejected += 1;
+                let acc = match e {
+                    ProtocolError::Expired | ProtocolError::NotYetValid => Acceptance::Ignore,
+                    _ => Acceptance::Reject,
+                };
+                debug!(error = %e, "rejected CT task message");
+                net.report(m, acc).await;
+                return;
+            }
+        };
+        let forget = v.message.expires_at + self.limits.max_clock_skew_secs;
+        if self
+            .replay
+            .check_and_insert(v.payload_digest, forget, now)
+            .is_err()
+        {
+            net.report(m, Acceptance::Ignore).await;
+            return;
+        }
+        net.report(m, Acceptance::Accept).await;
+        if !v.message.assignees.contains(&self.id) {
+            return;
+        }
+        if !self.s.resources.ct_scanning {
+            self.status.tasks_refused += 1;
+            warn!(task = %v.message.task_id, "assigned a CT scan but ct_scanning is disabled; refusing");
+            return;
+        }
+        if self.queue.len() >= self.s.resources.max_queue {
+            self.status.assignments_dropped += 1;
+            return;
+        }
+        info!(task = %v.message.task_id, log = %v.message.log_id, tiles = v.message.tile_count, "accepted CT assignment");
+        self.queue
+            .push_back(Queued::Ct(v.message, v.payload_digest));
+    }
+
+    /// Starts a CT scan on a blocking thread. The event loop stays responsive; the scan
+    /// waits while the worker is paused or throttled, stops when cancelled or when the task
+    /// expires, and reports back over `ct_done`.
+    fn start_ct(&mut self, task: CtScanTask, digest: Digest) {
+        if let Err(e) = self.engine_arc.check_pins(&task.engine, &task.evidence) {
+            self.status.tasks_refused += 1;
+            warn!(task = %task.task_id, error = %e, "refused CT task");
+            return;
+        }
+        let Some(log) = self
+            .engine_arc
+            .evidence()
+            .ct_logs
+            .iter()
+            .find(|l| l.log_id == task.log_id)
+            .cloned()
+        else {
+            self.status.tasks_refused += 1;
+            warn!(task = %task.task_id, log = %task.log_id, "log is not in the pinned ct-logs evidence");
+            return;
+        };
+        let engine = Arc::clone(&self.engine_arc);
+        let kib = self.s.resources.ct_fetch_kib_per_sec;
+        let (first, count) = (task.first_tile, task.tile_count);
+        let remaining = task.expires_at.saturating_sub(self.s.clock.now());
+        let deadline = Instant::now() + Duration::from_secs(remaining);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (c, hold, tx, task_id) = (
+            Arc::clone(&cancel),
+            Arc::clone(&self.ct_hold),
+            self.ct_done.clone(),
+            task.task_id.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            let run = || -> CtOutcome {
+                let src = match HttpTileSource::new(&log, Duration::from_secs(30)) {
+                    Ok(s) => s,
+                    Err(e) => return CtOutcome::Failed(e.to_string()),
+                };
+                let started = Instant::now();
+                let mut out = Vec::with_capacity(count as usize);
+                let mut bytes = 0u64;
+                let mut pace: Option<Instant> = None;
+                for n in first..first.saturating_add(u64::from(count)) {
+                    if !ct_wait(&c, &hold, pace, deadline) {
+                        return CtOutcome::Abandoned("cancelled or expired");
+                    }
+                    let data = match src.data_tile(n) {
+                        Ok(d) => d,
+                        Err(e) => return CtOutcome::Failed(e.to_string()),
+                    };
+                    bytes += data.len() as u64;
+                    if !ct_wait(&c, &hold, None, deadline) {
+                        return CtOutcome::Abandoned("cancelled or expired");
+                    }
+                    match scan_tile(&data, n, &engine) {
+                        Ok(t) => out.push(t),
+                        Err(e) => return CtOutcome::Failed(e.to_string()),
+                    }
+                    if kib > 0 {
+                        let min = Duration::from_secs_f64(bytes as f64 / (kib as f64 * 1024.0));
+                        pace = Some(started + min);
+                    }
+                }
+                CtOutcome::Done(out, bytes)
+            };
+            let outcome = run();
+            let _ = tx.send(CtDone { task_id, outcome });
+        });
+        self.ct_job = Some(CtJob {
+            task,
+            digest,
+            cancel,
+            cpu0: process_cpu(),
+            t0: Instant::now(),
+        });
+    }
+
+    /// Stops the running CT scan (STOP, shutdown).
+    fn cancel_ct(&mut self) {
+        if let Some(j) = &self.ct_job {
+            j.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    async fn finish_ct(&mut self, net: &NetworkHandle, done: CtDone) {
+        let Some(job) = self.ct_job.take_if(|j| j.task.task_id == done.task_id) else {
+            return;
+        };
+        let (task, digest) = (job.task, job.digest);
+        let (tiles, fetched) = match done.outcome {
+            CtOutcome::Done(t, b) => (t, b),
+            CtOutcome::Abandoned(why) => {
+                info!(task = %task.task_id, reason = why, "CT scan abandoned");
+                return;
+            }
+            CtOutcome::Failed(e) => {
+                self.status.tasks_refused += 1;
+                warn!(task = %task.task_id, error = %e, "CT scan failed");
+                return;
+            }
+        };
+        // Process CPU over the job's lifetime (includes concurrent domain tasks; informational).
+        let usage = ResourceUsage {
+            cpu_micros: u64::try_from(process_cpu().saturating_sub(job.cpu0).as_micros())
+                .unwrap_or(u64::MAX),
+            wall_micros: u64::try_from(job.t0.elapsed().as_micros()).unwrap_or(u64::MAX),
+        };
+        if task.expires_at <= self.s.clock.now() {
+            return;
+        }
+        let (Ok(input_digest), Ok(nonce)) = (task.input_digest(), generate_nonce()) else {
+            return;
+        };
+        let count = task.tile_count;
+        let result = CtScanResult {
+            v: PROTOCOL_VERSION,
+            network_id: self.s.manifest.network_id.clone(),
+            task_id: task.task_id.clone(),
+            attempt: task.attempt,
+            task_digest: digest,
+            input_digest,
+            worker: self.id.clone(),
+            operator: self.operator.clone(),
+            engine: engine_spec(),
+            evidence: self.engine_arc.evidence().pins.clone(),
+            log_id: task.log_id.clone(),
+            tiles,
+            completed_at: self.s.clock.now(),
+            nonce,
+            usage,
+            fetched_bytes: fetched,
+        };
+        let Ok(bytes) = canonical::to_vec(&result) else {
+            return;
+        };
+        let Ok(signed) = Envelope::sign(payload_type::CT_RESULT, &bytes, &self.s.key).to_vec()
+        else {
+            return;
+        };
+        #[allow(unused_mut)]
+        let mut messages = vec![signed];
+        #[cfg(feature = "adversary-sim")]
+        if let Some(mode) = &self.s.adversary {
+            messages =
+                crate::adversary::apply_ct(mode, &result, &self.s.key, self.last_result.as_deref());
+        }
+        self.last_result = messages.first().cloned();
+        for m in messages {
+            self.send(net, m, task.expires_at).await;
+        }
+        self.status.tasks_completed += 1;
+        self.status.ct_bytes_fetched += fetched;
+        info!(task = %task.task_id, tiles = count, kib = fetched / 1024, cpu_us = result.usage.cpu_micros, "CT result submitted");
     }
 
     fn build_result(
@@ -242,13 +525,25 @@ impl Worker {
     }
 
     async fn execute_next(&mut self, net: &NetworkHandle) {
-        let Some((task, digest)) = self.queue.pop_front() else {
+        // One CT scan at a time; domain tasks keep running while it is in progress.
+        let next = if self.ct_job.is_some() {
+            self.queue
+                .iter()
+                .position(|q| matches!(q, Queued::Domain(..)))
+        } else {
+            Some(0)
+        };
+        let Some(item) = next.and_then(|i| self.queue.remove(i)) else {
             return;
         };
         let now = self.s.clock.now();
-        if task.expires_at <= now {
+        if item.expires_at() <= now {
             return;
         }
+        let (task, digest) = match item {
+            Queued::Domain(t, d) => (t, d),
+            Queued::Ct(t, d) => return self.start_ct(t, d),
+        };
         match self.build_result(&task, digest) {
             Ok(result) => {
                 #[allow(unused_mut)]
@@ -332,6 +627,11 @@ impl Worker {
             engine: engine_spec(),
             evidence: self.s.engine.evidence().pins.clone(),
             queue_depth: u16::try_from(self.queue.len()).unwrap_or(u16::MAX),
+            capabilities: if self.s.resources.ct_scanning {
+                vec![TaskKind::DomainRiskAssessment, TaskKind::CtShardScan]
+            } else {
+                vec![TaskKind::DomainRiskAssessment]
+            },
         };
         let Ok(bytes) = canonical::to_vec(&hb) else {
             return;
@@ -385,6 +685,7 @@ pub async fn run_worker(
     info!(worker = %id.short(), %operator, peer = %net.local_peer_id, "worker started");
 
     let governor = Governor::new(setup.resources.clone(), &setup.control_dir);
+    let (ct_done, mut ct_rx) = tokio::sync::mpsc::unbounded_channel::<CtDone>();
     let heartbeat_every = setup.heartbeat;
     let mut w = Worker {
         status: WorkerStatus {
@@ -400,6 +701,10 @@ pub async fn run_worker(
         limits: Limits::default(),
         replay: ReplayCache::new(50_000),
         queue: VecDeque::new(),
+        engine_arc: Arc::new(setup.engine.clone()),
+        ct_job: None,
+        ct_hold: Arc::new(AtomicBool::new(false)),
+        ct_done,
         outbox: VecDeque::new(),
         governor,
         cpu_resume_at: None,
@@ -431,6 +736,7 @@ pub async fn run_worker(
                     None => break,
                 }
             }
+            Some(done) = ct_rx.recv() => w.finish_ct(&net, done).await,
             _ = hb.tick() => w.heartbeat(&net).await,
             _ = manifest_tick.tick() => {
                 if let Some(src) = w.s.manifest_source.clone() {
@@ -442,6 +748,9 @@ pub async fn run_worker(
                                 break;
                             }
                             net.set_allowed(allowed_peers(&m, &w.id)).await;
+                            if let Err(e) = files::persist_manifest_state(&w.s.state_dir.join("manifest-state.json"), &m) {
+                                warn!(error = %e, "failed to persist manifest state");
+                            }
                             w.s.manifest = m;
                         }
                         files::Reload::Equivocation => {
@@ -462,6 +771,7 @@ pub async fn run_worker(
                         break;
                     }
                     Decision::Pause(r) => {
+                        w.ct_hold.store(true, Ordering::Relaxed);
                         if w.status.pause_reason != Some(r) {
                             info!(reason = ?r, "pausing");
                         }
@@ -476,6 +786,7 @@ pub async fn run_worker(
                                 w.cpu_resume_at.is_some()
                             }
                         };
+                        w.ct_hold.store(throttled, Ordering::Relaxed);
                         if throttled {
                             w.status.pause_reason = Some(PauseReason::CpuBudget);
                             w.status.state = "throttled".into();
@@ -494,6 +805,7 @@ pub async fn run_worker(
             }
         }
     }
+    w.cancel_ct();
     w.status.state = "stopped".into();
     w.write_status(&net);
     net.shutdown().await;

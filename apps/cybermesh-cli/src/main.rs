@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod anchor_cmd;
+mod ct_cmd;
 mod demo;
 #[cfg(feature = "dev-tools")]
 mod dev;
@@ -69,6 +70,9 @@ enum Cmd {
     /// Transparency log and optional anchoring.
     #[command(subcommand)]
     Anchor(anchor_cmd::AnchorCmd),
+    /// Certificate Transparency monitoring.
+    #[command(subcommand)]
+    Ct(ct_cmd::CtCmd),
     /// Serve a directory (releases) and the local phishing test page.
     Serve {
         #[arg(long)]
@@ -229,6 +233,7 @@ async fn main() -> Result<()> {
         Cmd::Release(c) => release_cmd::run(c),
         Cmd::Appeal(c) => release_cmd::appeal(c),
         Cmd::Anchor(c) => anchor_cmd::run(c),
+        Cmd::Ct(c) => ct_cmd::run(c),
         Cmd::Serve { dir, addr, public } => serve::serve(&dir, &addr, public),
         Cmd::Demo(c) => demo::run(c),
         Cmd::Eval(a) => eval::eval(&a),

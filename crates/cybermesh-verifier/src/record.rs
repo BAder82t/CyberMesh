@@ -104,4 +104,6 @@ pub struct VerificationRecord {
     pub faults: Vec<FaultRecord>,
     pub outcomes: Vec<DomainOutcome>,
     pub verified_at: u64,
+    /// Present for `ct-shard-scan` tasks.
+    pub ct: Option<crate::ct::CtScanDetail>,
 }

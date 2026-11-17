@@ -91,6 +91,7 @@ pub fn governance(c: GovernanceCmd) -> Result<()> {
                     network_id,
                     threshold,
                     keys,
+                    min_sequence: 0,
                 },
             )
         }

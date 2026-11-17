@@ -371,6 +371,7 @@ impl TaskVerifier {
             faults: self.faults,
             outcomes,
             verified_at: now,
+            ct: None,
         }
     }
 }

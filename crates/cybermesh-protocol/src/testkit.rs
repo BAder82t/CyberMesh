@@ -66,6 +66,7 @@ impl TestNetwork {
             network_id: network_id.clone(),
             threshold: 2,
             keys: governance.iter().map(SecretKey::public_key).collect(),
+            min_sequence: 0,
         };
         let ops: Vec<Operator> = operators
             .iter()

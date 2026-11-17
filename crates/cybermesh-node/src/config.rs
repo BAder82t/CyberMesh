@@ -71,6 +71,35 @@ pub struct CoordinatorConfig {
     pub exit_when_done: bool,
     #[serde(default)]
     pub policy: Policy,
+    /// Certificate Transparency monitoring (optional).
+    #[serde(default)]
+    pub ct: Option<CtScanConfig>,
+}
+
+/// `[ct]` section of `coordinator.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CtScanConfig {
+    /// A log id from the pinned `ct-logs` evidence.
+    pub log_id: String,
+    /// First full data tile; omit to scan the most recent `tile_count` full tiles.
+    #[serde(default)]
+    pub first_tile: Option<u64>,
+    pub tile_count: u64,
+    #[serde(default = "d_ct_tiles")]
+    pub tiles_per_task: u32,
+    /// Workers of distinct operators per shard (CT findings are advisory: 2 is the default).
+    #[serde(default = "d_two")]
+    pub replication: usize,
+    #[serde(default)]
+    pub policy: cybermesh_verifier::ct::CtPolicy,
+}
+
+fn d_ct_tiles() -> u32 {
+    8
+}
+fn d_two() -> usize {
+    2
 }
 
 fn d_batch() -> usize {
@@ -144,5 +173,24 @@ impl CoordinatorConfig {
             ));
         }
         Ok(c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_ct_policy_table_uses_defaults() {
+        let c: CtScanConfig =
+            toml::from_str("log_id = \"x\"\ntile_count = 8\n[policy]\npublish_warnings = true\n")
+                .unwrap();
+        assert!(c.policy.publish_warnings);
+        assert_eq!(c.policy.min_operators, 2);
+        assert_eq!(c.tiles_per_task, 8);
+        assert!(
+            toml::from_str::<CtScanConfig>("log_id = \"x\"\ntile_count = 8\n[policy]\nbogus = 1\n")
+                .is_err()
+        );
     }
 }

@@ -19,7 +19,15 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
 - **Windows.** Run the worker as a service with Job Object limits. Add macOS `launchd` packaging.
 - **Licensing.** Resolve the licensing question for feed-derived `block` entries (see `existing-work-review.md` §9). Prefer feeds whose licences permit redistribution of derived blocklists, or organisation-contributed, analyst-confirmed reports under a CyberMesh data licence.
 
-## v0.3: a task type where donated compute matters
+## v0.2 (in progress): Certificate Transparency monitoring
+Shipped on the `feat/ct-monitoring` branch. It adds the `ct-shard-scan` task type, verification against the logs' hash tiles with spot checks and confirm-before-publish, an investigation report, and persisted manifest state. See [ct-monitoring.md](ct-monitoring.md). Next for CT:
+
+- checkpoint signature and consistency verification;
+- continuous tailing of new tiles;
+- RFC 6962 logs;
+- owner-maintained brand infrastructure lists, needed before CT warnings can be enabled widely.
+
+## v0.3: a task type where donated compute matters (original plan)
 The evaluation shows that lexical analysis runs at about 37,000–52,000 domains per second on one core, so a single server does it easily. The candidate workload that *does* benefit from many independent, resource-limited contributors:
 
 - **Certificate Transparency lookalike monitoring (`CtShardScan`).**

@@ -5,19 +5,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cybermesh_analysis::CtLogInfo;
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec, normalize_domain};
 use cybermesh_crypto::{
     Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce, random_bytes,
 };
+use cybermesh_ct::http::HttpTileSource;
+use cybermesh_ct::{Checkpoint, TileSource as _, scan_tile};
 use cybermesh_network::{
     Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed,
 };
+use cybermesh_protocol::ct::{CtScanTask, verify_ct_result};
 use cybermesh_protocol::replay::ReplayCache;
-use cybermesh_protocol::validate::{verify_heartbeat, verify_result};
+use cybermesh_protocol::validate::{peek_payload_type, verify_heartbeat, verify_result};
 use cybermesh_protocol::{
     Clock, Limits, OperatorId, PROTOCOL_VERSION, Role, TaskAnnouncement, TaskKind, TrustManifest,
     WorkerState, payload_type,
 };
+use cybermesh_verifier::ct::{CtOracle, CtPolicy, CtTaskVerifier};
 use cybermesh_verifier::{
     Policy, ReputationBook, SubmitOutcome, TaskStatus, TaskVerifier, VerificationRecord,
 };
@@ -57,6 +62,23 @@ pub struct CoordinatorSetup {
     pub gossip_heartbeat: Duration,
     /// Reload the manifest from here every minute (None in tests).
     pub manifest_source: Option<files::ManifestSource>,
+    /// Certificate Transparency monitoring (None = domain tasks only).
+    pub ct: Option<CtSetup>,
+}
+
+/// CT monitoring setup for the coordinator.
+#[derive(Debug, Clone)]
+pub struct CtSetup {
+    pub log: CtLogInfo,
+    /// First full data tile; `None` = the most recent `tile_count` full tiles.
+    pub first_tile: Option<u64>,
+    pub tile_count: u64,
+    pub tiles_per_task: u32,
+    /// Workers (distinct operators) per shard.
+    pub replication: usize,
+    pub policy: CtPolicy,
+    /// Secret seed for unpredictable spot checks.
+    pub seed: [u8; 32],
 }
 
 /// Summary returned when the coordinator exits.
@@ -86,6 +108,20 @@ pub struct CoordinatorReport {
     pub net_bytes_out: u64,
     pub net_dropped_rate_limited: u64,
     pub net_dropped_queue_full: u64,
+    pub ct_tiles_verified: u64,
+    pub ct_entries_verified: u64,
+    pub ct_matches: u64,
+    pub ct_tiles_rescanned: u64,
+}
+
+/// Fields shared by both result kinds, extracted for routing.
+struct ResultMeta {
+    payload_digest: Digest,
+    task_id: String,
+    attempt: u32,
+    task_digest: Digest,
+    worker: KeyId,
+    operator: OperatorId,
 }
 
 /// Normalises, de-duplicates and sorts input domains. Returns (domains, skipped).
@@ -115,7 +151,12 @@ pub fn setup_from_config(
 ) -> Result<(CoordinatorSetup, usize), NodeError> {
     let issuer = SecretKey::read_from_file(&cfg.issuer_key)?;
     let verifier = SecretKey::read_from_file(&cfg.verifier_key)?;
-    let (manifest, _) = files::load_manifest(&cfg.manifest, &cfg.governance_root, clock.now())?;
+    let (manifest, _) = files::load_manifest_checked(
+        &cfg.manifest,
+        &cfg.governance_root,
+        &cfg.state_dir.join("manifest-state.json"),
+        clock.now(),
+    )?;
     if manifest
         .key_with_role(&issuer.key_id(), Role::Issuer)
         .is_none()
@@ -132,6 +173,40 @@ pub fn setup_from_config(
     }
     cfg.policy.validate().map_err(NodeError::Config)?;
     let engine = Engine::new(EvidenceBundle::load(&cfg.evidence_dir)?);
+    let ct = match &cfg.ct {
+        None => None,
+        Some(c) => {
+            let log = engine
+                .evidence()
+                .ct_logs
+                .iter()
+                .find(|l| l.log_id == c.log_id)
+                .cloned()
+                .ok_or_else(|| {
+                    NodeError::Config(format!(
+                        "CT log {} is not in the ct-logs evidence",
+                        c.log_id
+                    ))
+                })?;
+            if c.tiles_per_task == 0
+                || c.tiles_per_task > cybermesh_protocol::ct::MAX_TILES_PER_TASK
+                || c.replication == 0
+            {
+                return Err(NodeError::Config(
+                    "ct.tiles_per_task must be 1..=64 and ct.replication >= 1".into(),
+                ));
+            }
+            Some(CtSetup {
+                log,
+                first_tile: c.first_tile,
+                tile_count: c.tile_count,
+                tiles_per_task: c.tiles_per_task,
+                replication: c.replication,
+                policy: c.policy.clone(),
+                seed: random_bytes::<32>()?,
+            })
+        }
+    };
     let text = String::from_utf8_lossy(&files::read_bytes(&cfg.domains_file)?).into_owned();
     let (domains, skipped) = prepare_domains(&text);
     Ok((
@@ -160,6 +235,7 @@ pub fn setup_from_config(
                 manifest: cfg.manifest.clone(),
                 governance_root: cfg.governance_root.clone(),
             }),
+            ct,
         },
         skipped,
     ))
@@ -171,19 +247,133 @@ struct LiveWorker {
     last_seen: u64,
     active: bool,
     compatible: bool,
+    ct_capable: bool,
 }
 
 #[derive(Debug, Clone)]
 struct Batch {
     domains: Vec<String>,
+    /// `(first_tile, tile_count)` for CT shard scans.
+    ct: Option<(u64, u32)>,
     attempt: u32,
     queued_at: Instant,
     exclude: BTreeSet<KeyId>,
     first_issued: Option<Instant>,
 }
 
+/// A verifier for either task kind.
+enum AnyVerifier {
+    Domain(TaskVerifier),
+    Ct(CtTaskVerifier),
+}
+
+impl AnyVerifier {
+    fn missing(&self) -> Vec<KeyId> {
+        match self {
+            AnyVerifier::Domain(v) => v.missing(),
+            AnyVerifier::Ct(v) => v.missing(),
+        }
+    }
+    fn is_complete(&self) -> bool {
+        match self {
+            AnyVerifier::Domain(v) => v.is_complete(),
+            AnyVerifier::Ct(v) => v.is_complete(),
+        }
+    }
+    fn expires_at(&self) -> u64 {
+        match self {
+            AnyVerifier::Domain(v) => v.task().expires_at,
+            AnyVerifier::Ct(v) => v.task().expires_at,
+        }
+    }
+    fn attempt(&self) -> u32 {
+        match self {
+            AnyVerifier::Domain(v) => v.task().attempt,
+            AnyVerifier::Ct(v) => v.task().attempt,
+        }
+    }
+    fn task_digest(&self) -> Digest {
+        match self {
+            AnyVerifier::Domain(v) => v.task_digest(),
+            AnyVerifier::Ct(v) => v.task_digest(),
+        }
+    }
+    fn submit(&mut self, bytes: &[u8], m: &TrustManifest, now: u64) -> SubmitOutcome {
+        match self {
+            AnyVerifier::Domain(v) => v.submit(bytes, m, now),
+            AnyVerifier::Ct(v) => v.submit(bytes, m, now),
+        }
+    }
+}
+
+/// Log access for CT verification (the coordinator's own fetches and engine).
+struct LogOracle<'a> {
+    src: HttpTileSource,
+    tree_size: u64,
+    engine: &'a Engine,
+}
+
+impl CtOracle for LogOracle<'_> {
+    fn tile_root(&self, _log: &str, tile: u64) -> Option<Digest> {
+        self.src.tile_root(tile, self.tree_size).ok().map(Digest)
+    }
+    fn rescan(&self, _log: &str, tile: u64) -> Option<cybermesh_protocol::ct::TileScanResult> {
+        let data = self.src.data_tile(tile).ok()?;
+        scan_tile(&data, tile, self.engine).ok()
+    }
+}
+
+/// CT verifications finalizing at once (each may fetch and re-scan tiles from the log).
+const MAX_CT_FINALIZING: usize = 2;
+
+/// Settles a CT task against the log. Blocking: fetches the checkpoint, hash tiles and any
+/// data tiles it must re-scan. Runs on a blocking thread, never on the event loop.
+fn finalize_ct(
+    v: CtTaskVerifier,
+    engine: &Engine,
+    ct: Option<&CtSetup>,
+    now: u64,
+) -> VerificationRecord {
+    let oracle = ct.and_then(|c| {
+        let src = HttpTileSource::new(&c.log, Duration::from_secs(30)).ok()?;
+        let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
+        Some((
+            LogOracle {
+                src,
+                tree_size: cp.size,
+                engine,
+            },
+            c.seed,
+        ))
+    });
+    let seed = oracle.as_ref().map_or([0u8; 32], |(_, s)| *s);
+    v.finalize(
+        Some(engine),
+        oracle.as_ref().map(|(o, _)| o as &dyn CtOracle),
+        &seed,
+        now,
+    )
+}
+
+/// What `settle` needs to finish once a record exists.
+struct SettleCtx {
+    missing: Vec<KeyId>,
+    forget_after: u64,
+    task_digest: Digest,
+    attempt: u32,
+    batch: Batch,
+    now: u64,
+}
+
+/// A CT verification finished on a blocking thread (`None` if it panicked).
+struct CtFinalized {
+    task_id: String,
+    ctx: SettleCtx,
+    record: Option<VerificationRecord>,
+}
+
 struct Inflight {
-    verifier: TaskVerifier,
+    verifier: AnyVerifier,
     deadline: Instant,
     batch: Batch,
 }
@@ -229,6 +419,11 @@ struct Coordinator {
     /// Settled tasks: task id -> (forget after, worker -> accepted result digest). Lets the
     /// coordinator prove equivocation even when the conflicting result arrives late.
     settled: HashMap<String, SettledTask>,
+    engine_arc: Arc<Engine>,
+    ct_permits: Arc<tokio::sync::Semaphore>,
+    ct_finalized: tokio::sync::mpsc::UnboundedSender<CtFinalized>,
+    /// CT verifications running in the background (exit waits for them).
+    ct_finalizing: usize,
 }
 
 impl Coordinator {
@@ -241,12 +436,22 @@ impl Coordinator {
         }
     }
 
-    fn choose_assignees(&self, task_id: &str, exclude: &BTreeSet<KeyId>) -> Option<Vec<KeyId>> {
+    fn choose_assignees(
+        &self,
+        task_id: &str,
+        exclude: &BTreeSet<KeyId>,
+        ct: bool,
+    ) -> Option<Vec<KeyId>> {
         let now = self.s.clock.now();
+        let (required, replication) = match (&self.s.ct, ct) {
+            (Some(c), true) => (c.policy.min_operators.max(1), c.replication),
+            _ => (self.s.policy.min_operators.max(1), self.s.replication),
+        };
         let mut per_op: BTreeMap<&OperatorId, (Digest, &KeyId)> = BTreeMap::new();
         for (k, w) in &self.workers {
             let eligible = w.active
                 && w.compatible
+                && (!ct || w.ct_capable)
                 && now.saturating_sub(w.last_seen) <= self.s.liveness_secs
                 && !exclude.contains(k)
                 && !self.reputation.is_quarantined(k)
@@ -264,7 +469,6 @@ impl Coordinator {
                 })
                 .or_insert((score, k));
         }
-        let required = self.s.policy.min_operators.max(1);
         if per_op.len() < required {
             return None;
         }
@@ -276,7 +480,7 @@ impl Coordinator {
         ops.reverse();
         Some(
             ops.into_iter()
-                .take(self.s.replication.max(required))
+                .take(replication.max(required))
                 .map(|(_, k)| k.clone())
                 .collect(),
         )
@@ -298,12 +502,18 @@ impl Coordinator {
                 .filter(|k| self.reputation.is_unresponsive(k))
                 .cloned(),
         );
+        let is_ct = batch.ct.is_some();
         let Some(assignees) = self
-            .choose_assignees(&task_id, &avoid)
-            .or_else(|| self.choose_assignees(&task_id, &BTreeSet::new()))
+            .choose_assignees(&task_id, &avoid, is_ct)
+            .or_else(|| self.choose_assignees(&task_id, &BTreeSet::new(), is_ct))
         else {
             return Err(batch);
         };
+        if let (Some((first_tile, tile_count)), Some(ctc)) = (batch.ct, self.s.ct.clone()) {
+            return self
+                .issue_ct(net, batch, task_id, assignees, first_tile, tile_count, &ctc)
+                .await;
+        }
         let ops: BTreeSet<_> = assignees
             .iter()
             .filter_map(|k| self.s.manifest.operator_of(k))
@@ -346,6 +556,7 @@ impl Coordinator {
         ) else {
             return Err(batch);
         };
+        let verifier = AnyVerifier::Domain(verifier);
         batch.first_issued.get_or_insert_with(Instant::now);
         info!(task = %task_id, attempt = batch.attempt, domains = batch.domains.len(), assignees = task.assignees.len(), "task issued");
         self.report.tasks_issued += 1;
@@ -360,17 +571,149 @@ impl Coordinator {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn issue_ct(
+        &mut self,
+        net: &NetworkHandle,
+        mut batch: Batch,
+        task_id: String,
+        assignees: Vec<KeyId>,
+        first_tile: u64,
+        tile_count: u32,
+        ctc: &CtSetup,
+    ) -> Result<(), Batch> {
+        let now = self.s.clock.now();
+        let ops: BTreeSet<_> = assignees
+            .iter()
+            .filter_map(|k| self.s.manifest.operator_of(k))
+            .collect();
+        let Ok(nonce) = generate_nonce() else {
+            return Err(batch);
+        };
+        let task = CtScanTask {
+            v: PROTOCOL_VERSION,
+            network_id: self.s.manifest.network_id.clone(),
+            task_id: task_id.clone(),
+            attempt: batch.attempt,
+            issuer: self.s.issuer.key_id(),
+            issued_at: now,
+            expires_at: now + self.s.task_ttl_secs,
+            nonce,
+            engine: engine_spec(),
+            evidence: self.s.engine.evidence().pins.clone(),
+            log_id: ctc.log.log_id.clone(),
+            first_tile,
+            tile_count,
+            assignees,
+            min_operators: u8::try_from(ctc.policy.min_operators.min(ops.len())).unwrap_or(1),
+        };
+        let Ok(bytes) = canonical::to_vec(&task) else {
+            return Err(batch);
+        };
+        let Ok(env_bytes) = Envelope::sign(payload_type::CT_TASK, &bytes, &self.s.issuer).to_vec()
+        else {
+            return Err(batch);
+        };
+        if let Err(e) = net.publish(&self.topics.tasks, env_bytes).await {
+            debug!(error = %e, "CT task publish failed; will retry");
+            return Err(batch);
+        }
+        let Ok(verifier) = CtTaskVerifier::new(
+            task.clone(),
+            Digest::of(&bytes),
+            ctc.policy.clone(),
+            self.s.policy.clone(),
+            self.limits.clone(),
+        ) else {
+            return Err(batch);
+        };
+        batch.first_issued.get_or_insert_with(Instant::now);
+        info!(task = %task_id, attempt = batch.attempt, log = %ctc.log.log_id, first_tile, tile_count, assignees = task.assignees.len(), "CT task issued");
+        self.report.tasks_issued += 1;
+        self.inflight.insert(
+            task_id,
+            Inflight {
+                verifier: AnyVerifier::Ct(verifier),
+                // Downloading tiles takes longer than lexical analysis.
+                deadline: Instant::now() + self.s.result_timeout * 4,
+                batch,
+            },
+        );
+        Ok(())
+    }
+
     fn settle(&mut self, task_id: &str) {
         let Some(inf) = self.inflight.remove(task_id) else {
             return;
         };
-        let missing = inf.verifier.missing();
-        let assignees = inf.verifier.task().assignees.clone();
-        let forget_after = inf.verifier.task().expires_at.saturating_add(3600);
-        let task_digest = inf.verifier.task_digest();
-        let attempt = inf.verifier.task().attempt;
-        let now = self.s.clock.now();
-        let record = inf.verifier.finalize(Some(&self.s.engine), now);
+        let ctx = SettleCtx {
+            missing: inf.verifier.missing(),
+            forget_after: inf.verifier.expires_at().saturating_add(3600),
+            task_digest: inf.verifier.task_digest(),
+            attempt: inf.verifier.attempt(),
+            batch: inf.batch,
+            now: self.s.clock.now(),
+        };
+        match inf.verifier {
+            AnyVerifier::Domain(v) => {
+                let record = v.finalize(Some(&self.s.engine), ctx.now);
+                self.apply_record(task_id, ctx, record);
+            }
+            AnyVerifier::Ct(v) => {
+                // Verification fetches tiles from the log: run it off the event loop, with
+                // bounded concurrency, and apply the record when it comes back.
+                self.ct_finalizing += 1;
+                let engine = Arc::clone(&self.engine_arc);
+                let ct = self.s.ct.clone();
+                let permits = Arc::clone(&self.ct_permits);
+                let tx = self.ct_finalized.clone();
+                let task_id = task_id.to_owned();
+                tokio::spawn(async move {
+                    let _permit = permits.acquire_owned().await.ok();
+                    let now = ctx.now;
+                    let record = tokio::task::spawn_blocking(move || {
+                        finalize_ct(v, &engine, ct.as_ref(), now)
+                    })
+                    .await
+                    .ok();
+                    let _ = tx.send(CtFinalized {
+                        task_id,
+                        ctx,
+                        record,
+                    });
+                });
+            }
+        }
+    }
+
+    fn on_ct_finalized(&mut self, done: CtFinalized) {
+        self.ct_finalizing = self.ct_finalizing.saturating_sub(1);
+        match done.record {
+            Some(r) => self.apply_record(&done.task_id, done.ctx, r),
+            None => warn!(task = %done.task_id, "CT verification failed internally; task dropped"),
+        }
+    }
+
+    /// Records, persists and acts on a finished verification (reputation, retries).
+    fn apply_record(&mut self, task_id: &str, ctx: SettleCtx, record: VerificationRecord) {
+        let SettleCtx {
+            missing,
+            forget_after,
+            task_digest,
+            attempt,
+            batch,
+            now,
+        } = ctx;
+        if let Some(ct) = &record.ct {
+            self.report.ct_tiles_verified += if record.status == TaskStatus::Verified {
+                u64::from(ct.tile_count)
+            } else {
+                0
+            };
+            self.report.ct_entries_verified += ct.entries;
+            self.report.ct_matches += ct.matches.len() as u64;
+            self.report.ct_tiles_rescanned += ct.tiles_rescanned.len() as u64;
+        }
         self.reputation.record_missed(&missing);
         self.reputation.apply(&record);
         self.persist_reputation();
@@ -389,9 +732,9 @@ impl Coordinator {
             Err(e) => warn!(error = %e, "failed to persist verification record"),
         }
         let retry = record.status != TaskStatus::Verified
-            && (inf.batch.attempt as usize + 1) < self.s.max_attempts;
+            && (batch.attempt as usize + 1) < self.s.max_attempts;
         if retry {
-            let mut b = inf.batch.clone();
+            let mut b = batch;
             b.attempt += 1;
             b.queued_at = Instant::now();
             // Exclude non-responders and faulted workers from the next attempt.
@@ -401,12 +744,11 @@ impl Coordinator {
             info!(task = %task_id, status = ?record.status, next_attempt = b.attempt, "reassigning");
             self.report.reassignments += 1;
             self.pending.push_front(b);
-        } else if let Some(t) = inf.batch.first_issued {
+        } else if let Some(t) = batch.first_issued {
             self.report
                 .settle_latency_ms
                 .push(u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX));
         }
-        let _ = assignees;
         self.settled.retain(|_, s| s.forget_after > now);
         if self.settled.len() < 10_000 {
             self.settled.insert(
@@ -428,7 +770,28 @@ impl Coordinator {
 
     async fn on_result(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
         let now = self.s.clock.now();
-        let v = match verify_result(&m.data, &self.s.manifest, now, &self.limits) {
+        let is_ct =
+            peek_payload_type(&m.data, &self.limits).as_deref() == Some(payload_type::CT_RESULT);
+        let parsed = if is_ct {
+            verify_ct_result(&m.data, &self.s.manifest, now, &self.limits).map(|v| ResultMeta {
+                payload_digest: v.payload_digest,
+                task_id: v.message.task_id,
+                attempt: v.message.attempt,
+                task_digest: v.message.task_digest,
+                worker: v.message.worker,
+                operator: v.message.operator,
+            })
+        } else {
+            verify_result(&m.data, &self.s.manifest, now, &self.limits).map(|v| ResultMeta {
+                payload_digest: v.payload_digest,
+                task_id: v.message.task_id,
+                attempt: v.message.attempt,
+                task_digest: v.message.task_digest,
+                worker: v.message.worker,
+                operator: v.message.operator,
+            })
+        };
+        let v = match parsed {
             Ok(v) => v,
             Err(e) => {
                 self.report.results_rejected += 1;
@@ -442,7 +805,7 @@ impl Coordinator {
             net.report(m, Acceptance::Ignore).await;
             return;
         }
-        let task_id = v.message.task_id.clone();
+        let task_id = v.task_id.clone();
         let Some(inf) = self.inflight.get_mut(&task_id) else {
             // Late result for a settled task: a different signed result from a worker whose
             // result was already accepted is provable equivocation.
@@ -452,21 +815,19 @@ impl Coordinator {
             let prior = self
                 .settled
                 .get(&task_id)
-                .filter(|s| {
-                    s.task_digest == v.message.task_digest && s.attempt == v.message.attempt
-                })
-                .and_then(|s| s.accepted.get(&v.message.worker))
+                .filter(|s| s.task_digest == v.task_digest && s.attempt == v.attempt)
+                .and_then(|s| s.accepted.get(&v.worker))
                 .copied();
             let _ = self
                 .replay
                 .check_and_insert(v.payload_digest, now.saturating_add(3600), now);
             if let Some(prior) = prior
                 && prior != v.payload_digest
-                && !self.reputation.is_quarantined(&v.message.worker)
+                && !self.reputation.is_quarantined(&v.worker)
             {
                 let fault = cybermesh_verifier::FaultRecord {
-                    worker: v.message.worker.clone(),
-                    operator: v.message.operator.clone(),
+                    worker: v.worker.clone(),
+                    operator: v.operator.clone(),
                     kind: cybermesh_verifier::FaultKind::Equivocation,
                     evidence: vec![prior, v.payload_digest],
                 };
@@ -498,7 +859,7 @@ impl Coordinator {
             net.report(m, Acceptance::Ignore).await;
             return;
         };
-        let forget = inf.verifier.task().expires_at + 3600;
+        let forget = inf.verifier.expires_at() + 3600;
         let _ = self.replay.check_and_insert(v.payload_digest, forget, now);
         let outcome = inf.verifier.submit(&m.data, &self.s.manifest, now);
         match &outcome {
@@ -552,6 +913,7 @@ impl Coordinator {
                         last_seen: h.sent_at.min(now),
                         active: h.state == WorkerState::Active,
                         compatible,
+                        ct_capable: h.capabilities.contains(&TaskKind::CtShardScan),
                     },
                 );
                 net.report(m, Acceptance::Accept).await;
@@ -602,19 +964,63 @@ pub async fn run_coordinator(
     } else {
         ReputationBook::default()
     };
-    let pending: VecDeque<Batch> = setup
+    let mut pending: VecDeque<Batch> = setup
         .domains
         .chunks(setup.batch_size.max(1))
         .map(|c| Batch {
             domains: c.to_vec(),
+            ct: None,
             attempt: 0,
             queued_at: Instant::now(),
             exclude: BTreeSet::new(),
             first_issued: None,
         })
         .collect();
+    if let Some(ct) = &setup.ct {
+        let first = match ct.first_tile {
+            Some(f) => Some(f),
+            None => {
+                let (log, count) = (ct.log.clone(), ct.tile_count);
+                tokio::task::spawn_blocking(move || {
+                    let src = HttpTileSource::new(&log, Duration::from_secs(30)).ok()?;
+                    let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
+                    Some(cp.full_tiles().saturating_sub(count))
+                })
+                .await
+                .ok()
+                .flatten()
+            }
+        };
+        match first {
+            Some(first) => {
+                let per = u64::from(ct.tiles_per_task);
+                let mut t = first;
+                while t < first + ct.tile_count {
+                    let n = per.min(first + ct.tile_count - t);
+                    pending.push_back(Batch {
+                        domains: Vec::new(),
+                        ct: Some((t, u32::try_from(n).unwrap_or(1))),
+                        attempt: 0,
+                        queued_at: Instant::now(),
+                        exclude: BTreeSet::new(),
+                        first_issued: None,
+                    });
+                    t += n;
+                }
+                info!(log = %ct.log.log_id, first_tile = first, tiles = ct.tile_count, "CT monitoring scheduled");
+            }
+            None => {
+                warn!(log = %ct.log.log_id, "could not read the CT log checkpoint; CT monitoring skipped")
+            }
+        }
+    }
     info!(peer = %net.local_peer_id, batches = pending.len(), domains = setup.domains.len(), "coordinator started");
+    let (ct_finalized, mut ct_finalized_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut c = Coordinator {
+        engine_arc: Arc::new(setup.engine.clone()),
+        ct_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CT_FINALIZING)),
+        ct_finalized,
+        ct_finalizing: 0,
         report: CoordinatorReport {
             domains_total: setup.domains.len(),
             ..CoordinatorReport::default()
@@ -650,6 +1056,7 @@ pub async fn run_coordinator(
                 Some(_) => {}
                 None => break,
             },
+            Some(done) = ct_finalized_rx.recv() => c.on_ct_finalized(done),
             _ = manifest_tick.tick() => {
                 if let Some(src) = c.s.manifest_source.clone() {
                     match files::reload_manifest(&src, &c.s.manifest, c.s.clock.now()) {
@@ -662,6 +1069,9 @@ pub async fn run_coordinator(
                                 break;
                             }
                             net.set_allowed(allowed_peers(&m, &me)).await;
+                            if let Err(e) = files::persist_manifest_state(&c.s.state_dir.join("manifest-state.json"), &m) {
+                                warn!(error = %e, "failed to persist manifest state");
+                            }
                             // Revoked workers disappear from assignment immediately.
                             c.workers.retain(|k, _| m.key_with_role(k, Role::Worker).is_some());
                             c.s.manifest = m;
@@ -701,7 +1111,11 @@ pub async fn run_coordinator(
                         }
                     }
                 }
-                if c.s.exit_when_done && c.pending.is_empty() && c.inflight.is_empty() {
+                if c.s.exit_when_done
+                    && c.pending.is_empty()
+                    && c.inflight.is_empty()
+                    && c.ct_finalizing == 0
+                {
                     break;
                 }
             }

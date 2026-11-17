@@ -51,7 +51,7 @@ pub struct Verified<T> {
     pub envelope: Envelope,
 }
 
-fn verify_signed<T: Serialize + DeserializeOwned>(
+pub(crate) fn verify_signed<T: Serialize + DeserializeOwned>(
     bytes: &[u8],
     ptype: &str,
     role: Role,
@@ -147,6 +147,24 @@ fn check_sorted_domains<'a, I: Iterator<Item = &'a str>>(
     Ok(n)
 }
 
+/// Engine name/version and evidence pin shape checks shared by all task kinds.
+pub(crate) fn check_engine_and_evidence(
+    engine: &crate::messages::EngineSpec,
+    evidence: &EvidencePins,
+    limits: &Limits,
+) -> Result<(), ProtocolError> {
+    check_engine_strings(&engine.name, &engine.version)?;
+    check_evidence(evidence, limits)
+}
+
+/// Reads the payload type of an envelope without verifying it (for dispatch only).
+#[must_use]
+pub fn peek_payload_type(bytes: &[u8], limits: &Limits) -> Option<String> {
+    Envelope::parse(bytes, limits.max_envelope_bytes)
+        .ok()
+        .map(|e| e.payload_type)
+}
+
 fn check_engine_strings(name: &str, version: &str) -> Result<(), ProtocolError> {
     if name.is_empty() || name.len() > 64 || version.is_empty() || version.len() > 64 {
         return Err(ProtocolError::invalid("invalid engine name or version"));
@@ -167,6 +185,11 @@ pub fn verify_task(
     check_header(t.v, &t.network_id, manifest)?;
     if v.signer != t.issuer {
         return Err(ProtocolError::SignerMismatch);
+    }
+    if t.kind != crate::messages::TaskKind::DomainRiskAssessment {
+        return Err(ProtocolError::invalid(
+            "domain task announcements carry only domain-risk-assessment",
+        ));
     }
     if !is_hex_id(&t.task_id) || !is_hex_id(&t.nonce) {
         return Err(ProtocolError::invalid(

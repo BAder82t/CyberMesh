@@ -11,6 +11,15 @@
       "origin": "cybermesh"
     },
     {
+      "id": "ct-logs",
+      "kind": "ct-logs",
+      "file": "ct-logs.json",
+      "sha256": "sha256:1415b69bebd20d10a8311fdc69de5cae6b24393a695a4d566203620d400ffd52",
+      "version": "2026-11-17",
+      "license": "Apache-2.0",
+      "origin": "cybermesh"
+    },
+    {
       "id": "hosting-platforms",
       "kind": "hosting-platforms",
       "file": "hosting-platforms.txt",

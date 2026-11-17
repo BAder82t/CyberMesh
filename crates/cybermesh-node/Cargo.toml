@@ -18,6 +18,7 @@ adversary-sim = []
 cpu-time = "1.0"
 cybermesh-analysis.workspace = true
 cybermesh-crypto.workspace = true
+cybermesh-ct = { workspace = true, features = ["http"] }
 cybermesh-network.workspace = true
 cybermesh-protocol.workspace = true
 cybermesh-verifier.workspace = true

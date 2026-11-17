@@ -1,0 +1,39 @@
+[package]
+name = "cybermesh-ct"
+description = "Certificate Transparency (static CT API) tile parsing, certificate name extraction and brand-lookalike scanning for CyberMesh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# HTTPS client for static CT monitoring endpoints.
+http = ["dep:ureq"]
+# Synthetic static CT log (real X.509 certificates via rcgen) and a loopback server, for
+# tests and demonstrations.
+mock = ["dep:rcgen", "dep:tiny_http"]
+
+[dependencies]
+base64.workspace = true
+cybermesh-analysis.workspace = true
+cybermesh-anchor.workspace = true
+cybermesh-crypto.workspace = true
+cybermesh-protocol.workspace = true
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"], optional = true }
+sha2.workspace = true
+thiserror.workspace = true
+tiny_http = { workspace = true, optional = true }
+ureq = { version = "2", default-features = false, features = ["tls", "gzip"], optional = true }
+# Pinned exactly: certificate name extraction determines CT scan output, and its version is
+# part of ENGINE_VERSION (cybermesh-analysis).
+x509-parser = "=0.18.1"
+
+[dev-dependencies]
+cybermesh-ct = { path = ".", features = ["mock", "http"] }
+proptest.workspace = true
+
+[lints]
+workspace = true

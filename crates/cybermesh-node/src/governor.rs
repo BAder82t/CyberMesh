@@ -36,6 +36,17 @@ pub struct ResourcePolicy {
     pub max_queue: usize,
     /// Allowed UTC windows, `HH:MM-HH:MM` (may wrap midnight).
     pub active_hours_utc: Vec<String>,
+    /// Accept Certificate Transparency shard scans. They download public log tiles from the
+    /// pinned CT logs (and nothing else), so they are opt-in per operator.
+    #[serde(default)]
+    pub ct_scanning: bool,
+    /// Download budget for CT tiles in KiB/s (0 = unlimited).
+    #[serde(default = "default_ct_fetch")]
+    pub ct_fetch_kib_per_sec: u64,
+}
+
+fn default_ct_fetch() -> u64 {
+    256
 }
 
 impl Default for ResourcePolicy {
@@ -48,6 +59,8 @@ impl Default for ResourcePolicy {
             outbound_kib_per_sec: 64,
             max_queue: 16,
             active_hours_utc: vec!["00:00-24:00".into()],
+            ct_scanning: false,
+            ct_fetch_kib_per_sec: default_ct_fetch(),
         }
     }
 }
@@ -79,6 +92,7 @@ impl ResourcePolicy {
         }
         if self.memory_mb > 1 << 20
             || self.outbound_kib_per_sec > 1 << 30
+            || self.ct_fetch_kib_per_sec > 1 << 30
             || self.cpu_window_secs > 86_400
         {
             return Err(NodeError::Config("resource limit out of range".into()));

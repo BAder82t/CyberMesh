@@ -1,0 +1,7 @@
+[
+  {
+    "log_id": "demo-mock-log",
+    "description": "Synthetic static CT log served by `cybermesh dev mock-ct-log` on loopback (demonstration only)",
+    "monitoring_url": "http://127.0.0.1:8090/"
+  }
+]

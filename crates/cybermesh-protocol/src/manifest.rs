@@ -106,6 +106,16 @@ pub struct GovernanceRoot {
     pub network_id: String,
     pub threshold: u8,
     pub keys: Vec<PublicKey>,
+    /// Lowest manifest sequence a node accepts, even on first start or after its state
+    /// directory was lost. Governance raises it when distributing the root, so an old (but
+    /// unexpired) manifest cannot be replayed to a fresh node. Omitted when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub min_sequence: u64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 impl GovernanceRoot {

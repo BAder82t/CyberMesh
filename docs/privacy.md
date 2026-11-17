@@ -14,6 +14,7 @@
 | Release host (static HTTPS) | Client IP, fetch time, extension version (User-Agent) | Visited sites, matches, warnings shown |
 | Other operators (peers) | Peer IP addresses, participation, heartbeat timing, results for assigned public domains | Anything about users; other organisations' internal data |
 | Coordinator / verifier | Same as peers, plus all task results | Users' browsing |
+| CT log operators (only workers with `ct_scanning = true`) | The worker's IP address, and which public tiles it downloads | Anything about users or the organisation's internal data |
 | OpenTimestamps calendars | A blinded 32-byte hash and the submitter's IP | Release content, domains |
 | GitHub (false-positive report) | What the user chooses to submit | Anything else |
 

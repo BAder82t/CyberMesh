@@ -33,7 +33,7 @@ Participation is opt-in and can be paused or stopped at any time.
    cybermesh governance sign-manifest --manifest manifest.unsigned.json --key gov-2.key.json --merge manifest.json --out manifest.json
    ```
 4. **Install the trust material** on the worker:
-   - `governance-root.json`, the pinned trust anchor, obtained **out of band**, for example from the governance group's signed announcement;
+   - `governance-root.json`, the pinned trust anchor, obtained **out of band**, for example from the governance group's signed announcement. Its optional `min_sequence` is the lowest manifest sequence the node accepts. Nodes also store the highest sequence they have accepted in `manifest-state.json` in their state directory, so a restart cannot roll them back;
    - `manifest.json`;
    - the evidence bundle directory. Its digests must match what tasks pin, so check it with `cybermesh evidence verify --dir ...`.
 5. **Configure** `/etc/cybermesh/worker.toml`. The demo's `worker-*.toml` files are complete examples.
@@ -64,6 +64,18 @@ Participation is opt-in and can be paused or stopped at any time.
    sudo cp deploy/systemd/cybermesh-worker.service /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable --now cybermesh-worker
    ```
+
+## 2a. Optional: Certificate Transparency scanning
+
+CT shard scans download public certificate-log tiles from the CT logs pinned in the network's `ct-logs` evidence. They are **opt-in**:
+
+```toml
+[resources]
+ct_scanning = true          # accept ct-shard-scan tasks
+ct_fetch_kib_per_sec = 256  # download budget for CT tiles
+```
+
+Expect about 645 B of download per scanned certificate (gzip), roughly 165 KB per 256-entry tile. If you enable it, allow outbound HTTPS from the worker only to the pinned log hosts. Details: [ct-monitoring.md](ct-monitoring.md).
 
 ## 3. Day-to-day control
 

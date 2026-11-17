@@ -72,6 +72,67 @@ pub fn load_manifest(
     Ok((m, root))
 }
 
+/// The highest manifest a node has accepted, persisted so that a restart cannot roll the
+/// node back to an older manifest (for example one from before a key was revoked).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManifestState {
+    pub sequence: u64,
+    pub digest: cybermesh_crypto::Digest,
+}
+
+fn manifest_digest(m: &TrustManifest) -> Result<cybermesh_crypto::Digest, NodeError> {
+    Ok(cybermesh_crypto::Digest::of(
+        &cybermesh_crypto::canonical::to_vec(m)?,
+    ))
+}
+
+/// Records `m` as the highest accepted manifest.
+pub fn persist_manifest_state(state_path: &Path, m: &TrustManifest) -> Result<(), NodeError> {
+    write_json(
+        state_path,
+        &ManifestState {
+            sequence: m.sequence,
+            digest: manifest_digest(m)?,
+        },
+    )
+}
+
+/// Loads and verifies the manifest, refusing anything older than the persisted state and a
+/// different manifest with the same sequence (governance equivocation). Persists the state
+/// when the manifest is newer.
+pub fn load_manifest_checked(
+    manifest_path: &Path,
+    root_path: &Path,
+    state_path: &Path,
+    now: u64,
+) -> Result<(TrustManifest, GovernanceRoot), NodeError> {
+    let state: Option<ManifestState> = if state_path.exists() {
+        Some(read_json(state_path)?)
+    } else {
+        None
+    };
+    let root: GovernanceRoot = read_json(root_path)?;
+    let env = Envelope::parse(&read_bytes(manifest_path)?, MAX_FILE as usize)?;
+    let min = state
+        .as_ref()
+        .map_or(0, |s| s.sequence)
+        .max(root.min_sequence);
+    let m = TrustManifest::verify(&env, &root, now, min)?;
+    let d = manifest_digest(&m)?;
+    match &state {
+        Some(s) if s.sequence == m.sequence && s.digest != d => {
+            return Err(NodeError::Config(format!(
+                "manifest sequence {} differs from the one previously accepted (equivocation); refusing",
+                m.sequence
+            )));
+        }
+        Some(s) if s.sequence == m.sequence => {}
+        _ => persist_manifest_state(state_path, &m)?,
+    }
+    Ok((m, root))
+}
+
 /// Where a node reloads its trust manifest from.
 #[derive(Debug, Clone)]
 pub struct ManifestSource {
@@ -110,6 +171,74 @@ mod tests {
     use cybermesh_protocol::testkit::TestNetwork;
 
     use super::*;
+
+    #[test]
+    fn restart_cannot_roll_back_to_an_older_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = 1_800_000_000;
+        let mut net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], now);
+        let (mp, rp, sp) = (
+            dir.path().join("manifest.json"),
+            dir.path().join("root.json"),
+            dir.path().join("manifest-state.json"),
+        );
+        write_json(&rp, &net.root).unwrap();
+        let v1 = net.manifest_envelope.to_vec().unwrap();
+        // Node accepts sequence 2 (which revokes a worker) ...
+        net.manifest.sequence = 2;
+        net.manifest
+            .revocations
+            .push(cybermesh_protocol::Revocation {
+                key_id: net.worker_id(0),
+                revoked_at: now,
+                reason: "compromised".into(),
+            });
+        net.resign_manifest();
+        write_atomic(&mp, &net.manifest_envelope.to_vec().unwrap()).unwrap();
+        let (m, _) = load_manifest_checked(&mp, &rp, &sp, now).unwrap();
+        assert_eq!(m.sequence, 2);
+        // ... then, after a restart, someone puts the older pre-revocation manifest back.
+        write_atomic(&mp, &v1).unwrap();
+        assert!(
+            load_manifest_checked(&mp, &rp, &sp, now).is_err(),
+            "rollback refused"
+        );
+        // A different manifest with the same sequence is refused too.
+        net.manifest.operators[0].name = "changed".into();
+        net.resign_manifest();
+        write_atomic(&mp, &net.manifest_envelope.to_vec().unwrap()).unwrap();
+        assert!(
+            load_manifest_checked(&mp, &rp, &sp, now).is_err(),
+            "equivocation refused"
+        );
+    }
+
+    #[test]
+    fn governance_root_floor_protects_a_fresh_node() {
+        // No state file (first start, or the state directory was lost): the root's
+        // `min_sequence` still refuses an old manifest.
+        let dir = tempfile::tempdir().unwrap();
+        let now = 1_800_000_000;
+        let mut net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], now);
+        let (mp, rp, sp) = (
+            dir.path().join("manifest.json"),
+            dir.path().join("root.json"),
+            dir.path().join("manifest-state.json"),
+        );
+        write_atomic(&mp, &net.manifest_envelope.to_vec().unwrap()).unwrap();
+        net.root.min_sequence = net.manifest.sequence + 1;
+        write_json(&rp, &net.root).unwrap();
+        assert!(load_manifest_checked(&mp, &rp, &sp, now).is_err());
+        assert!(!sp.exists());
+        net.root.min_sequence = net.manifest.sequence;
+        write_json(&rp, &net.root).unwrap();
+        load_manifest_checked(&mp, &rp, &sp, now).unwrap();
+        // A root without the field (older files) parses with floor 0.
+        net.root.min_sequence = 0;
+        let text =
+            String::from_utf8(cybermesh_crypto::canonical::to_vec(&net.root).unwrap()).unwrap();
+        assert!(!text.contains("min_sequence"));
+    }
 
     #[test]
     fn reload_accepts_only_newer_manifests_and_flags_equivocation() {

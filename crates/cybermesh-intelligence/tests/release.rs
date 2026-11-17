@@ -58,6 +58,7 @@ fn record(task: &str, outcomes: Vec<DomainOutcome>, at: u64) -> (Digest, Verific
         faults: vec![],
         outcomes,
         verified_at: at,
+        ct: None,
     };
     (Digest::of(&canonical::to_vec(&r).unwrap()), r)
 }

@@ -78,6 +78,14 @@ sequenceDiagram
 
 *Trade-off.* Lexical analysis is cheap, private and safe, but weak (see [evaluation.md](evaluation.md)). Stronger signals such as passive DNS, certificate transparency or page content need either network access to suspicious infrastructure or larger data feeds. They are deferred.
 
+### 3.3a Certificate Transparency monitoring (`cybermesh-ct`)
+
+`ct-shard-scan` is a second task kind, fully described in [ct-monitoring.md](ct-monitoring.md).
+
+- **Work.** Workers that opt in download full data tiles of public static CT logs from pinned monitoring URLs. They extract certificate names and report per-tile Merkle roots, a digest of every extracted name, and brand-lookalike matches.
+- **Verification.** The verifier checks the roots against the log's level-1 hash tiles and re-scans tiles chosen from a secret seed. It re-scans everything on disagreement, and when publishing is enabled it confirms every tile that would publish a finding.
+- **Output.** Results feed an investigation report. Browser warnings from CT evidence are opt-in and capped at `warn`.
+
 ### 3.4 Verification (`cybermesh-verifier`)
 
 ```mermaid

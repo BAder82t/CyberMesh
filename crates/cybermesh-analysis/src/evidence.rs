@@ -31,6 +31,7 @@ pub fn source_pin(id: &str, kind: SourceKind, file_digest: &Digest) -> Digest {
         SourceKind::Popularity => "popularity",
         SourceKind::Brands => "brands",
         SourceKind::HostingPlatforms => "hosting-platforms",
+        SourceKind::CtLogs => "ct-logs",
     };
     Digest::tagged(
         "cybermesh/evidence-source/v1",
@@ -72,6 +73,108 @@ pub enum SourceKind {
     /// Registrable domains whose subdomains are independently controlled customer sites
     /// (user-content hosting not covered by the Public Suffix List's private section).
     HostingPlatforms,
+    /// JSON list of Certificate Transparency logs workers may fetch from (the only network
+    /// endpoints CT tasks can reach).
+    CtLogs,
+}
+
+/// A CT log workers may scan (static CT API monitoring prefix).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CtLogInfo {
+    pub log_id: String,
+    pub description: String,
+    /// Static CT API monitoring prefix, e.g. `https://mon.example.org/2026h2/`. Must be HTTPS;
+    /// plain HTTP is accepted only for loopback hosts (tests and demonstrations).
+    pub monitoring_url: String,
+}
+
+/// Splits `host[:port]` or `[v6]:port` (the authority, up to the first `/`).
+fn split_authority(rest: &str) -> Option<(&str, Option<&str>)> {
+    let auth = rest.split('/').next()?;
+    if let Some(after) = auth.strip_prefix('[') {
+        let (inner, tail) = after.split_once(']')?;
+        let host = &auth[..inner.len() + 2];
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(tail.strip_prefix(':')?)
+        };
+        Some((host, port))
+    } else {
+        Some(match auth.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (auth, None),
+        })
+    }
+}
+
+/// A lowercase DNS name with at least two labels and a non-numeric TLD (no IP literals).
+fn is_dns_host(h: &str) -> bool {
+    let labels: Vec<&str> = h.split('.').collect();
+    h.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+        && labels
+            .last()
+            .is_some_and(|t| !t.bytes().all(|b| b.is_ascii_digit()))
+}
+
+impl CtLogInfo {
+    /// Validates the URL policy: `https://<dns name>[:port]/<path>/`, or plain HTTP to a
+    /// loopback address (tests and demos). No credentials, query, fragment, percent-encoding
+    /// or `..`.
+    pub fn validate(&self) -> Result<(), String> {
+        if !cybermesh_protocol::ct::is_valid_log_id(&self.log_id) {
+            return Err(format!("invalid log id {}", self.log_id));
+        }
+        let u = self.monitoring_url.as_str();
+        let (rest, https) = if let Some(r) = u.strip_prefix("https://") {
+            (r, true)
+        } else if let Some(r) = u.strip_prefix("http://") {
+            (r, false)
+        } else {
+            return Err(format!("{}: monitoring URL must be https", self.log_id));
+        };
+        let ok = !rest.is_empty()
+            && u.ends_with('/')
+            && u.len() <= 256
+            && u.bytes().all(|b| b.is_ascii_graphic())
+            && !rest.contains(['@', '?', '#', '%', '\\'])
+            && !rest.contains("..");
+        let Some((host, port)) = split_authority(rest).filter(|_| ok) else {
+            return Err(format!(
+                "{}: malformed monitoring URL (must end with '/')",
+                self.log_id
+            ));
+        };
+        if port
+            .is_some_and(|p| p.is_empty() || p.len() > 5 || !p.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err(format!("{}: invalid port", self.log_id));
+        }
+        if https {
+            if !is_dns_host(host) {
+                return Err(format!(
+                    "{}: https monitoring URL needs a DNS host name",
+                    self.log_id
+                ));
+            }
+        } else if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+            return Err(format!(
+                "{}: plain http is only allowed for loopback",
+                self.log_id
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Metadata for one source in `bundle.json`.
@@ -113,6 +216,7 @@ pub struct EvidenceBundle {
     pub blocklists: Vec<(String, HashSet<String>)>,
     pub popular: HashSet<String>,
     pub hosting_platforms: HashSet<String>,
+    pub ct_logs: Vec<CtLogInfo>,
     pub brands: Vec<Brand>,
     pub pins: EvidencePins,
     pub sources: Vec<SourceMeta>,
@@ -244,6 +348,18 @@ impl EvidenceBundle {
                     bundle.skipped_lines += skipped;
                     bundle.popular.extend(set);
                 }
+                SourceKind::CtLogs => {
+                    let mut logs: Vec<CtLogInfo> = serde_json::from_slice(bytes)
+                        .map_err(|e| EvidenceError::Manifest(format!("ct-logs: {e}")))?;
+                    for l in &logs {
+                        l.validate().map_err(EvidenceError::Manifest)?;
+                    }
+                    logs.sort_by(|a, b| a.log_id.cmp(&b.log_id));
+                    if logs.windows(2).any(|w| w[0].log_id == w[1].log_id) {
+                        return Err(EvidenceError::Manifest("duplicate CT log id".into()));
+                    }
+                    bundle.ct_logs.extend(logs);
+                }
                 SourceKind::HostingPlatforms => {
                     let (set, skipped) = parse_domain_list(bytes);
                     bundle.skipped_lines += skipped;
@@ -354,6 +470,47 @@ mod tests {
             EvidenceBundle::from_manifest_and_files(manifest, &tampered),
             Err(EvidenceError::DigestMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn ct_log_url_policy() {
+        let ok = |u: &str| {
+            CtLogInfo {
+                log_id: "log-a".into(),
+                description: String::new(),
+                monitoring_url: u.into(),
+            }
+            .validate()
+        };
+        assert!(ok("https://mon.example.org/2026h2/").is_ok());
+        assert!(ok("http://127.0.0.1:8090/").is_ok());
+        assert!(
+            ok("http://mon.example.org/").is_err(),
+            "plain http to a remote host"
+        );
+        assert!(ok("https://user@mon.example.org/").is_err());
+        assert!(ok("https://mon.example.org/a?x=1/").is_err());
+        assert!(
+            ok("https://mon.example.org/2026h2").is_err(),
+            "must end with /"
+        );
+        assert!(ok("file:///etc/").is_err());
+        assert!(ok("http://127.0.0.1.evil.example/").is_err());
+        assert!(ok("http://[::1]:8090/").is_ok());
+        assert!(ok("http://[::1]/").is_ok());
+        assert!(ok("http://[::2]:8090/").is_err());
+        assert!(ok("https://mon.example.org:8443/a/").is_ok());
+        assert!(ok("https://mon.example.org:/a/").is_err(), "empty port");
+        assert!(ok("https://mon.example.org:84x/a/").is_err());
+        assert!(
+            ok("https://mon.example.org/%2e%2e/").is_err(),
+            "percent-encoding"
+        );
+        assert!(ok("https://10.0.0.1/").is_err(), "IP literal over https");
+        assert!(ok("https://[fe80::1]/").is_err(), "IPv6 literal over https");
+        assert!(ok("https://localhost/").is_err(), "single-label host");
+        assert!(ok("https://Mon.Example.org/").is_err(), "lowercase only");
+        assert!(ok("https://mon.example.org\\@x/").is_err());
     }
 
     #[test]

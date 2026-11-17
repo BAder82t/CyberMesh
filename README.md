@@ -17,9 +17,10 @@ How the network works:
 
 **First application: phishing and malicious-domain protection.** The analysis tasks assess
 domain names, and the signed release is the delivery format that browsers consume. The task
-system, verification and distribution layers are general. Further task types are planned on
-the [roadmap](docs/roadmap.md). The most promising is certificate-transparency monitoring,
-where donated capacity clearly matters.
+system, verification and distribution layers are general; further task types are planned on
+the [roadmap](docs/roadmap.md).
+
+**Second application (v0.2, in progress): Certificate Transparency monitoring.** Workers that opt in split public CT logs into shards and scan every newly logged certificate for brand lookalikes. The network verifies their work against the logs' own Merkle hashes, and the output is an investigation report for security teams. Following every public tiled CT log takes about 243 million certificate entries a day: roughly 20–30 workers at a 1 % CPU budget, or one dedicated server. This is the first workload where pooling small donated slices is a natural fit. See [docs/ct-monitoring.md](docs/ct-monitoring.md).
 
 > **Status: research MVP (v0.1.0). Not production-ready.** The evaluation in [docs/evaluation.md](docs/evaluation.md) shows two things.
 >
@@ -114,7 +115,8 @@ not created as separate crates; see [docs/architecture.md](docs/architecture.md#
 
 Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Three independent internal
 reviews (two security passes and one correctness review) were performed and their findings fixed; they are summarised in
-[docs/security-review.md](docs/security-review.md). No external audit has been performed.
+[docs/security-review.md](docs/security-review.md). A further internal review of the CT monitoring code (v0.2 branch) is
+summarised there too. No external audit has been performed.
 
 ## Licence
 

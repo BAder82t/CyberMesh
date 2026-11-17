@@ -17,7 +17,7 @@ default = ["ots"]
 ots = ["cybermesh-anchor/ots"]
 adversary-sim = ["cybermesh-node/adversary-sim"]
 # Developer commands that use deterministic test keys (test-vector generation).
-dev-tools = ["cybermesh-protocol/testkit"]
+dev-tools = ["cybermesh-protocol/testkit", "cybermesh-ct/mock"]
 
 [dependencies]
 anyhow.workspace = true
@@ -26,6 +26,7 @@ clap.workspace = true
 cybermesh-analysis.workspace = true
 cybermesh-anchor.workspace = true
 cybermesh-crypto.workspace = true
+cybermesh-ct = { workspace = true, features = ["http"] }
 cybermesh-intelligence.workspace = true
 cybermesh-network.workspace = true
 cybermesh-node.workspace = true

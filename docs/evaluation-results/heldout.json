@@ -5,7 +5,7 @@
   "skipped_rows": 0,
   "malicious": 106,
   "benign": 11645,
-  "engine_micros_per_domain": 19.168010552293424,
+  "engine_micros_per_domain": 18.514059058803504,
   "evidence_pins": {
     "brands": "sha256:95f8ba7e4f9b11cb31bfbb72481c74fd7ed82208c959b394f581c2cbe18cfd49",
     "hosting-platforms": "sha256:c44a001acc44374e51cd72d07a4e1f78d806a01a8b60905ed7cf5f8a8e51e79c",

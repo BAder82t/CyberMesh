@@ -42,6 +42,8 @@ cargo run --release -p cybermesh-cli -- eval --evidence eval-data/evidence --dat
 - **engine-malicious**: what CyberMesh may *block*, and only with corroboration.
 - **engine-suspicious**: what CyberMesh may *warn* on.
 
+Engine 0.4.0 stops counting plain truncations of a brand token as lookalikes, so `cloud` no longer matches `icloud`. The change came from false positives seen in real CT data, not from the evaluation splits. It also lowered lexical recall on known phishing from 6.4 % to 6.1 %.
+
 **Tuning disclosure.**
 
 - The scoring weights were fixed before any of this data was examined.
@@ -61,7 +63,10 @@ cargo run --release -p cybermesh-cli -- eval --evidence eval-data/evidence --dat
 | validation | 114 / 11,616 | 0.2.0 | engine-suspicious | 1 | 2 | 0.9 % | 33 % | 0.017 % |
 | validation | 114 / 11,616 | **0.3.0** | engine-suspicious | 4 | 3 | 3.5 % | 57 % | 0.026 % |
 | held-out | 106 / 11,645 | 0.2.0 | engine-suspicious | 1 | 3 | 0.9 % | 25 % | 0.026 % |
-| **held-out** | 106 / 11,645 | **0.3.0** | engine-suspicious | **5** | **3** | **4.7 %** | **62.5 %** | **0.026 %** |
+| held-out | 106 / 11,645 | 0.3.0 | engine-suspicious | 5 | 3 | 4.7 % | 62.5 % | 0.026 % |
+| dev | 351 / 36,739 | 0.4.0 | engine-suspicious | 8 | 5 | 2.3 % | 61.5 % | 0.014 % |
+| validation | 114 / 11,616 | 0.4.0 | engine-suspicious | 4 | 2 | 3.5 % | 66.7 % | 0.017 % |
+| **held-out** | 106 / 11,645 | **0.4.0** | engine-suspicious | **5** | **3** | **4.7 %** | **62.5 %** | **0.026 %** |
 | any | — | any | feed-only | 0 | 0 | 0 % (by construction) | — | 0 % |
 | any | — | any | engine-malicious | 0 | 0 | 0 % | — | 0 % |
 
@@ -116,6 +121,7 @@ Target: about 1 % of one core averaged over 60 s, 100–200 MiB of memory.
 **Notes.**
 
 - **CPU.** The worker governor enforces its budget on measured *process* CPU, including networking, and the unit test `cpu_budget_throttles_busy_work` covers it. In these runs the budget was never reached: analysis costs about 20–30 µs of CPU per domain, and most of a worker's CPU goes to libp2p heartbeats and gossip.
+- **Short runs can exceed 1 %.** The governor is a token bucket with up to `cpu_window_secs` (default 60 s) of burst credit. A worker can spend that credit at once, for example on a CT scan right after start-up. In one early CT demo run, a worker averaged 2.6 % over its short life. At that time the CT scan also ignored throttling; it now waits while the worker is throttled. The budget holds over long runs (about 1 %), and any 60 s window is bounded at about twice the budget (≈ 2 %).
 - **OS enforcement.** OS-level caps (systemd `CPUQuota`/`MemoryMax`, Docker `cpus`/`mem_limit`) were applied in the Docker demo. The local demo used only the cooperative governor.
 - **Impact on ordinary workstation activity.** This was not measured with a user-facing benchmark. The average CPU is below 0.3 % of one core, and the worker pauses when load per CPU exceeds the configured threshold.
 
@@ -146,6 +152,16 @@ The first sustained-load run uncovered a **liveness bug**, since fixed. The coor
 - the rate allowance is sized above the workers' own bandwidth budget.
 
 Regression tests: `sustained_load_settles_every_batch`, `unassignable_batches_are_abandoned_not_stalled`.
+
+## 5a. Certificate Transparency monitoring
+
+[ct-monitoring.md](ct-monitoring.md) holds the measurements on real logs. In summary:
+
+- **Parsing.** 15,360 real certificates and precertificates parsed with 0 failures, and **60 of 60** tile Merkle roots matched the logs' own hash tiles.
+- **Cost.** 70–105 µs of CPU and about 645 B on the wire (gzip) per entry.
+- **Volume.** All tiled logs together grow by about 243 M entries per day. Following them needs about 0.2–0.3 of a core and about 15 Mbit/s, which is about 20–30 workers at a 1 % CPU budget.
+- **Value.** This is the first workload where pooled donated slices are a natural fit, though one dedicated server could also run it.
+- **Brand signals on real data.** These were dominated by brand owners' own infrastructure, so CT findings go to an investigation report by default instead of becoming browser warnings.
 
 ## 6. Security validation
 
