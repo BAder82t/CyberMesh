@@ -2,7 +2,7 @@
 
 **Question.** Can spare computing capacity contributed by independent organisations produce verifiable threat intelligence that measurably improves security protection for ordinary internet users?
 
-**Short answer from v0.1.0.**
+**Short answer (v0.1.0; the lexical figures were re-run with engine 0.4.0 for v0.2.0 and are unchanged).**
 
 - *Verifiable*: **yes**. The verification and distribution design works end to end on a real network, including against adversarial workers, as sections 3 and 6 show.
 - *Measurably improves protection*: **only marginally** with the current lexical engine. On phishing domains that a reference feed had not yet listed, it raises an advisory warning for **4.7 %** (held-out) at a **0.026 %** false-positive rate.

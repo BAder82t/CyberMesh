@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased (v0.2.0)
+## v0.2.0 (2026-11-17, research pre-release)
+
+**Not production-ready; no external audit.** v0.1.0 and v0.2.0 nodes cannot interoperate (wire-format changes below).
 
 ### Added
 - `ct-shard-scan` task type: distributed Certificate Transparency monitoring of static CT API logs. It is opt-in per operator, reaches only pinned log endpoints, verifies against the logs' level-1 hash tiles with spot checks and confirm-before-publish, and produces an investigation report (`cybermesh ct report`). Publishing CT findings as warnings is opt-in and capped at `warn`.
@@ -30,6 +32,11 @@
   - no faults when a log is itself inconsistent;
   - required `leaf_index`;
   - `x509-parser` pinned.
+- Fixes from an internal review of the independent-verifier code ([docs/security-review.md](docs/security-review.md), fourth pass):
+  - only recomputed records count towards a quorum of 2 or more;
+  - bounded verifier state (followed tasks, early results by count, bytes and worker; settled tasks; accepted-only replay entries);
+  - tasks keyed by digest against id squatting;
+  - `release build` honours the governance root's `min_sequence`.
 
 ## v0.1.0 (research MVP)
 

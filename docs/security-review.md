@@ -1,6 +1,6 @@
-# Internal security review (v0.1.0)
+# Internal security reviews
 
-Two independent internal reviews were run on the core crates on 2026-11-16:
+For v0.1.0, two independent internal reviews were run on the core crates on 2026-11-16:
 
 - an adversarial security audit;
 - a Rust correctness and robustness review.
@@ -67,7 +67,7 @@ A second independent internal review covered code written after the first pass. 
 | LOW | Supply chain: base images, gitleaks image and the nightly fuzz toolchain were unpinned, the gitleaks allowlist was broad, and evaluation inputs were unverified. | Digests and versions pinned, allowlist narrowed, phishing snapshots verified against pinned SHA-256. | CI files |
 | LOW | `.dockerignore` missed `fuzz/target` and other outputs, giving a 642 MB build context. | Excluded. | — |
 
-## Third pass: Certificate Transparency monitoring (v0.2 branch)
+## Third pass: Certificate Transparency monitoring (v0.2.0)
 
 A third independent internal review covered the `ct-shard-scan` task type: the CT crate, the CT verifier, and the worker and coordinator changes. It found no CRITICAL issues. All findings below were fixed.
 
@@ -86,7 +86,7 @@ A third independent internal review covered the `ct-shard-scan` task type: the C
 | LOW | `ct scan` added the tile range without an overflow check. | `checked_add`. | — |
 | LOW | Entries without a `leaf_index` extension were accepted, so entries were not bound to their position. | The extension is required (static-ct-api mandates it). A real Let's Encrypt tile still parses. | `parse_data_tile` tests; one-tile check against Willow 2027h1 |
 
-## Fourth pass: independent verifiers (v0.2 branch)
+## Fourth pass: independent verifiers (v0.2.0)
 
 An independent internal review covered the multi-verifier change:
 - the verifier node;
@@ -118,11 +118,11 @@ Kept as is:
 
 ## Accepted or deferred (documented residual risk)
 
-- **Manifest state on restart.** Fixed on the v0.2 branch: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.
+- **Manifest state on restart.** Fixed in v0.2.0: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.
 - **Extension trust root.** The extension's trust root is bundled, so a revoked release key is removed only by shipping an extension update.
 - **Synchronous analysis.** `assess_task` runs on the worker's async loop. It costs about 1 ms per 32-domain task.
 - **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced.
 - **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It is a compile-time proc-macro reached through libp2p.
 - **Quorum enforced by builders only.** Browsers never see records, so they cannot check `min_verifiers`. Co-signers must rebuild rather than sign a payload someone else built.
-- **Verifier quorum is opt-in.** Independent verifiers and the manifest's `min_verifiers` exist on the v0.2 branch. With `min_verifiers = 1`, the default for compatibility, a single verifier is still trusted as in v0.1. Networks should set 2 or more and run at least one more verifier than that.
+- **Verifier quorum is opt-in.** Independent verifiers and the manifest's `min_verifiers` exist since v0.2.0. With `min_verifiers = 1`, the default for compatibility, a single verifier is still trusted as in v0.1. Networks should set 2 or more and run at least one more verifier than that.
 - **Late CT equivocation during finalisation.** CT tasks are finalised in the background. A second, conflicting result that arrives in that window (usually seconds) is ignored rather than recorded as provable equivocation. Results that arrive before or after the window are handled as for domain tasks.

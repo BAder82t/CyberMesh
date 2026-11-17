@@ -1,6 +1,6 @@
 # Security policy
 
-CyberMesh is a research MVP (v0.1.0). It has had internal reviews but **no external security
+CyberMesh is a research MVP (v0.2.0). It has had internal reviews but **no external security
 audit**, and it is not production-ready.
 
 ## Reporting a vulnerability

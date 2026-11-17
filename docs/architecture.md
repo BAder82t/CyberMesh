@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the CyberMesh MVP as implemented in v0.1.0, the reasons behind each
+This document describes the CyberMesh MVP as implemented in v0.2.0, the reasons behind each
 major decision, and the security trade-offs of each.
 
 ## 1. Roles
