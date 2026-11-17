@@ -4,22 +4,34 @@ The versions below are intentions, not commitments. Priorities follow the evalua
 verification and distribution layer works, while detection quality and the value of distributed
 compute are the weak points.
 
-## v0.1.0 (this release): research MVP
+## v0.1.0: research MVP
 Deterministic engine, permissioned libp2p network, recomputation-based verification,
 co-signed offline-verifiable releases, browser extension, Merkle log with local and
 OpenTimestamps anchoring, Docker and local demos, internal security review, evaluation.
 
-## v0.2: harden the pilot
-- **Multiple verifiers.** Shipped on the `feat/multi-verifier` branch:
+## v0.2.0 (this release): CT monitoring and independent verifiers
+- **Certificate Transparency monitoring.** The `ct-shard-scan` task type:
+  - verification against the logs' own hash tiles, with spot checks and confirm-before-publish;
+  - an investigation report.
+
+  See [ct-monitoring.md](ct-monitoring.md).
+- **Multiple verifiers.**
   - independent verifier nodes (`cybermesh verifier run`);
   - records that name their verifier;
   - a governance-set `min_verifiers` release quorum (listing and `block` both need it).
+- **Manifest state.** Nodes persist the highest manifest sequence, and the governance root can set a `min_sequence` floor. Runtime reload with live revocation shipped in v0.1.0.
 
-  Still open:
-  - distributing records between organisations over the network (today they are files collected by release signers);
-  - letting the coordinator act on faults proven by other verifiers;
-  - proving late equivocation at independent verifiers.
-- **Manifest state.** Shipped with CT monitoring: nodes persist the highest manifest sequence, and the governance root can set a `min_sequence` floor. Runtime reload with live revocation shipped in v0.1.0.
+## Next: harden the pilot
+- **Verifiers.**
+  - Distribute records between organisations over the network. Today they are files collected by release signers.
+  - Let the coordinator act on faults proven by other verifiers.
+  - Prove late equivocation at independent verifiers.
+  - Run independent verifiers in the Docker demo.
+- **CT.**
+  - Checkpoint signature and consistency verification.
+  - Continuous tailing of new tiles.
+  - RFC 6962 logs.
+  - Owner-maintained brand infrastructure lists, needed before CT warnings can be enabled widely.
 - **Network.** Enable gossipsub peer scoring (invalid-message penalties), plus `/dns4` bootstrap and Kademlia discovery for more than 20 nodes.
 - **Witnessed transparency log.** Organisations co-sign log checkpoints using the C2SP `tlog-checkpoint` and `tlog-cosignature` formats. Consistency is checked before co-signing.
 - **Build integrity.** Signed, reproducible binary releases with attestations (SLSA provenance) and a published verification procedure.
@@ -27,15 +39,9 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
 - **Windows.** Run the worker as a service with Job Object limits. Add macOS `launchd` packaging.
 - **Licensing.** Resolve the licensing question for feed-derived `block` entries (see `existing-work-review.md` §9). Prefer feeds whose licences permit redistribution of derived blocklists, or organisation-contributed, analyst-confirmed reports under a CyberMesh data licence.
 
-## v0.2 (in progress): Certificate Transparency monitoring
-Shipped on the `feat/ct-monitoring` branch. It adds the `ct-shard-scan` task type, verification against the logs' hash tiles with spot checks and confirm-before-publish, an investigation report, and persisted manifest state. See [ct-monitoring.md](ct-monitoring.md). Next for CT:
-
-- checkpoint signature and consistency verification;
-- continuous tailing of new tiles;
-- RFC 6962 logs;
-- owner-maintained brand infrastructure lists, needed before CT warnings can be enabled widely.
-
 ## v0.3: a task type where donated compute matters (original plan)
+*Certificate Transparency monitoring from this plan shipped in v0.2.0. It verifies against the logs' own hash tiles and spot checks rather than full re-execution; see [ct-monitoring.md](ct-monitoring.md).*
+
 The evaluation shows that lexical analysis runs at about 37,000–52,000 domains per second on one core, so a single server does it easily. The candidate workload that *does* benefit from many independent, resource-limited contributors:
 
 - **Certificate Transparency lookalike monitoring (`CtShardScan`).**
