@@ -10,8 +10,9 @@ use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec, normalize_domain};
 use cybermesh_crypto::{
     Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce, random_bytes,
 };
+use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, fetch_verified_checkpoint};
 use cybermesh_ct::http::HttpTileSource;
-use cybermesh_ct::{Checkpoint, TileSource as _, scan_tile};
+use cybermesh_ct::scan_tile;
 use cybermesh_network::{
     Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed,
 };
@@ -357,19 +358,37 @@ impl AnyVerifier {
 }
 
 /// Log access for CT verification (the coordinator's own fetches and engine).
+/// Log access for CT verification: every tile root is proven against the log's checkpoint,
+/// whose signature was verified with the pinned key.
 struct LogOracle<'a> {
-    src: HttpTileSource,
-    tree_size: u64,
+    auth: &'a cybermesh_ct::proof::TileAuthenticator<'a>,
     engine: &'a Engine,
+    /// Tiles whose hash tiles contradicted the signed checkpoint.
+    contradicted: std::sync::Mutex<BTreeSet<u64>>,
 }
 
 impl CtOracle for LogOracle<'_> {
-    fn tile_root(&self, _log: &str, tile: u64) -> Option<Digest> {
-        self.src.tile_root(tile, self.tree_size).ok().map(Digest)
+    fn tile_root(&self, log: &str, tile: u64) -> Option<Digest> {
+        match self.auth.tile_root(tile) {
+            Ok(r) => Some(Digest(r)),
+            // Only a hash mismatch is a contradiction; a wrong-length body (an error page from a
+            // CDN or captive portal) is merely unavailable.
+            Err(e @ cybermesh_ct::CtError::Unauthenticated(_)) => {
+                warn!(%log, tile, error = %e, "CT log hash tiles contradict its signed checkpoint");
+                if let Ok(mut c) = self.contradicted.lock() {
+                    c.insert(tile);
+                }
+                None
+            }
+            Err(_) => None,
+        }
     }
     fn rescan(&self, _log: &str, tile: u64) -> Option<cybermesh_protocol::ct::TileScanResult> {
-        let data = self.src.data_tile(tile).ok()?;
+        let data = self.auth.source().data_tile(tile).ok()?;
         scan_tile(&data, tile, self.engine).ok()
+    }
+    fn proof_failed(&self, _log: &str, tile: u64) -> bool {
+        self.contradicted.lock().is_ok_and(|c| c.contains(&tile))
     }
 }
 
@@ -387,14 +406,26 @@ pub(crate) fn finalize_ct(
     seed: &[u8; 32],
     now: u64,
 ) -> VerificationRecord {
-    let oracle = log.and_then(|l| {
-        let src = HttpTileSource::new(l, Duration::from_secs(30)).ok()?;
-        let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
-        Some(LogOracle {
-            src,
-            tree_size: cp.size,
-            engine,
-        })
+    let src = log.and_then(|l| HttpTileSource::new(l, Duration::from_secs(30)).ok());
+    // Without a checkpoint signed by the pinned key there is no trusted log access: the task
+    // is then settled as without log access (disagreement disputed, nothing confirmed).
+    let auth = match (&src, log) {
+        (Some(s), Some(l)) => match fetch_verified_checkpoint(s, l).and_then(|cp| {
+            cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+            Ok(cp)
+        }) {
+            Ok(cp) => Some(cybermesh_ct::proof::TileAuthenticator::new(s, cp)),
+            Err(e) => {
+                warn!(log = %l.log_id, error = %e, "CT checkpoint not verified; settling without log access");
+                None
+            }
+        },
+        _ => None,
+    };
+    let oracle = auth.as_ref().map(|a| LogOracle {
+        auth: a,
+        engine,
+        contradicted: std::sync::Mutex::new(BTreeSet::new()),
     });
     v.finalize(
         Some(engine),
@@ -1092,7 +1123,13 @@ pub async fn run_coordinator(
                 let (log, count) = (ct.log.clone(), ct.tile_count);
                 tokio::task::spawn_blocking(move || {
                     let src = HttpTileSource::new(&log, Duration::from_secs(30)).ok()?;
-                    let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
+                    let cp = match fetch_verified_checkpoint(&src, &log) {
+                        Ok(cp) => cp,
+                        Err(e) => {
+                            warn!(log = %log.log_id, error = %e, "CT checkpoint not verified");
+                            return None;
+                        }
+                    };
                     Some(cp.full_tiles().saturating_sub(count))
                 })
                 .await

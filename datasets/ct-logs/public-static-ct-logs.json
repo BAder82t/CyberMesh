@@ -1,17 +1,23 @@
 [
   {
     "log_id": "letsencrypt-willow-2027h1",
-    "description": "Let's Encrypt Willow 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17.",
-    "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2027h1/"
+    "description": "Let's Encrypt Willow 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17 (log list v97.4); key and origin from that list.",
+    "monitoring_url": "https://mon.willow.ct.letsencrypt.org/2027h1/",
+    "origin": "log.willow.ct.letsencrypt.org/2027h1",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzsMKtojO0BVB4t59lVyAhxtqObVA+wId5BpJGA8pZrw5GTjzuhpvLu/heQGi0hHCeislkDe34N/2D0SwEUBE0w=="
   },
   {
     "log_id": "letsencrypt-sycamore-2027h1",
-    "description": "Let's Encrypt Sycamore 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17.",
-    "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2027h1/"
+    "description": "Let's Encrypt Sycamore 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17 (log list v97.4); key and origin from that list.",
+    "monitoring_url": "https://mon.sycamore.ct.letsencrypt.org/2027h1/",
+    "origin": "log.sycamore.ct.letsencrypt.org/2027h1",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWrGdYyZYB7teCS4K/oKIsbV0yVBSgjlOwO22OOCoA6Y252QhFzC8Wg7oVXVKqfkWaSaM/n+3pfCBf4BAkpdx8g=="
   },
   {
     "log_id": "google-parcelyard-2027h1",
-    "description": "Google ParcelYard 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17.",
-    "monitoring_url": "https://storage.googleapis.com/parcelyard2027h1.prod.certificate.transparency.goog/"
+    "description": "Google ParcelYard 2027h1 (static CT API). Listed in Google's CT log list v3 on 2026-11-17 (log list v97.4); key and origin from that list.",
+    "monitoring_url": "https://storage.googleapis.com/parcelyard2027h1.prod.certificate.transparency.goog/",
+    "origin": "parcelyard2027h1.prod.certificate.transparency.goog",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEX7i7gYwmBxpiLXAlM/VLk4BFzspJRmZA86iReO7NVRlwGL1KWb/Dv5DRXJNBZd+9uREkNUTee5yBy2dRdRGa0w=="
   }
 ]

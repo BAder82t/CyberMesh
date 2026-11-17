@@ -138,6 +138,21 @@ Residual risks:
 - The build-time manifest is authoritative.
 - An operator can date its own record up to 300 s ahead and so make it its "latest".
 
+## Sixth pass: CT checkpoint verification and tile-root proofs
+
+An independent internal review covered the checkpoint verifier, the Merkle proofs and their integration. It found no CRITICAL or HIGH issues and could not forge a checkpoint or get a wrong tile root accepted. That was confirmed for every tree size up to 1,300 and for sizes with partial tiles at levels 0–3. Its findings, fixed unless stated:
+
+| Severity | Finding | Fix | Test or evidence |
+|---|---|---|---|
+| MEDIUM | Withholding a tile's hash tiles, or replaying an older signed checkpoint, left that tile without a proven root. The verifier then trusted its own rescan, so a forged data tile could get honest workers faulted. | A tile without a proven root leaves the task `insufficient`, and such rescans are never evidence. Checkpoints older than an hour or dated in the future are refused. | `unanchored_tiles_leave_the_task_insufficient_and_fault_nobody`, `stale_or_future_checkpoints_are_refused` |
+| MEDIUM | No fallback when a log deletes a partial hash tile after completing it, which static-ct-api allows. | The full tile is fetched and truncated to the signed width. | `missing_partial_tiles_fall_back_to_the_full_tile` |
+| LOW | A wrong-length hash tile, such as a CDN error page, counted as a log contradiction. | Only a hash mismatch counts. A wrong length means unavailable. | code review |
+| LOW | A malformed signature line under the pinned key name was skipped. | It rejects the note, as C2SP signed-note requires. | `rejects_unsigned_malformed_and_extended_notes` |
+| LOW | The public mock-log key could be pinned for a real log by mistake. | Refused unless the log is a plain-HTTP loopback test log. | `ct_log_key_and_origin_policy` |
+| LOW | The pinned key's point is not checked to be on the curve. | Not changed: an invalid point fails closed at verification. | — |
+
+Residual risk: a log that signs different trees for different viewers (a split view) is not detected without witnesses (roadmap).
+
 ## Accepted or deferred (documented residual risk)
 
 - **Manifest state on restart.** Fixed in v0.2.0: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.

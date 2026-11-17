@@ -167,6 +167,10 @@ CtMatch { index (global entry index within the tile), name (normalised), risk_sc
 - **Input digest.** `input_digest = H_tag("cybermesh/ct-task-input/v1", canonical({engine, evidence, log_id, first_tile, tile_count}))`.
 - **Leaf hash.** `SHA-256(0x00 || 0x00 || 0x00 || TimestampedEntry)`: the RFC 6962 leaf prefix, then `MerkleTreeLeaf` version and type.
 - **Tile root.** It equals the log's level-1 hash tile entry for that data tile.
+- **Log authentication (verifier side).**
+  - **Pinned log.** `ct-logs` evidence pins each log's `origin` and `public_key` (base64 DER SPKI, ECDSA P-256).
+  - **Checkpoint.** The checkpoint must carry a note signature `— <origin> base64(keyID ‖ timestamp ‖ 0x04 0x03 ‖ len ‖ DER signature)`, where `keyID = SHA-256(origin ‖ 0x0A ‖ 0x05 ‖ LogID)[:4]` and `LogID = SHA-256(SPKI)`. Its ECDSA P-256 / SHA-256 signature must verify over the RFC 6962 `TreeHeadSignature` (`0x00 ‖ 0x01 ‖ timestamp ‖ size ‖ root`). No extension lines are allowed.
+  - **Tile roots.** A tile root counts only if recomputing the RFC 6962 root of the signed size through it, with hash tiles at levels 0 and up, yields the signed root.
 - **Names digest.** `SHA-256("cybermesh/ct-names/v1" || 0x00 || for each name: index (u64 BE) || len(name) (u64 BE) || name)`, over every normalised name of every parsed entry in entry order, then sorted and de-duplicated per entry, up to 8,192 names.
 - **Match selection.** Matches are capped at 4 per entry and 16 per tile. The kept matches are the highest by (risk descending, index, name). They are then sorted by (index, name). `truncated` is true when any cap applied.
 - **Entries.** Every `TileLeaf` must carry a `leaf_index` extension equal to its position.

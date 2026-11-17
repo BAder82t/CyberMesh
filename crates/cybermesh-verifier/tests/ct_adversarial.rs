@@ -53,7 +53,13 @@ struct Oracle<'a> {
 
 impl CtOracle for Oracle<'_> {
     fn tile_root(&self, _log: &str, tile: u64) -> Option<Digest> {
-        self.log.tile_root(tile, 1024).ok().map(Digest)
+        // As in production: the checkpoint is verified against the pinned key, and the tile
+        // root is proven against it.
+        let info = self.log.log_info("mock-log", "http://127.0.0.1/");
+        let cp = cybermesh_ct::checkpoint::fetch_verified_checkpoint(self.log, &info).ok()?;
+        cybermesh_ct::authenticated_tile_root(self.log, &cp, tile)
+            .ok()
+            .map(Digest)
     }
     fn rescan(&self, _log: &str, tile: u64) -> Option<TileScanResult> {
         scan_tile(&self.log.data_tile(tile).ok()?, tile, self.engine).ok()
@@ -448,4 +454,86 @@ fn spot_checks_favour_tiles_with_reported_matches() {
     // Expected 1 - (3/4)(2/3) = 50 %.
     eprintln!("caught {caught} of {trials}");
     assert!(caught * 100 >= trials * 40, "caught {caught} of {trials}");
+}
+
+/// A log whose hash tiles for one tile contradict its signed checkpoint.
+struct ContradictedOracle<'a> {
+    inner: Oracle<'a>,
+    bad_tile: u64,
+}
+
+impl CtOracle for ContradictedOracle<'_> {
+    fn tile_root(&self, log: &str, tile: u64) -> Option<Digest> {
+        (tile != self.bad_tile)
+            .then(|| self.inner.tile_root(log, tile))
+            .flatten()
+    }
+    fn rescan(&self, log: &str, tile: u64) -> Option<TileScanResult> {
+        self.inner.rescan(log, tile)
+    }
+    fn proof_failed(&self, _log: &str, tile: u64) -> bool {
+        tile == self.bad_tile
+    }
+}
+
+#[test]
+fn hash_tiles_contradicting_the_signed_checkpoint_dispute_the_task() {
+    let f = fx(&[0, 1]);
+    let mut v = f.verifier(0);
+    for w in [0, 1] {
+        v.submit(&f.result(w, f.honest.clone()), &f.net.manifest, NOW + 2);
+    }
+    let oracle = ContradictedOracle {
+        inner: f.oracle(),
+        bad_tile: 1,
+    };
+    let rec = v.finalize(Some(&f.engine), Some(&oracle), b"seed", NOW + 3);
+    assert!(rec.faults.is_empty(), "workers are not blamed for the log");
+    assert_eq!(rec.status, TaskStatus::Disputed);
+    assert!(rec.outcomes.is_empty());
+    assert_eq!(rec.ct.unwrap().log_inconsistent_tiles, vec![1]);
+}
+
+/// Hash tiles for one tile withheld, and the verifier's copy of that data tile forged.
+struct WithheldOracle<'a> {
+    inner: Oracle<'a>,
+    tile: u64,
+}
+
+impl CtOracle for WithheldOracle<'_> {
+    fn tile_root(&self, log: &str, tile: u64) -> Option<Digest> {
+        (tile != self.tile)
+            .then(|| self.inner.tile_root(log, tile))
+            .flatten()
+    }
+    fn rescan(&self, log: &str, tile: u64) -> Option<TileScanResult> {
+        let mut r = self.inner.rescan(log, tile)?;
+        if tile == self.tile {
+            r.matches.clear();
+            r.root = Digest::of(b"forged data tile");
+        }
+        Some(r)
+    }
+}
+
+#[test]
+fn unanchored_tiles_leave_the_task_insufficient_and_fault_nobody() {
+    let f = fx(&[0, 1]);
+    // Spot-check every tile, so the forged rescan of tile 1 is compared with the workers.
+    let mut v = f.verifier(4);
+    for w in [0, 1] {
+        v.submit(&f.result(w, f.honest.clone()), &f.net.manifest, NOW + 2);
+    }
+    let oracle = WithheldOracle {
+        inner: f.oracle(),
+        tile: 1,
+    };
+    let rec = v.finalize(Some(&f.engine), Some(&oracle), b"seed", NOW + 3);
+    assert!(
+        rec.faults.is_empty(),
+        "an unanchored rescan is not evidence: {:?}",
+        rec.faults
+    );
+    assert_eq!(rec.status, TaskStatus::Insufficient);
+    assert!(rec.outcomes.is_empty());
 }

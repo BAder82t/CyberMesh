@@ -36,8 +36,8 @@ pub fn evidence() -> EvidenceBundle {
     evidence_with_ct(None)
 }
 
-/// Demo evidence, optionally pinning one CT log (`mock-log`) at `ct_url`.
-pub fn evidence_with_ct(ct_url: Option<&str>) -> EvidenceBundle {
+/// Demo evidence, optionally pinning one CT log (`mock-log`: URL, origin and key).
+pub fn evidence_with_ct(ct: Option<&CtLogInfo>) -> EvidenceBundle {
     let feed = [PHISH, "malware-drop.example.net", "www.google.com"];
     EvidenceBundle {
         blocklists: vec![(
@@ -46,29 +46,25 @@ pub fn evidence_with_ct(ct_url: Option<&str>) -> EvidenceBundle {
         )],
         popular: HashSet::from(["google.com".to_owned(), "wikipedia.org".to_owned()]),
         hosting_platforms: HashSet::new(),
-        ct_logs: ct_url
-            .map(|u| {
-                vec![CtLogInfo {
-                    log_id: "mock-log".into(),
-                    description: "mock".into(),
-                    monitoring_url: u.into(),
-                }]
-            })
-            .unwrap_or_default(),
+        ct_logs: ct.cloned().into_iter().collect(),
         brands: vec![Brand {
             name: "examplebank".into(),
             tokens: vec!["examplebank".into()],
             legitimate: vec!["examplebank.test".into()],
         }],
         pins: BTreeMap::from_iter(
-            ct_url
-                .map(|u| ("ct-logs".to_owned(), Digest::of(u.as_bytes())))
-                .into_iter()
-                .chain([
-                    ("brands".into(), Digest::of(b"brands-v1")),
-                    ("popularity".into(), Digest::of(b"popularity-v1")),
-                    ("reference-feed".into(), Digest::of(b"feed-v1")),
-                ]),
+            ct.map(|c| {
+                (
+                    "ct-logs".to_owned(),
+                    Digest::of(c.monitoring_url.as_bytes()),
+                )
+            })
+            .into_iter()
+            .chain([
+                ("brands".into(), Digest::of(b"brands-v1")),
+                ("popularity".into(), Digest::of(b"popularity-v1")),
+                ("reference-feed".into(), Digest::of(b"feed-v1")),
+            ]),
         ),
         sources: vec![],
         skipped_lines: 0,
@@ -165,14 +161,14 @@ pub fn start_worker(
     bootstrap: &[Multiaddr],
     dir: &std::path::Path,
     adversary: Option<&str>,
-    ct_url: Option<&str>,
+    ct: Option<&CtLogInfo>,
 ) -> (watch::Sender<bool>, JoinHandle<WorkerStatus>) {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let w = &net.workers[i];
     let setup = WorkerSetup {
         key: cybermesh_crypto::SecretKey::from_seed(&w.key.seed()),
         manifest: net.manifest.clone(),
-        engine: Engine::new(evidence_with_ct(ct_url)),
+        engine: Engine::new(evidence_with_ct(ct)),
         listen: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
         bootstrap: bootstrap.to_vec(),
         state_dir: dir.join(&w.label),
@@ -204,16 +200,14 @@ impl Harness {
             .parse()
             .unwrap();
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let ct_url = o.ct_log.as_ref().map(|log| {
+        // The mock log signs its checkpoint with its (public) demonstration key; the pinned
+        // entry carries that key and the log's origin, so verification is real.
+        let ct_info = o.ct_log.as_ref().map(|log| {
             let (url, _h) = cybermesh_ct::mock::serve(Arc::clone(log), "127.0.0.1:0").unwrap();
-            url
+            log.log_info("mock-log", &url)
         });
-        let ct = ct_url.as_ref().map(|u| CtSetup {
-            log: CtLogInfo {
-                log_id: "mock-log".into(),
-                description: "mock".into(),
-                monitoring_url: u.clone(),
-            },
+        let ct = ct_info.as_ref().map(|info| CtSetup {
+            log: info.clone(),
             first_tile: Some(0),
             tile_count: o.ct_tiles,
             tiles_per_task: o.ct_tiles_per_task,
@@ -225,7 +219,7 @@ impl Harness {
             issuer: cybermesh_crypto::SecretKey::from_seed(&net.issuer.seed()),
             verifier: cybermesh_crypto::SecretKey::from_seed(&net.verifier.seed()),
             manifest: net.manifest.clone(),
-            engine: Engine::new(evidence_with_ct(ct_url.as_deref())),
+            engine: Engine::new(evidence_with_ct(ct_info.as_ref())),
             listen: vec![format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap()],
             bootstrap: vec![],
             state_dir: dir.path().join("coordinator"),
@@ -265,7 +259,7 @@ impl Harness {
             let vsetup = VerifierSetup {
                 key: cybermesh_crypto::SecretKey::from_seed(&key.seed()),
                 manifest: net.manifest.clone(),
-                engine: Engine::new(evidence_with_ct(ct_url.as_deref())),
+                engine: Engine::new(evidence_with_ct(ct_info.as_ref())),
                 listen: vec![format!("/ip4/127.0.0.1/tcp/{vport}").parse().unwrap()],
                 bootstrap: vec![addr.clone()],
                 state_dir: dir.path().join(format!("verifier-{op}")),
@@ -298,7 +292,7 @@ impl Harness {
                 &worker_bootstrap,
                 dir.path(),
                 adv,
-                ct_url.as_deref(),
+                ct_info.as_ref(),
             );
             workers.push((i, tx, h));
         }

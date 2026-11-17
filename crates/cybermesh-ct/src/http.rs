@@ -66,8 +66,8 @@ impl TileSource for HttpTileSource {
         self.get(&data_tile_path(n), MAX_TILE_BYTES)
     }
 
-    fn level1_tile(&self, n: u64, width: Option<u8>) -> Result<Vec<u8>, CtError> {
-        self.get(&hash_tile_path(1, n, width), 8192)
+    fn hash_tile(&self, level: u8, n: u64, width: Option<u8>) -> Result<Vec<u8>, CtError> {
+        self.get(&hash_tile_path(level, n, width), 8192)
     }
 
     fn checkpoint(&self) -> Result<String, CtError> {

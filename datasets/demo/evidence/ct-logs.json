@@ -1,7 +1,9 @@
 [
   {
     "log_id": "demo-mock-log",
-    "description": "Synthetic static CT log served by `cybermesh dev mock-ct-log` on loopback (demonstration only)",
-    "monitoring_url": "http://127.0.0.1:8090/"
+    "description": "Synthetic static CT log served by `cybermesh dev mock-ct-log` on loopback (demonstration only; its signing key is a public demonstration key)",
+    "monitoring_url": "http://127.0.0.1:8090/",
+    "origin": "ct.cybermesh.test/mock",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0y8YK0nyrjCBqRjl0CZkcMOIJLtRrzoSGe5r+bLxzT6T0KIkaXr8fk/QKUoM9u6EuQQ4m13PUyR6kBEFPKRYGw=="
   }
 ]

@@ -50,19 +50,37 @@ Recomputing every shard would make the workers pointless, so the verifier combin
 
 | Check | What it catches | Cost |
 |---|---|---|
-| **Log commitments.** Each claimed tile root must equal the log's own level-1 hash tile entry. A mismatch is a fault only after the verifier's own scan of that data tile matches the log. | A worker that did not download or process the log's real entries | 32 bytes per tile, plus one tile per mismatch |
+| **Log commitments.** Each claimed tile root must equal the log's own root for that tile, *proven against the log's signed checkpoint* (see "Trusting the log" below). A mismatch is a fault only after the verifier's own scan of that data tile matches the proven root. | A worker that did not download or process the log's real entries | A few small hash tiles per task, plus one data tile per mismatch |
 | **Spot checks.** The verifier re-scans `spot_check_tiles` tiles per task (default 2), chosen from a secret seed: one uniformly, one among tiles that some worker reported matches for. Whole tile results are compared, including the names digest. | Omitted, altered or fabricated matches; skipped parsing | 2 of 8 tiles at the default shard size |
 | **Cross-operator agreement.** Each shard goes to `replication` workers of distinct operators (default 2), and any disagreement triggers a full rescan by the verifier. | One lying operator | Only on disagreement |
 | **Confirm before publish** (only when publishing is enabled). Every tile whose matches would become a warning is re-scanned before publication. | Fabricated findings, even by colluding operators | Proportional to findings, not to volume |
 
 Workers whose signed results differ from the log or from the verifier's rescan get a provable `incorrect-result` fault and are quarantined. Without access to the log, the verifier cannot settle disagreement: the task is recorded as `disputed` and nothing is published.
 
-**Inconsistent logs.** If the data tile the verifier downloads does not hash to the log's own level-1 hash, the log (or its CDN) is serving inconsistent data. Nobody is faulted, the tile is listed in `log_inconsistent_tiles`, and the task is `disputed`. If workers agree on a root that differs from the log and the verifier cannot fetch the tile to settle it, the task is not verified either.
+**Trusting the log.** The log's signature, not HTTPS, is the root of trust.
+- **The checkpoint.** It must carry a valid RFC 6962 `TreeHeadSignature` (ECDSA P-256) by the log's **pinned key**, encoded as a C2SP note signature. Its origin must equal the **pinned origin**.
+  - Key and origin come from the `ct-logs` evidence. For real logs they are taken from Google's CT log list v3 (`datasets/ct-logs/public-static-ct-logs.json`).
+  - Signature lines from unknown keys (witnesses, other key types) are ignored.
+  - A bad signature by the pinned key rejects the checkpoint.
+- **Each tile root.** It is proven by recomputing the tree root of the signed size *through* that tile's level-1 entry, using the other hashes from the log's hash tiles at levels 0 and up. The result must equal the signed root.
+- **What this buys.** A CDN, mirror or network attacker can no longer substitute hash tiles or a checkpoint.
+- **When verification fails.**
+  - A checkpoint that does not verify, or is more than an hour old, or is dated in the future, means no log access: disagreement is disputed and nothing is confirmed.
+  - A tile whose root cannot be proven (hash tiles unavailable) leaves the task `insufficient`, to be retried. The verifier's own rescan of such a tile is not used against workers, so withholding hash tiles and forging a data tile cannot get honest workers faulted.
+  - Partial hash tiles that the log has deleted after completing them are read from the full tile, as the spec allows.
+- **Validation.** Validated on real logs (2026-11-17): Let's Encrypt Willow 2027h1 (1.23 billion entries) and Google ParcelYard 2027h1 (865 million). Their checkpoints verified with the pinned keys, and every scanned tile root was proven against them in about 0.5 s per tile, including hash-tile fetches.
+
+**Inconsistent logs.** Two cases count as the log (or its CDN) serving inconsistent data:
+- its hash tiles for a tile contradict its own signed checkpoint;
+- the data tile the verifier downloads does not hash to the proven root.
+
+Nobody is faulted, the tile is listed in `log_inconsistent_tiles`, and the task is `disputed`. If workers agree on a root that differs from the log and the verifier cannot fetch the tile to settle it, the task is not verified either.
 
 **Residual risk.**
 
 - Two colluding operators that omit the *same* real match, and report the tile as empty, are caught only by the uniform spot check: probability 1/`tile_count` per task (1/8 by default). Omission hides a finding; it cannot create a false one.
-- Colluders that fabricate a match for the investigation report (publishing off) are caught when that tile is spot-checked. The second check is drawn from tiles that report matches. In `spot_checks_favour_tiles_with_reported_matches` (4-tile tasks, 3 tiles with matches) they were caught in 39 of 64 seeded runs, against 1 in 4 for a single uniform check. With publishing on, every published finding is confirmed anyway. Checkpoint signatures are not verified in this version (roadmap), so the verifier trusts the log's hash tiles as served over HTTPS.
+- Colluders that fabricate a match for the investigation report (publishing off) are caught when that tile is spot-checked. The second check is drawn from tiles that report matches. In `spot_checks_favour_tiles_with_reported_matches` (4-tile tasks, 3 tiles with matches) they were caught in 39 of 64 seeded runs, against 1 in 4 for a single uniform check. With publishing on, every published finding is confirmed anyway.
+- **Split views are not detected.** A log that signs *different* trees for different viewers would not be detected by one verifier alone. Witness cosignatures (C2SP `tlog-witness`) are on the roadmap.
 
 ## 4. Measurements on real CT data (2026-11-17)
 
@@ -88,7 +106,7 @@ These are one-off measurements with `cargo run -p cybermesh-ct --features http -
 | (fixed) | — | CT findings are capped at `warn`, never `block`, even for feed-listed names. |
 | `min_operators` | `2` | Distinct operators that must agree on a shard. |
 | `spot_check_tiles` | `2` | Tiles re-scanned per task (the first uniformly, the second among tiles that report matches). |
-| `check_log_roots` | `true` | Compare every tile root with the log's hash tiles. |
+| `check_log_roots` | `true` | Compare every tile root with the log's root for that tile, proven against its signed checkpoint. |
 
 ## 6. Does donated capacity help here?
 
@@ -133,7 +151,8 @@ Worker (`[resources]` in `worker.toml`): `ct_scanning = true` and `ct_fetch_kib_
 
 - **Static CT API only.** RFC 6962 `get-entries` logs are not supported.
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
-- **Unverified checkpoints.** Checkpoint note signatures, and the consistency of hash tiles with signed checkpoints, are not verified yet.
+- **No witnesses yet.** Checkpoints are verified against the log's pinned key and tile roots are proven against them. Checkpoints are not yet cosigned by independent witnesses, so a log showing different trees to different viewers (a split view) goes undetected.
+- **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.
 - **Brand table.** The table needs owner-maintained "own infrastructure" lists, for example `microsoft-int.com`, before CT warnings can be enabled responsibly.
 - **Verifiers.** Independent verifiers check CT shards with their own log access and their own secret spot-check seeds, so their spot checks are independent of the coordinator's. A published CT warning needs the manifest's `min_verifiers` verifier operators.
 - **No continuous tailing.** The coordinator scans a configured range or the most recent tiles at start-up. Tailing new tiles continuously is the next step.
