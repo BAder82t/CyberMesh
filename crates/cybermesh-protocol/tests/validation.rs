@@ -343,3 +343,32 @@ fn input_digest_covers_engine_evidence_and_domains() {
     t5.expires_at += 1;
     assert_eq!(d, t5.input_digest().unwrap());
 }
+
+#[test]
+fn min_verifiers_is_bounded_by_verifier_operators_and_omitted_when_one() {
+    let mut n = net();
+    // Three operators each hold a verifier key in the test network.
+    assert_eq!(n.manifest.verifier_operators().len(), 3);
+    let text = String::from_utf8(canonical::to_vec(&n.manifest).unwrap()).unwrap();
+    assert!(
+        !text.contains("min_verifiers"),
+        "default 1 keeps v0.1 manifest bytes"
+    );
+    for (k, ok) in [(0u8, false), (1, true), (3, true), (4, false)] {
+        n.manifest.min_verifiers = k;
+        assert_eq!(n.manifest.validate().is_ok(), ok, "min_verifiers = {k}");
+    }
+    n.manifest.min_verifiers = 3;
+    // Revoking one verifier makes a quorum of 3 unreachable.
+    let (b_key, _) = &n.other_verifiers[0];
+    n.manifest.revocations.push(Revocation {
+        key_id: b_key.key_id(),
+        revoked_at: NOW,
+        reason: "compromised".into(),
+    });
+    assert!(n.manifest.validate().is_err());
+    n.manifest.min_verifiers = 2;
+    n.resign_manifest();
+    let m = TrustManifest::verify(&n.manifest_envelope, &n.root, NOW, 0).unwrap();
+    assert_eq!(m.min_verifiers, 2);
+}

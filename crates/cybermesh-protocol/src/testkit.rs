@@ -47,7 +47,10 @@ pub struct TestNetwork {
     pub governance: Vec<SecretKey>,
     pub root: GovernanceRoot,
     pub issuer: SecretKey,
+    /// Verifier of operator 0 (shares the operator with the issuer).
     pub verifier: SecretKey,
+    /// Independent verifiers of operators 1 and 2 (when they exist), as `(key, operator)`.
+    pub other_verifiers: Vec<(SecretKey, OperatorId)>,
     pub workers: Vec<TestWorker>,
     pub release_signers: Vec<(SecretKey, OperatorId)>,
     pub manifest: TrustManifest,
@@ -56,8 +59,9 @@ pub struct TestNetwork {
 
 impl TestNetwork {
     /// Builds a network. `operators` lists `(operator_id, worker_count)`. Operator 0 also
-    /// runs the issuer/verifier. The first three operators hold release-signing keys with a
-    /// 2-of-3 threshold (or fewer if there are fewer operators).
+    /// runs the issuer/verifier, and operators 1 and 2 run independent verifiers. The first
+    /// three operators hold release-signing keys with a 2-of-3 threshold (or fewer if there
+    /// are fewer operators). `min_verifiers` is 1; tests raise it and re-sign.
     #[must_use]
     pub fn new(operators: &[(&str, usize)], now: u64) -> Self {
         let network_id = "cybermesh-test".to_owned();
@@ -92,6 +96,20 @@ impl TestNetwork {
                 label: "verifier".into(),
                 operator: op.clone(),
                 public_key: verifier.public_key(),
+                roles: vec![Role::Verifier],
+            });
+        }
+        let other_verifiers: Vec<(SecretKey, OperatorId)> = ops
+            .iter()
+            .skip(1)
+            .take(2)
+            .map(|o| (test_key(&format!("{}-verifier", o.id)), o.id.clone()))
+            .collect();
+        for (k, op) in &other_verifiers {
+            members.push(Member {
+                label: format!("{op}-verifier"),
+                operator: op.clone(),
+                public_key: k.public_key(),
                 roles: vec![Role::Verifier],
             });
         }
@@ -139,6 +157,7 @@ impl TestNetwork {
                     .collect(),
             },
             revocations: vec![],
+            min_verifiers: 1,
         };
         let manifest_envelope = Self::sign_manifest_with(&governance, &manifest);
         Self {
@@ -147,6 +166,7 @@ impl TestNetwork {
             root,
             issuer,
             verifier,
+            other_verifiers,
             workers,
             release_signers,
             manifest,

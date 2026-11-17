@@ -69,11 +69,65 @@ pub struct CoordinatorConfig {
     /// Exit after every batch has been settled.
     #[serde(default)]
     pub exit_when_done: bool,
+    /// Wait for this many live workers before issuing the first task (0: do not wait).
+    #[serde(default)]
+    pub start_after_workers: usize,
     #[serde(default)]
     pub policy: Policy,
     /// Certificate Transparency monitoring (optional).
     #[serde(default)]
     pub ct: Option<CtScanConfig>,
+}
+
+/// Independent verifier configuration (`verifier.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifierConfig {
+    pub network_id: String,
+    /// This organisation's verifier key (role `verifier` in the trust manifest).
+    pub key: PathBuf,
+    pub manifest: PathBuf,
+    pub governance_root: PathBuf,
+    pub evidence_dir: PathBuf,
+    pub state_dir: PathBuf,
+    pub listen: Vec<String>,
+    /// Peers to dial: the coordinator and, ideally, workers directly, so no single relay can
+    /// withhold results from this verifier.
+    #[serde(default)]
+    pub bootstrap: Vec<String>,
+    #[serde(default = "d_result_timeout")]
+    pub result_timeout_secs: u64,
+    /// Exit after this many idle seconds once work was done (demos); omit to run until stopped.
+    #[serde(default)]
+    pub idle_exit_secs: Option<u64>,
+    #[serde(default)]
+    pub policy: Policy,
+    /// CT verification policy (spot checks with this verifier's own secret seed).
+    #[serde(default)]
+    pub ct_policy: cybermesh_verifier::ct::CtPolicy,
+}
+
+impl VerifierConfig {
+    pub fn load(path: &Path) -> Result<Self, NodeError> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
+        let mut c: Self = toml::from_str(&text)
+            .map_err(|e| NodeError::Config(format!("{}: {e}", path.display())))?;
+        let base = path.parent().unwrap_or(Path::new("."));
+        for p in [
+            &mut c.key,
+            &mut c.manifest,
+            &mut c.governance_root,
+            &mut c.evidence_dir,
+            &mut c.state_dir,
+        ] {
+            resolve(base, p);
+        }
+        if c.result_timeout_secs == 0 {
+            return Err(NodeError::Config("result_timeout_secs must be >= 1".into()));
+        }
+        Ok(c)
+    }
 }
 
 /// `[ct]` section of `coordinator.toml`.

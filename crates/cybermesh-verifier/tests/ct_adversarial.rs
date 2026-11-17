@@ -8,10 +8,18 @@ use cybermesh_crypto::{Digest, canonical};
 use cybermesh_ct::mock::{MockEntry, MockLog};
 use cybermesh_ct::{TileSource, scan_tile, scan_tiles};
 use cybermesh_protocol::ct::{CtMatch, CtScanResult, CtScanTask, TileScanResult};
-use cybermesh_protocol::testkit::{TestNetwork, sign_bytes};
+use cybermesh_protocol::testkit::{TestNetwork, sign_bytes, test_key};
 use cybermesh_protocol::*;
 use cybermesh_verifier::ct::{CtOracle, CtPolicy, CtTaskVerifier};
 use cybermesh_verifier::*;
+
+/// The test network's own verifier (operator `org-a`).
+fn vid() -> VerifierId {
+    VerifierId {
+        key: test_key("verifier").key_id(),
+        operator: OperatorId::new("org-a").unwrap(),
+    }
+}
 
 const NOW: u64 = 1_800_000_000;
 const LOOKALIKE: &str = "examplebank-account-verify.example.net";
@@ -125,6 +133,7 @@ impl Fx {
         CtTaskVerifier::new(
             self.task.clone(),
             self.digest,
+            vid(),
             CtPolicy {
                 spot_check_tiles: spot,
                 publish_warnings: true,
@@ -190,6 +199,7 @@ fn by_default_ct_findings_are_for_investigation_only() {
     let mut v = CtTaskVerifier::new(
         f.task.clone(),
         f.digest,
+        vid(),
         CtPolicy::default(),
         Policy::default(),
         Limits::default(),
@@ -413,6 +423,7 @@ fn spot_checks_favour_tiles_with_reported_matches() {
         let mut v = CtTaskVerifier::new(
             f.task.clone(),
             f.digest,
+            vid(),
             CtPolicy::default(),
             Policy::default(),
             Limits::default(),

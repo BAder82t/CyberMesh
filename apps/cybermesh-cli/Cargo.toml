@@ -40,6 +40,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Test-only: deterministic test networks (not unified into the shipped binary).
+cybermesh-protocol = { workspace = true, features = ["testkit"] }
 tempfile.workspace = true
 
 [lints]

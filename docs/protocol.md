@@ -67,7 +67,8 @@ TrustManifest {
   operators: [ { id: OperatorId, name } ],
   members:   [ { label, operator, public_key, roles: ["worker"|"issuer"|"verifier"] } ],
   release_signers: { threshold: u8, keys: [ { label, operator, public_key } ] },
-  revocations: [ { key_id, revoked_at, reason } ]
+  revocations: [ { key_id, revoked_at, reason } ],
+  min_verifiers?: u8            // omitted when 1
 }
 ```
 
@@ -79,6 +80,7 @@ TrustManifest {
 - Operator ids are unique, and members reference known operators.
 - Every member has at least one role, and member keys are unique.
 - The release-signer threshold lies in `1..=n`.
+- `min_verifiers` is at least 1. When it is above 1, it must not exceed the number of distinct operators holding a non-revoked verifier key. When it is 1, it is omitted from the encoding, so v0.1 manifests keep their bytes.
 - Revoked keys hold no role anywhere.
 
 `OperatorId` is 2–32 characters from `[a-z0-9-]`. The `GovernanceRoot { network_id, threshold, keys, min_sequence? }` is pinned out of band in node configuration and in consumers. Nodes refuse manifests below `min_sequence` (default 0) and below the highest sequence they have stored, so an old manifest cannot be replayed even to a node with an empty state directory.
@@ -178,13 +180,17 @@ CtMatch { index (global entry index within the tile), name (normalised), risk_sc
 ## 6. Verification records
 
 `VerificationRecord` lists:
+- `verifier: {key, operator}`, the verifier that produced it. It is part of the signed payload, so two verifiers' records for the same task never share a digest;
 - `status` (`verified` | `disputed` | `insufficient`) and whether the verifier `recomputed`;
 - the accepted results with their result and assessment digests;
 - up to 64 rejected results plus an overflow counter;
 - provable faults with evidence digests;
 - per-domain outcomes `{classification: "block"|"warn"|"none", verdict, scores, findings, agreeing_operators, feed_corroborated, rationale}`.
 
-Records are signed by the verifier. Release builders verify those signatures against the manifest.
+Records are signed by the verifier. Release builders check that:
+- the envelope is signed by an enrolled, non-revoked verifier key;
+- `verifier.key` is among the envelope's signers;
+- `verifier.operator` is that key's operator in the manifest.
 
 **Classification:**
 - **`none`:** fewer than `min_operators` agreeing operators, or the domain is popular or known-benign, or `score < warn_min (4000)`.
@@ -203,6 +209,12 @@ ThreatRelease {
   corrections: [ { indicator, kind: "appeal-upheld"|"rollback", reference, note } sorted, unique ]
 }
 ```
+
+**Build rule (release signers):**
+- **Per verifier.** For each (domain, verifier operator), the outcome of that operator's most recently verified record counts. Ties go to the stronger classification, then the smaller record digest.
+- **Quorum.** A domain is listed when at least `min_verifiers` operators say `warn` or `block`. It is `block` when at least `min_verifiers` say `block`; otherwise it is `warn`. When `min_verifiers ≥ 2`, only records with `recomputed: true` count.
+- **Content.** Reasons and score come from the weakest supporting outcome. Every supporting record is cited as `verification` evidence, up to the 16-reference cap.
+- **Appeals.** After an upheld appeal, re-listing needs `min_verifiers` supporting `block` records verified after the decision.
 
 **Consumer verification:**
 1. The envelope is at most 16 MiB.

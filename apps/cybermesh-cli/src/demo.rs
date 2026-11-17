@@ -39,6 +39,11 @@ pub enum DemoCmd {
         ct_log: Option<String>,
         #[arg(long, default_value_t = 8)]
         ct_tiles: u64,
+        /// Independent verifiers at org-b (and org-c for 2). The release quorum
+        /// `min_verifiers` becomes 2 when there is at least one. Default: 1 in local mode, 0
+        /// in docker mode (the Compose file runs only the coordinator's verifier).
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=2))]
+        independent_verifiers: Option<u8>,
     },
 }
 
@@ -105,7 +110,15 @@ pub fn run(c: DemoCmd) -> Result<()> {
         network_id,
         ct_log,
         ct_tiles,
+        independent_verifiers,
     } = c;
+    let n_verifiers = usize::from(independent_verifiers.unwrap_or(u8::from(mode != "docker")));
+    if mode == "docker" && n_verifiers > 0 {
+        bail!(
+            "the Docker demo runs only the coordinator's verifier; use --independent-verifiers 0"
+        );
+    }
+    let verifier_orgs: Vec<&str> = ["org-b", "org-c"].into_iter().take(n_verifiers).collect();
     if out.join("manifest.json").exists() {
         bail!(
             "{} already contains a demo network; remove it first",
@@ -159,6 +172,15 @@ pub fn run(c: DemoCmd) -> Result<()> {
                 roles: vec![Role::Issuer, Role::Verifier],
             });
         }
+        if verifier_orgs.contains(id) {
+            let k = key(&out, &format!("verifier-{id}"))?;
+            members.push(Member {
+                label: format!("verifier-{id}"),
+                operator: op.clone(),
+                public_key: k.public_key(),
+                roles: vec![Role::Verifier],
+            });
+        }
         for w in ws {
             let k = key(&out, &format!("worker-{w}"))?;
             members.push(Member {
@@ -191,6 +213,8 @@ pub fn run(c: DemoCmd) -> Result<()> {
             keys: signers,
         },
         revocations: vec![],
+        // With an independent verifier, every entry needs records from two organisations.
+        min_verifiers: if verifier_orgs.is_empty() { 1 } else { 2 },
     };
     manifest.validate()?;
     write_json(&out.join("manifest.unsigned.json"), &manifest)?;
@@ -226,6 +250,7 @@ pub fn run(c: DemoCmd) -> Result<()> {
         ),
         None => String::new(),
     };
+    let n_workers = workers.len();
     let coord_toml = format!(
         r#"# CyberMesh coordinator (issuer + verifier) for organisation org-a.
 network_id = "{network_id}"
@@ -245,6 +270,8 @@ max_attempts = 3
 liveness_secs = 45
 max_inflight = 4
 exit_when_done = true
+# Wait for every worker (including the simulated compromised one) before issuing.
+start_after_workers = {n_workers}
 
 [policy]
 min_operators = 3
@@ -254,6 +281,47 @@ block_min_score_bp = 7000
 {ct_section}"#
     );
     write(&out.join("coordinator.toml"), coord_toml.as_bytes())?;
+
+    // Independent verifiers (local mode only): their own keys, state and engine.
+    let mut verifier_addrs = Vec::new();
+    for (i, org) in verifier_orgs.iter().enumerate() {
+        let k =
+            SecretKey::read_from_file(&out.join("keys").join(format!("verifier-{org}.key.json")))?;
+        let port = base_port + 50 + u16::try_from(i)?;
+        let peer = cybermesh_network::peer_id_of(&k.public_key())?;
+        verifier_addrs.push(format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}"));
+        let toml = format!(
+            r#"# CyberMesh independent verifier for organisation {org}. It recomputes every task with
+# its own engine and evidence and signs its own records; releases need records from
+# min_verifiers = 2 organisations.
+network_id = "{network_id}"
+key = "keys/verifier-{org}.key.json"
+manifest = "manifest.json"
+governance_root = "governance-root.json"
+evidence_dir = "evidence"
+state_dir = "state/verifier-{org}"
+listen = ["/ip4/127.0.0.1/tcp/{port}"]
+bootstrap = ["{coord_addr}"]
+# Longer than the coordinator's: verifiers settle early once every assignee answered.
+result_timeout_secs = 30
+idle_exit_secs = 8
+
+[policy]
+min_operators = 3
+result_grace_secs = 60
+warn_min_score_bp = 4000
+block_min_score_bp = 7000
+"#
+        );
+        write(&out.join(format!("verifier-{org}.toml")), toml.as_bytes())?;
+    }
+    // Workers dial the coordinator and every verifier, so results reach each verifier
+    // directly, not only through the coordinator.
+    let worker_bootstrap = std::iter::once(coord_addr.clone())
+        .chain(verifier_addrs)
+        .map(|a| format!("\"{a}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     for (i, (w, org)) in workers.iter().enumerate() {
         let listen = if mode == "docker" {
@@ -280,7 +348,7 @@ evidence_dir = "evidence"
 state_dir = "state/{w}"
 control_dir = "state/{w}/control"
 listen = ["{listen}"]
-bootstrap = ["{coord_addr}"]
+bootstrap = [{worker_bootstrap}]
 heartbeat_secs = 5
 {adv}
 [resources]
@@ -297,10 +365,12 @@ ct_scanning = {ct_on}
         write(&out.join(format!("worker-{w}.toml")), toml.as_bytes())?;
     }
     println!(
-        "demo network written to {} ({} operators, {} workers, mode={mode})",
+        "demo network written to {} ({} operators, {} workers, {} independent verifier(s), min_verifiers={}, mode={mode})",
         out.display(),
         all_orgs.len(),
-        workers.len()
+        workers.len(),
+        verifier_orgs.len(),
+        manifest.min_verifiers
     );
     Ok(())
 }

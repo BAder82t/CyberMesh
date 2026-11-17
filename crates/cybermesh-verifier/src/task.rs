@@ -11,7 +11,7 @@ use cybermesh_protocol::{
 use crate::policy::{Classification, Policy};
 use crate::record::{
     AcceptedResult, DomainOutcome, FaultKind, FaultRecord, MAX_REJECTED, RejectedResult,
-    TaskStatus, VerificationRecord,
+    TaskStatus, VerificationRecord, VerifierId,
 };
 
 /// What happened to a submitted result.
@@ -36,6 +36,7 @@ struct Held {
 pub struct TaskVerifier {
     task: TaskAnnouncement,
     task_digest: Digest,
+    verifier: VerifierId,
     input_digest: Digest,
     policy: Policy,
     limits: Limits,
@@ -51,6 +52,7 @@ impl TaskVerifier {
     pub fn new(
         task: TaskAnnouncement,
         task_digest: Digest,
+        verifier: VerifierId,
         policy: Policy,
         limits: Limits,
     ) -> Result<Self, cybermesh_protocol::ProtocolError> {
@@ -61,6 +63,7 @@ impl TaskVerifier {
         Ok(Self {
             task,
             task_digest,
+            verifier,
             input_digest,
             policy,
             limits,
@@ -356,6 +359,7 @@ impl TaskVerifier {
         VerificationRecord {
             v: PROTOCOL_VERSION,
             network_id: self.task.network_id.clone(),
+            verifier: self.verifier,
             task_id: self.task.task_id.clone(),
             attempt: self.task.attempt,
             task_digest: self.task_digest,

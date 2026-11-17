@@ -85,6 +85,10 @@ pub fn run(c: DevCmd) -> Result<()> {
     let rec = VerificationRecord {
         v: 1,
         network_id: net.network_id.clone(),
+        verifier: cybermesh_verifier::VerifierId {
+            key: net.verifier.key_id(),
+            operator: OperatorId::new("org-a")?,
+        },
         task_id: "00000000000000000000000000000001".into(),
         attempt: 0,
         task_digest: Digest::of(b"task"),
@@ -141,6 +145,7 @@ pub fn run(c: DevCmd) -> Result<()> {
         issued_at: NOW,
         ttl_secs: 86_400,
         max_record_age_secs: 86_400,
+        min_verifiers: 1,
     };
     let rel = build_release(&[(rd, rec)], &[], &params)?;
     let root = TrustRoot::from_manifest(&net.manifest);

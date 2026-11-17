@@ -10,7 +10,7 @@ use crate::{MAX_ENTRIES, MAX_RELEASE_BYTES, MAX_RELEASE_TTL_SECS, MAX_SEQUENCE_J
 
 /// Limits on free-text and list fields (consumers render these to users).
 const MAX_REASONS: usize = 16;
-const MAX_EVIDENCE: usize = 16;
+pub(crate) const MAX_EVIDENCE: usize = 16;
 const MAX_DETAIL: usize = 200;
 const MAX_NOTE: usize = 500;
 const MAX_REFERENCE: usize = 128;

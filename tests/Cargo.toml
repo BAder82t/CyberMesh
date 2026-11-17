@@ -19,6 +19,10 @@ name = "ct"
 path = "integration/ct_e2e.rs"
 
 [[test]]
+name = "multi_verifier"
+path = "integration/multi_verifier.rs"
+
+[[test]]
 name = "adversarial"
 path = "adversarial/network_adversaries.rs"
 

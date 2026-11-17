@@ -135,5 +135,5 @@ Worker (`[resources]` in `worker.toml`): `ct_scanning = true` and `ct_fetch_kib_
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
 - **Unverified checkpoints.** Checkpoint note signatures, and the consistency of hash tiles with signed checkpoints, are not verified yet.
 - **Brand table.** The table needs owner-maintained "own infrastructure" lists, for example `microsoft-int.com`, before CT warnings can be enabled responsibly.
-- **Single verifier.** As for domain tasks, the MVP has one verifier; a multi-verifier design is on the roadmap.
+- **Verifiers.** Independent verifiers check CT shards with their own log access and their own secret spot-check seeds, so their spot checks are independent of the coordinator's. A published CT warning needs the manifest's `min_verifiers` verifier operators.
 - **No continuous tailing.** The coordinator scans a configured range or the most recent tiles at start-up. Tailing new tiles continuously is the next step.

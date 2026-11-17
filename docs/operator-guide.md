@@ -77,6 +77,49 @@ ct_fetch_kib_per_sec = 256  # download budget for CT tiles
 
 Expect about 645 B of download per scanned certificate (gzip), roughly 165 KB per 256-entry tile. If you enable it, allow outbound HTTPS from the worker only to the pinned log hosts. Details: [ct-monitoring.md](ct-monitoring.md).
 
+## 2b. Optional: running an independent verifier
+
+An organisation can also verify the network's work itself. A verifier never runs tasks for
+others and needs no CPU budget beyond recomputing them, which is about 20–30 µs per domain
+plus, for CT shards, a few re-scanned tiles. Releases need matching records from the
+manifest's `min_verifiers` distinct verifier organisations, so each extra verifier removes
+trust from the coordinator.
+
+1. **Enrol a verifier key.** Generate it with `cybermesh keygen --out verifier.key.json` and
+   send the public key to governance. Governance adds a member with role `verifier` for your
+   operator and, once enough organisations run verifiers, raises `"min_verifiers"` in the
+   manifest. Keep at least one more verifier than `min_verifiers` running, or publication
+   stops while one is down.
+2. **Configure** `verifier.toml`:
+   ```toml
+   network_id = "cybermesh-pilot"
+   key = "/etc/cybermesh/verifier.key.json"
+   manifest = "/etc/cybermesh/manifest.json"
+   governance_root = "/etc/cybermesh/governance-root.json"
+   evidence_dir = "/var/lib/cybermesh/evidence"   # the pinned bundle; must match tasks
+   state_dir = "/var/lib/cybermesh/verifier"
+   listen = ["/ip4/0.0.0.0/tcp/4200"]
+   # Dial the coordinator *and* workers, so no single relay can withhold results from you.
+   bootstrap = ["/ip4/198.51.100.10/tcp/4100/p2p/12D3Koo..."]
+   result_timeout_secs = 30 # longer than the coordinator's; it settles early when all answered
+
+   [policy]                 # your own classification policy
+   min_operators = 3
+
+   [ct_policy]              # optional: CT spot checks with your own secret seed
+   spot_check_tiles = 2
+   ```
+3. **Run** `cybermesh verifier run --config verifier.toml`. It writes signed records to
+   `state_dir/records/` and its counters to `verifier-report.json` on exit.
+4. **Publish your records** to the release signers (for example over HTTPS or rsync). They
+   build with one `--records` directory per verifier organisation:
+   ```bash
+   cybermesh release build --records coordinator-records/ --records org-b-records/ \
+     --manifest manifest.json --root governance-root.json --sequence 42 --issued-at "$NOW" --out release.payload
+   ```
+   `release build` refuses any record whose named verifier did not sign it or belongs to
+   another operator.
+
 ## 3. Day-to-day control
 
 ```bash

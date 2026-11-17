@@ -11,12 +11,14 @@ major decision, and the security trade-offs of each.
 | **Operator** | — | an organisation; unit of independence for all diversity requirements | running its own nodes honestly *or being caught* |
 | **Worker** | worker key | runs allow-listed analysis tasks on pinned evidence, signs results | nothing — every result is checked |
 | **Issuer** | issuer key | creates and assigns signed tasks | task content (but cannot forge results or releases) |
-| **Verifier** | verifier key | authenticates, binds and recomputes results; signs verification records | classification of what may be published |
+| **Verifier** (one per organisation, `min_verifiers` must agree) | verifier key | authenticates, binds and recomputes results; signs verification records naming itself | its *share* of the decision: an entry needs matching records from `min_verifiers` distinct operators |
 | **Release signer** (k-of-n distinct operators, default 2-of-3) | release key | rebuilds the release deterministically and co-signs it | releases (threshold) |
 | **Consumer** (browser extension, CLI) | pinned trust root | verifies releases offline, enforces | — |
 
-In the demo the issuer and verifier share one key held by organisation A; a production
-deployment should separate them and run verifiers at more than one organisation.
+The coordinator holds the issuer key and one verifier key (organisation A in the demo).
+Other organisations run **independent verifiers** (§3.4a). The trust manifest's
+`min_verifiers` sets how many distinct verifier operators must agree before anything is
+published. The local demo uses 2, so organisation A alone can publish nothing.
 
 ## 2. Data flow
 
@@ -117,9 +119,38 @@ Key properties:
 
 *Trade-off.* Recomputing everything makes worker compute redundant for this task type. That is the honest consequence of choosing a cheap, deterministic engine: the network provides independent attestation and fault detection, not compute capacity. See [evaluation.md §5](evaluation.md#5-does-decentralised-computation-help).
 
+### 3.4a Independent verifiers and the release quorum
+
+An organisation other than the coordinator's runs `cybermesh verifier run`.
+
+- **What it does.** It subscribes to the task and result topics. It authenticates every task (issuer role) and result (enrolled worker, claimed operator) exactly as the coordinator does, and settles each task itself:
+  - it recomputes with its **own** engine and pinned evidence;
+  - for CT shards, it checks tile roots against the log and runs spot checks with its **own** secret seed;
+  - it signs a `VerificationRecord` that names it (`verifier: {key, operator}`).
+- **What it does not do.** It never issues or assigns tasks. Faults it proves go into its own records and its own `reputation.json`.
+- **Release quorum.** For each domain, each verifier *operator*'s latest record counts once.
+  - The domain is listed only when at least `min_verifiers` operators classify it `warn` or `block`.
+  - It is `block` only when at least `min_verifiers` operators classify it `block`; otherwise it is downgraded to `warn`.
+  - The entry cites every supporting record.
+  - With a quorum of 2 or more, only records the verifier **recomputed** count. A verifier without the task's engine or evidence could only echo the workers' agreement.
+  - Release builders check that each record's named verifier signed it and belongs to that operator.
+- **What this buys.** With `min_verifiers = k`, fewer than k colluding or compromised verifier organisations (including the coordinator's) cannot list a domain or escalate a warning to a block. Each verifier's `block` also needs that verifier's own feed corroboration.
+- **What it does not buy.**
+  - **Liveness.** If fewer than k verifiers are up, nothing new is published. Run k + 1 or more.
+  - **Data independence.** All verifiers recompute against the same pinned evidence, so a poisoned feed affects them all (T5).
+  - **Relaying.** A verifier that hears results only through the coordinator can be starved by it (availability, not safety). Configure workers and verifiers to dial each other directly.
+  - **Builders enforce it.** The quorum is applied when a release is *built*. Consumers cannot check it, because they never see records. Every co-signer must therefore rebuild from the records with the current manifest rather than sign a payload someone else built.
+- **Bounded state.** Any enrolled issuer can publish tasks, so the verifier bounds what it holds:
+  - tasks are keyed by their payload digest, so a different task reusing an id cannot displace the real one;
+  - at most 1,024 tasks are followed at once;
+  - results that arrive before their task are held for at most 120 s, within 1,024 results, 16 MiB and 32 per worker;
+  - settled tasks are remembered, so late results are dropped;
+  - only accepted results enter the replay cache;
+  - at most 16 tasks are settled per tick, and at most 8 CT verifications run or wait at once.
+
 ### 3.5 Releases (`cybermesh-intelligence`)
 
-- **Deterministic build.** The input is verification records, governance-verified appeal decisions and explicit parameters (sequence, `issued_at`, TTL). The newest record per domain wins, which allows de-listing. Entries and corrections are sorted, so input order cannot change the output bytes.
+- **Deterministic build.** The input is verification records, governance-verified appeal decisions and explicit parameters (sequence, `issued_at`, TTL, and `min_verifiers` from the manifest). For each verifier operator, its newest record per domain counts, which allows de-listing. An entry needs the verifier quorum (§3.4a). Entries and corrections are sorted, so input order cannot change the output bytes.
 - **Signing.** Release signers from at least *threshold* distinct operators each rebuild the release and sign the identical payload. Signatures are merged.
 - **Consumer checks.** Consumers check that:
   - signatures come from at least the threshold of distinct operators;
@@ -127,7 +158,7 @@ Key properties:
   - the release has not expired and its lifetime is at most 30 days;
   - text fields are printable and bounded, and entries are sorted;
   - anti-rollback holds: no older sequence, no equivocation at the same sequence, no sequence jump over 10⁶, and the `previous` link matches.
-- **Corrections.** An upheld appeal removes the indicator and its subdomains and is listed publicly. Only fresh, feed-corroborated `block` evidence dated after the decision can list it again.
+- **Corrections.** An upheld appeal removes the indicator and its subdomains and is listed publicly. Only fresh, feed-corroborated `block` evidence dated after the decision, from a full verifier quorum, can list it again.
 - **Rollback.** Older content is republished under a *new* sequence. Consumers never accept older sequences.
 
 ### 3.6 Anchoring (`cybermesh-anchor`)

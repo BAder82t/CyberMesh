@@ -24,7 +24,7 @@ use cybermesh_protocol::{
 };
 use cybermesh_verifier::ct::{CtOracle, CtPolicy, CtTaskVerifier};
 use cybermesh_verifier::{
-    Policy, ReputationBook, SubmitOutcome, TaskStatus, TaskVerifier, VerificationRecord,
+    Policy, ReputationBook, SubmitOutcome, TaskStatus, TaskVerifier, VerificationRecord, VerifierId,
 };
 use serde::Serialize;
 use tokio::sync::watch;
@@ -57,6 +57,10 @@ pub struct CoordinatorSetup {
     /// A batch that cannot be assigned to enough distinct operators for this long is
     /// abandoned (counted in the report) so it never blocks the queue indefinitely.
     pub abandon_after: Duration,
+    /// Issue nothing until this many distinct workers are live (heartbeats received), or
+    /// until `abandon_after` has passed since start. 0 starts as soon as enough operators
+    /// are live for a task. Gives late-starting workers a fair share of the first batches.
+    pub start_after_workers: usize,
     pub policy: Policy,
     pub clock: Arc<dyn Clock>,
     pub gossip_heartbeat: Duration,
@@ -115,13 +119,42 @@ pub struct CoordinatorReport {
 }
 
 /// Fields shared by both result kinds, extracted for routing.
-struct ResultMeta {
-    payload_digest: Digest,
-    task_id: String,
-    attempt: u32,
-    task_digest: Digest,
-    worker: KeyId,
-    operator: OperatorId,
+pub(crate) struct ResultMeta {
+    pub(crate) payload_digest: Digest,
+    pub(crate) task_id: String,
+    pub(crate) attempt: u32,
+    pub(crate) task_digest: Digest,
+    pub(crate) worker: KeyId,
+    pub(crate) operator: OperatorId,
+}
+
+/// Authenticates a result of either kind (signature, enrolment, shape) and extracts the
+/// routing fields. Binding to a task is the task verifier's job.
+pub(crate) fn parse_result(
+    data: &[u8],
+    manifest: &TrustManifest,
+    now: u64,
+    limits: &Limits,
+) -> Result<ResultMeta, cybermesh_protocol::ProtocolError> {
+    if peek_payload_type(data, limits).as_deref() == Some(payload_type::CT_RESULT) {
+        verify_ct_result(data, manifest, now, limits).map(|v| ResultMeta {
+            payload_digest: v.payload_digest,
+            task_id: v.message.task_id,
+            attempt: v.message.attempt,
+            task_digest: v.message.task_digest,
+            worker: v.message.worker,
+            operator: v.message.operator,
+        })
+    } else {
+        verify_result(data, manifest, now, limits).map(|v| ResultMeta {
+            payload_digest: v.payload_digest,
+            task_id: v.message.task_id,
+            attempt: v.message.attempt,
+            task_digest: v.message.task_digest,
+            worker: v.message.worker,
+            operator: v.message.operator,
+        })
+    }
 }
 
 /// Normalises, de-duplicates and sorts input domains. Returns (domains, skipped).
@@ -227,6 +260,7 @@ pub fn setup_from_config(
             liveness_secs: cfg.liveness_secs,
             max_inflight: cfg.max_inflight,
             exit_when_done: cfg.exit_when_done,
+            start_after_workers: cfg.start_after_workers,
             abandon_after: Duration::from_secs(cfg.result_timeout_secs.saturating_mul(10).max(30)),
             policy: cfg.policy.clone(),
             clock,
@@ -262,43 +296,43 @@ struct Batch {
 }
 
 /// A verifier for either task kind.
-enum AnyVerifier {
+pub(crate) enum AnyVerifier {
     Domain(TaskVerifier),
     Ct(CtTaskVerifier),
 }
 
 impl AnyVerifier {
-    fn missing(&self) -> Vec<KeyId> {
+    pub(crate) fn missing(&self) -> Vec<KeyId> {
         match self {
             AnyVerifier::Domain(v) => v.missing(),
             AnyVerifier::Ct(v) => v.missing(),
         }
     }
-    fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         match self {
             AnyVerifier::Domain(v) => v.is_complete(),
             AnyVerifier::Ct(v) => v.is_complete(),
         }
     }
-    fn expires_at(&self) -> u64 {
+    pub(crate) fn expires_at(&self) -> u64 {
         match self {
             AnyVerifier::Domain(v) => v.task().expires_at,
             AnyVerifier::Ct(v) => v.task().expires_at,
         }
     }
-    fn attempt(&self) -> u32 {
+    pub(crate) fn attempt(&self) -> u32 {
         match self {
             AnyVerifier::Domain(v) => v.task().attempt,
             AnyVerifier::Ct(v) => v.task().attempt,
         }
     }
-    fn task_digest(&self) -> Digest {
+    pub(crate) fn task_digest(&self) -> Digest {
         match self {
             AnyVerifier::Domain(v) => v.task_digest(),
             AnyVerifier::Ct(v) => v.task_digest(),
         }
     }
-    fn submit(&mut self, bytes: &[u8], m: &TrustManifest, now: u64) -> SubmitOutcome {
+    pub(crate) fn submit(&mut self, bytes: &[u8], m: &TrustManifest, now: u64) -> SubmitOutcome {
         match self {
             AnyVerifier::Domain(v) => v.submit(bytes, m, now),
             AnyVerifier::Ct(v) => v.submit(bytes, m, now),
@@ -324,33 +358,32 @@ impl CtOracle for LogOracle<'_> {
 }
 
 /// CT verifications finalizing at once (each may fetch and re-scan tiles from the log).
-const MAX_CT_FINALIZING: usize = 2;
+pub(crate) const MAX_CT_FINALIZING: usize = 2;
 
 /// Settles a CT task against the log. Blocking: fetches the checkpoint, hash tiles and any
 /// data tiles it must re-scan. Runs on a blocking thread, never on the event loop.
-fn finalize_ct(
+/// `log` is the pinned log the task names (None: no log access, so disagreement is
+/// disputed); `seed` is this verifier's secret spot-check seed.
+pub(crate) fn finalize_ct(
     v: CtTaskVerifier,
     engine: &Engine,
-    ct: Option<&CtSetup>,
+    log: Option<&CtLogInfo>,
+    seed: &[u8; 32],
     now: u64,
 ) -> VerificationRecord {
-    let oracle = ct.and_then(|c| {
-        let src = HttpTileSource::new(&c.log, Duration::from_secs(30)).ok()?;
+    let oracle = log.and_then(|l| {
+        let src = HttpTileSource::new(l, Duration::from_secs(30)).ok()?;
         let cp = Checkpoint::parse(&src.checkpoint().ok()?).ok()?;
-        Some((
-            LogOracle {
-                src,
-                tree_size: cp.size,
-                engine,
-            },
-            c.seed,
-        ))
+        Some(LogOracle {
+            src,
+            tree_size: cp.size,
+            engine,
+        })
     });
-    let seed = oracle.as_ref().map_or([0u8; 32], |(_, s)| *s);
     v.finalize(
         Some(engine),
-        oracle.as_ref().map(|(o, _)| o as &dyn CtOracle),
-        &seed,
+        oracle.as_ref().map(|o| o as &dyn CtOracle),
+        seed,
         now,
     )
 }
@@ -380,6 +413,24 @@ struct Inflight {
 
 fn rendezvous(task_id: &str, item: &[u8]) -> Digest {
     Digest::tagged("cybermesh/assign/v1", &[task_id.as_bytes(), item])
+}
+
+/// The verifier identity of `key` according to the manifest (it must hold the verifier role).
+pub(crate) fn verifier_identity(
+    m: &TrustManifest,
+    key: &SecretKey,
+) -> Result<VerifierId, NodeError> {
+    let id = key.key_id();
+    if m.key_with_role(&id, Role::Verifier).is_none() {
+        return Err(NodeError::Config(
+            "verifier key is not an enrolled verifier".into(),
+        ));
+    }
+    let operator = m
+        .operator_of(&id)
+        .cloned()
+        .ok_or_else(|| NodeError::Config("verifier key has no operator".into()))?;
+    Ok(VerifierId { key: id, operator })
 }
 
 /// Signs and stores a verification record; returns its payload digest.
@@ -419,6 +470,8 @@ struct Coordinator {
     /// Settled tasks: task id -> (forget after, worker -> accepted result digest). Lets the
     /// coordinator prove equivocation even when the conflicting result arrives late.
     settled: HashMap<String, SettledTask>,
+    /// This coordinator's verifier identity (bound into every record it signs).
+    verifier_id: VerifierId,
     engine_arc: Arc<Engine>,
     ct_permits: Arc<tokio::sync::Semaphore>,
     ct_finalized: tokio::sync::mpsc::UnboundedSender<CtFinalized>,
@@ -434,6 +487,20 @@ impl Coordinator {
         {
             warn!(error = %e, "failed to persist reputation");
         }
+    }
+
+    /// Workers that are currently live, enrolled and running a compatible engine.
+    fn live_workers(&self) -> usize {
+        let now = self.s.clock.now();
+        self.workers
+            .iter()
+            .filter(|(k, w)| {
+                w.active
+                    && w.compatible
+                    && now.saturating_sub(w.last_seen) <= self.s.liveness_secs
+                    && self.s.manifest.key_with_role(k, Role::Worker).is_some()
+            })
+            .count()
     }
 
     fn choose_assignees(
@@ -551,6 +618,7 @@ impl Coordinator {
         let Ok(verifier) = TaskVerifier::new(
             task.clone(),
             Digest::of(&bytes),
+            self.verifier_id.clone(),
             self.s.policy.clone(),
             self.limits.clone(),
         ) else {
@@ -621,6 +689,7 @@ impl Coordinator {
         let Ok(verifier) = CtTaskVerifier::new(
             task.clone(),
             Digest::of(&bytes),
+            self.verifier_id.clone(),
             ctc.policy.clone(),
             self.s.policy.clone(),
             self.limits.clone(),
@@ -672,7 +741,8 @@ impl Coordinator {
                     let _permit = permits.acquire_owned().await.ok();
                     let now = ctx.now;
                     let record = tokio::task::spawn_blocking(move || {
-                        finalize_ct(v, &engine, ct.as_ref(), now)
+                        let seed = ct.as_ref().map_or([0u8; 32], |c| c.seed);
+                        finalize_ct(v, &engine, ct.as_ref().map(|c| &c.log), &seed, now)
                     })
                     .await
                     .ok();
@@ -770,27 +840,7 @@ impl Coordinator {
 
     async fn on_result(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
         let now = self.s.clock.now();
-        let is_ct =
-            peek_payload_type(&m.data, &self.limits).as_deref() == Some(payload_type::CT_RESULT);
-        let parsed = if is_ct {
-            verify_ct_result(&m.data, &self.s.manifest, now, &self.limits).map(|v| ResultMeta {
-                payload_digest: v.payload_digest,
-                task_id: v.message.task_id,
-                attempt: v.message.attempt,
-                task_digest: v.message.task_digest,
-                worker: v.message.worker,
-                operator: v.message.operator,
-            })
-        } else {
-            verify_result(&m.data, &self.s.manifest, now, &self.limits).map(|v| ResultMeta {
-                payload_digest: v.payload_digest,
-                task_id: v.message.task_id,
-                attempt: v.message.attempt,
-                task_digest: v.message.task_digest,
-                worker: v.message.worker,
-                operator: v.message.operator,
-            })
-        };
+        let parsed = parse_result(&m.data, &self.s.manifest, now, &self.limits);
         let v = match parsed {
             Ok(v) => v,
             Err(e) => {
@@ -1016,7 +1066,9 @@ pub async fn run_coordinator(
     }
     info!(peer = %net.local_peer_id, batches = pending.len(), domains = setup.domains.len(), "coordinator started");
     let (ct_finalized, mut ct_finalized_rx) = tokio::sync::mpsc::unbounded_channel();
+    let verifier_id = verifier_identity(&setup.manifest, &setup.verifier)?;
     let mut c = Coordinator {
+        verifier_id,
         engine_arc: Arc::new(setup.engine.clone()),
         ct_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CT_FINALIZING)),
         ct_finalized,
@@ -1036,6 +1088,8 @@ pub async fn run_coordinator(
         settled: HashMap::new(),
     };
     let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let started = Instant::now();
+    let mut warmed_up = c.s.start_after_workers == 0;
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
@@ -1097,9 +1151,24 @@ pub async fn run_coordinator(
                 // Try each pending batch at most once per tick; a batch that cannot be
                 // assigned goes to the back so it never blocks the others, and is abandoned
                 // after `abandon_after`.
+                if !warmed_up
+                    && (c.live_workers() >= c.s.start_after_workers
+                        || started.elapsed() >= c.s.abandon_after)
+                {
+                    warmed_up = true;
+                    info!(live = c.live_workers(), "starting to issue tasks");
+                    // Waiting for workers does not count towards abandoning a batch.
+                    for b in &mut c.pending {
+                        b.queued_at = Instant::now();
+                    }
+                }
                 let mut attempts = c.pending.len();
                 let manifest_valid = c.s.clock.now() < c.s.manifest.expires_at;
-                while manifest_valid && c.inflight.len() < c.s.max_inflight && attempts > 0 {
+                while warmed_up
+                    && manifest_valid
+                    && c.inflight.len() < c.s.max_inflight
+                    && attempts > 0
+                {
                     attempts -= 1;
                     let Some(b) = c.pending.pop_front() else { break };
                     if let Err(b) = c.issue(&net, b).await {

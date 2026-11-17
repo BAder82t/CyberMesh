@@ -19,8 +19,10 @@ use crate::util::{self, read, read_json, write, write_json};
 pub enum ReleaseCmd {
     /// Deterministically build an unsigned release payload from verification records.
     Build {
-        #[arg(long)]
-        records: PathBuf,
+        /// Directory of signed verification records. Repeat for each verifier organisation:
+        /// entries need records from the manifest's `min_verifiers` distinct operators.
+        #[arg(long, required = true)]
+        records: Vec<PathBuf>,
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
@@ -125,6 +127,18 @@ pub fn load_records(dir: &Path, m: &TrustManifest) -> Result<Vec<(Digest, Verifi
             })
             .with_context(|| format!("{}: not signed by an enrolled verifier", p.display()))?;
         let rec: VerificationRecord = canonical::from_slice(&v.payload)?;
+        // The record names its verifier; it must be a signer, with the manifest's operator.
+        // Otherwise one verifier could pass its records off as another organisation's.
+        if !v.signers.contains(&rec.verifier.key)
+            || m.operator_of(&rec.verifier.key) != Some(&rec.verifier.operator)
+        {
+            bail!(
+                "{}: record claims verifier {} ({}), which did not sign it or belongs to another operator",
+                p.display(),
+                rec.verifier.key,
+                rec.verifier.operator
+            );
+        }
         out.push((Digest::of(&v.payload), rec));
     }
     Ok(out)
@@ -175,7 +189,10 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
         } => {
             let m = util::load_manifest(&manifest, &root, issued_at)?;
             let groot: GovernanceRoot = read_json(&root)?;
-            let recs = load_records(&records, &m)?;
+            let mut recs = Vec::new();
+            for dir in &records {
+                recs.extend(load_records(dir, &m)?);
+            }
             let decs = load_decisions(decisions.as_deref(), &groot)?;
             let prev = previous.as_deref().map(release_ref).transpose()?;
             if let Some(p) = &prev
@@ -193,10 +210,21 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
                     issued_at,
                     ttl_secs,
                     max_record_age_secs,
+                    min_verifiers: usize::from(m.min_verifiers),
                 },
             )?;
             let bytes = canonical::to_vec(&rel)?;
             write(&out, &bytes)?;
+            let verifier_ops: std::collections::BTreeSet<&str> = recs
+                .iter()
+                .map(|(_, r)| r.verifier.operator.as_str())
+                .collect();
+            eprintln!(
+                "records from {} verifier operator(s) {:?}; quorum min_verifiers = {}",
+                verifier_ops.len(),
+                verifier_ops,
+                m.min_verifiers
+            );
             eprintln!(
                 "release {} built: {} entries ({} block, {} warn), {} corrections, payload {}",
                 rel.sequence,
@@ -328,6 +356,7 @@ pub fn run(c: ReleaseCmd) -> Result<()> {
                     issued_at,
                     ttl_secs,
                     max_record_age_secs: 0,
+                    min_verifiers: 1,
                 },
             )?;
             write(&out, &canonical::to_vec(&rel)?)
@@ -411,5 +440,77 @@ pub fn appeal(c: AppealCmd) -> Result<()> {
             let env = env.ok_or_else(|| anyhow::anyhow!("no keys"))?;
             write(&out, &env.to_vec()?)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use std::collections::BTreeMap;
+
+    use cybermesh_crypto::SecretKey;
+    use cybermesh_protocol::testkit::TestNetwork;
+    use cybermesh_protocol::{EngineSpec, Limits, OperatorId};
+    use cybermesh_verifier::{Policy, TaskVerifier, VerifierId};
+
+    use super::*;
+
+    const NOW: u64 = 1_800_000_000;
+
+    fn write_record(
+        dir: &Path,
+        name: &str,
+        net: &TestNetwork,
+        claimed: VerifierId,
+        signer: &SecretKey,
+    ) {
+        let task = net.task(
+            &["a.example.com"],
+            &[0, 1, 2],
+            EngineSpec {
+                name: "e".into(),
+                version: "1".into(),
+            },
+            BTreeMap::new(),
+            NOW,
+        );
+        let digest = Digest::of(&canonical::to_vec(&task).unwrap());
+        let rec = TaskVerifier::new(task, digest, claimed, Policy::default(), Limits::default())
+            .unwrap()
+            .finalize(None, NOW);
+        let env = Envelope::sign(
+            payload_type::VERIFICATION,
+            &canonical::to_vec(&rec).unwrap(),
+            signer,
+        );
+        std::fs::write(dir.join(format!("{name}.json")), env.to_vec().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn records_must_name_their_actual_signer_and_its_operator() {
+        let net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], NOW);
+        let (b_key, b_op) = &net.other_verifiers[0];
+        let b = VerifierId {
+            key: b_key.key_id(),
+            operator: b_op.clone(),
+        };
+        let ok = tempfile::tempdir().unwrap();
+        write_record(ok.path(), "r", &net, b.clone(), b_key);
+        let loaded = load_records(ok.path(), &net.manifest).unwrap();
+        assert_eq!(loaded[0].1.verifier, b);
+
+        // org-a's verifier signs a record claiming to be org-b's.
+        let forged = tempfile::tempdir().unwrap();
+        write_record(forged.path(), "r", &net, b.clone(), &net.verifier);
+        assert!(load_records(forged.path(), &net.manifest).is_err());
+
+        // org-b's key, but the record claims another operator.
+        let relabelled = tempfile::tempdir().unwrap();
+        let wrong_op = VerifierId {
+            key: b_key.key_id(),
+            operator: OperatorId::new("org-a").unwrap(),
+        };
+        write_record(relabelled.path(), "r", &net, wrong_op, b_key);
+        assert!(load_records(relabelled.path(), &net.manifest).is_err());
     }
 }
