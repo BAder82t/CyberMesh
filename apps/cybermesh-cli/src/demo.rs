@@ -40,10 +40,10 @@ pub enum DemoCmd {
         #[arg(long, default_value_t = 8)]
         ct_tiles: u64,
         /// Independent verifiers at org-b (and org-c for 2). The release quorum
-        /// `min_verifiers` becomes 2 when there is at least one. Default: 1 in local mode, 0
-        /// in docker mode (the Compose file runs only the coordinator's verifier).
-        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=2))]
-        independent_verifiers: Option<u8>,
+        /// `min_verifiers` becomes 2 when there is at least one. The Compose file runs the
+        /// org-b verifier, so docker mode supports 0 or 1.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(0..=2))]
+        independent_verifiers: u8,
     },
 }
 
@@ -112,10 +112,10 @@ pub fn run(c: DemoCmd) -> Result<()> {
         ct_tiles,
         independent_verifiers,
     } = c;
-    let n_verifiers = usize::from(independent_verifiers.unwrap_or(u8::from(mode != "docker")));
-    if mode == "docker" && n_verifiers > 0 {
+    let n_verifiers = usize::from(independent_verifiers);
+    if mode == "docker" && n_verifiers > 1 {
         bail!(
-            "the Docker demo runs only the coordinator's verifier; use --independent-verifiers 0"
+            "the Compose file runs one independent verifier (org-b); use --independent-verifiers 0 or 1"
         );
     }
     let verifier_orgs: Vec<&str> = ["org-b", "org-c"].into_iter().take(n_verifiers).collect();
@@ -282,14 +282,27 @@ block_min_score_bp = 7000
     );
     write(&out.join("coordinator.toml"), coord_toml.as_bytes())?;
 
-    // Independent verifiers (local mode only): their own keys, state and engine.
+    // Independent verifiers: their own keys, state and engine.
     let mut verifier_addrs = Vec::new();
     for (i, org) in verifier_orgs.iter().enumerate() {
         let k =
             SecretKey::read_from_file(&out.join("keys").join(format!("verifier-{org}.key.json")))?;
-        let port = base_port + 50 + u16::try_from(i)?;
         let peer = cybermesh_network::peer_id_of(&k.public_key())?;
-        verifier_addrs.push(format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}"));
+        let (listen, addr) = if mode == "docker" {
+            // Fixed addresses on the Compose network (see docker-compose.yml).
+            let ip = format!("172.28.0.{}", 20 + i);
+            (
+                "/ip4/0.0.0.0/tcp/4100".to_owned(),
+                format!("/ip4/{ip}/tcp/4100/p2p/{peer}"),
+            )
+        } else {
+            let port = base_port + 50 + u16::try_from(i)?;
+            (
+                format!("/ip4/127.0.0.1/tcp/{port}"),
+                format!("/ip4/127.0.0.1/tcp/{port}/p2p/{peer}"),
+            )
+        };
+        verifier_addrs.push(addr);
         let toml = format!(
             r#"# CyberMesh independent verifier for organisation {org}. It recomputes every task with
 # its own engine and evidence and signs its own records; releases need records from
@@ -300,7 +313,7 @@ manifest = "manifest.json"
 governance_root = "governance-root.json"
 evidence_dir = "evidence"
 state_dir = "state/verifier-{org}"
-listen = ["/ip4/127.0.0.1/tcp/{port}"]
+listen = ["{listen}"]
 bootstrap = ["{coord_addr}"]
 # Longer than the coordinator's: verifiers settle early once every assignee answered.
 result_timeout_secs = 30
