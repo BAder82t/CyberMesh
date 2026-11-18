@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-analysis"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "cybermesh-crypto",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-anchor"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "cybermesh-crypto",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-cli"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-crypto"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-ct"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "cybermesh-analysis",
@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-intelligence"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "cybermesh-crypto",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-network"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "cybermesh-crypto",
  "cybermesh-protocol",
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-node"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "cpu-time",
  "cybermesh-analysis",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-protocol"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "cybermesh-crypto",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-tests"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "cybermesh-analysis",
  "cybermesh-anchor",
@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "cybermesh-verifier"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "cybermesh-analysis",
  "cybermesh-crypto",
