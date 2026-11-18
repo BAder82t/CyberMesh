@@ -24,8 +24,14 @@ OpenTimestamps anchoring, Docker and local demos, internal security review, eval
 ## v0.2.1: independent verifier in the Docker demo
 The Docker Compose demo runs organisation B's independent verifier in its own hardened container, with `min_verifiers = 2`, matching the local demo. It is wire-compatible with v0.2.0.
 
-## v0.2.2 (this release): verification records over the network
+## v0.2.2: verification records over the network
 Verifiers publish the records they sign on a `records` gossip topic and store the others' records. Each organisation's release signer builds from its own node alone. It is wire-compatible with v0.2.x: older nodes ignore the topic.
+
+## v0.3.0 (this release): authenticated CT logs and continuous tailing
+- **Checkpoint verification.** Each log's checkpoint must be signed by the key pinned in the `ct-logs` evidence and be fresh. Every tile root the verifier relies on is proven against the signed root.
+- **Follow mode.** The coordinator follows a log as it grows. It accepts a new checkpoint only with a consistency proof that it extends the previous one, and it resumes after a restart without skipping tiles.
+
+The wire protocol is unchanged, but the `ct-logs` evidence format is not compatible with v0.2.x. Nodes that run CT tasks must upgrade together; see the changelog.
 
 ## Next: harden the pilot
 - **Verifiers.**
@@ -42,7 +48,7 @@ Verifiers publish the records they sign on a `records` gossip topic and store th
 - **Windows.** Run the worker as a service with Job Object limits. Add macOS `launchd` packaging.
 - **Licensing.** Resolve the licensing question for feed-derived `block` entries (see `existing-work-review.md` §9). Prefer feeds whose licences permit redistribution of derived blocklists, or organisation-contributed, analyst-confirmed reports under a CyberMesh data licence.
 
-## v0.3: a task type where donated compute matters (original plan)
+## Original v0.3 plan: a task type where donated compute matters
 *Certificate Transparency monitoring from this plan shipped in v0.2.0. It verifies against the logs' own hash tiles and spot checks rather than full re-execution; see [ct-monitoring.md](ct-monitoring.md).*
 
 The evaluation shows that lexical analysis runs at about 37,000–52,000 domains per second on one core, so a single server does it easily. The candidate workload that *does* benefit from many independent, resource-limited contributors:

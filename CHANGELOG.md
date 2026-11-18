@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 (2026-11-18, research pre-release)
+
+The wire protocol is unchanged, but the `ct-logs` evidence format is not compatible with v0.2.x: each log now needs `origin` and `public_key`. Nodes that run CT tasks must upgrade together and switch to a new evidence bundle. Deployments without a `ct-logs` source are unaffected. **Not production-ready; no external audit.**
 
 ### Added
 - **CT follow mode** (`[ct] follow = true`). The coordinator tails a log as it grows:
