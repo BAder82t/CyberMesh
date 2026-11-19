@@ -36,7 +36,7 @@ A hostname is **confirmed** when an independent source lists it.
 - **OpenPhish community feed.** Its public git history (`openphish/public_feed`) updates every 12 hours. The confirmation time is the first commit that lists a URL on the host.
 - **Google Safe Browsing or PhishTank**, as reported in phishunt.io's hourly feed (`malicious_google`, `malicious_phishtank`). The confirmation time is the first hourly snapshot that shows the flag.
 
-**Secondary (broader) sources** add phishunt's `malicious_urlscan` and `malicious_tweetfeed` flags.
+**Secondary (broader) sources** add phishunt's `malicious_urlscan`, `malicious_tweetfeed` and `malicious_openphish` flags. (Clarified on 2026-11-19, before any detection result was examined: phishunt's own OpenPhish flag may reflect OpenPhish's commercial feed, so it is secondary; the primary OpenPhish source is the community feed's git history.)
 
 **Not ground truth:**
 
@@ -112,7 +112,42 @@ The question is what independent verification by several organisations costs in 
 
 ## 8. Results
 
-*Pending: the run started on 2026-11-18.*
+### 8.1 Detection
+
+*Pending: the run started on 2026-11-18. `cybermesh ct evaluate` computes every figure in §4 from the run directory.*
+
+### 8.2 Cost of decentralisation (measured 2026-11-19)
+
+**Setup.**
+- Data: the 128 most recent full tiles of Let's Encrypt Willow 2027h1 at the time, 32,768 certificates, scanned by `scripts/ct-cost.sh` on one Apple M3 Max laptop.
+- Network: a coordinator (org-a), 5 workers in 4 organisations and one independent verifier (org-b).
+  - Every tile goes to 2 workers of different organisations, 8 tiles per task.
+  - Each verifier rescans 2 tiles per task.
+  - Each worker's 1 % CPU budget is enforced.
+- Both setups verify the log's checkpoint and prove every tile root they rely on. Downloads are counted after decompression.
+
+| | One process | CyberMesh network (7 processes) | Ratio |
+|---|---|---|---|
+| CPU | 1.4 s (43 µs per certificate) | 7.5 s (229 µs per certificate) | 5.4× |
+| Downloaded from the log | 48.8 MB | 119.5 MB | 2.45× |
+| Requests to the log | 133 | 480 | 3.6× |
+| Peer-to-peer traffic | — | 0.69 MB (21 B per certificate) | — |
+| Wall time | 5 s | 132 s | 26× |
+| Tasks verified | — | 16 of 16, by both verifiers; 0 faults | — |
+
+**By role.**
+- The 5 workers used 5.8 s of CPU and downloaded 97.6 MB, which is 2.0×: every tile is scanned twice.
+- The coordinator and the independent verifier each downloaded about 11 MB, 22 % of what one scanner downloads, and used about 0.9 s of CPU each. The coordinator rescanned 29 of the 128 tiles.
+
+**What it means.**
+- **Download grows with volume.** It is replication (2×) plus the verifiers' spot checks (about 0.45×). Verifying costs about a fifth of scanning, which is the property the CT design depends on.
+- **CPU.** The 5.4× includes fixed costs that a short run makes large: each process loads the engine and evidence (0.15 s each, about 1 s for the 7 processes) and exchanges heartbeats for the whole run. The part that grows with volume is the double scan plus the spot checks, about 2.5× by the components above. That is an estimate, not a long-run measurement.
+- **Wall time** is slow by design: workers are capped at 1 % of a core. Throughput comes from the number of workers. At 43 µs per certificate, the three logs of §1 (about 800 new entries a second) need about 0.035 of a core in one process, or about 0.07 of a core of worker CPU with replication 2, so at least 7 workers at 1 %.
+- **Peer-to-peer traffic** is negligible next to the log download.
+
+**What the extra cost buys.** It doesn't buy capacity: one small server does the job. It buys verification by a second, independent organisation of every task, and releases that no single operator can produce. The price is about 2.5× the download and roughly 2.5–5× the CPU of one server.
+
+**Worst case.** With 2 tiles per task, as in the local demo, every verifier rescans every tile (64 tiles: 3.5× the download, 4.5× the CPU). Task size is the knob that sets the cost of verification.
 
 ## Reproduce
 
@@ -122,4 +157,7 @@ cargo build --release -p cybermesh-cli
 # datasets/ct-logs/public-static-ct-logs.json as its ct-logs source, then:
 target/release/cybermesh evidence pin --dir eval-data/ct-evidence
 scripts/ct-eval.sh start      # status | stop | history (after the run)
+scripts/ct-eval.sh history    # OpenPhish snapshots from its git history
+target/release/cybermesh ct evaluate --run eval-data/ct-run --evidence eval-data/ct-evidence --out eval-data/ct-run/eval
+scripts/ct-cost.sh letsencrypt-willow-2027h1 128   # section 8.2
 ```

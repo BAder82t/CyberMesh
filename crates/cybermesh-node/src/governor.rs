@@ -165,6 +165,12 @@ pub fn process_cpu() -> Duration {
         .unwrap_or_default()
 }
 
+/// [`process_cpu`] in whole milliseconds.
+#[must_use]
+pub fn process_cpu_ms() -> u64 {
+    u64::try_from(process_cpu().as_millis()).unwrap_or(u64::MAX)
+}
+
 /// Resident set size in bytes.
 #[must_use]
 pub fn rss_bytes() -> u64 {

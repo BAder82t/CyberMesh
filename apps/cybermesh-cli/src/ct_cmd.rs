@@ -49,6 +49,9 @@ pub enum CtCmd {
     /// Follow live logs in one process and record every name and brand signal, for
     /// evaluations (see `ct_watch`). Not distributed; tiles are verified and proven.
     Watch(crate::ct_watch::WatchArgs),
+    /// Score a `ct watch` run against independently confirmed phishing (recall, lead time,
+    /// a precision floor, a false-alarm sample, comparison with phishunt).
+    Evaluate(crate::ct_evaluate::EvaluateArgs),
     /// Investigation report (per protected brand) from verified CT records, for security
     /// teams. Includes brand signals below the warning threshold.
     Report {
@@ -209,6 +212,12 @@ pub fn run(c: CtCmd) -> Result<()> {
             Ok(())
         }
         CtCmd::Watch(a) => crate::ct_watch::run(&a),
+        CtCmd::Evaluate(a) => {
+            let rep = crate::ct_evaluate::run(&a)?;
+            crate::ct_evaluate::print(&rep);
+            println!("report: {}", a.out.join("report.json").display());
+            Ok(())
+        }
         CtCmd::FollowReset { state } => {
             let mut s: cybermesh_node::ct_follow::FollowState = util::read_json(&state)?;
             let old = s.head.take();

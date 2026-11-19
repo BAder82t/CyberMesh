@@ -70,6 +70,11 @@ pub struct WorkerStatus {
     pub net_bytes_out: u64,
     /// Bytes downloaded from CT logs.
     pub ct_bytes_fetched: u64,
+    /// CPU time of this process (ms), and what it received from CT logs (bytes after
+    /// decompression, requests), for cost comparisons.
+    pub cpu_ms: u64,
+    pub ct_http_bytes: u64,
+    pub ct_http_requests: u64,
     pub net_dropped_rate_limited: u64,
     pub connected_peers: u64,
     pub updated_at: u64,
@@ -651,6 +656,9 @@ impl Worker {
         self.status.net_bytes_out = snap.bytes_out;
         self.status.net_dropped_rate_limited = snap.dropped_rate_limited;
         self.status.connected_peers = snap.connected_peers;
+        self.status.cpu_ms = crate::governor::process_cpu_ms();
+        (self.status.ct_http_bytes, self.status.ct_http_requests) =
+            cybermesh_ct::http::transfer_totals();
         self.status.updated_at = self.s.clock.now();
         let _ = files::write_json(&self.s.state_dir.join("status.json"), &self.status);
     }

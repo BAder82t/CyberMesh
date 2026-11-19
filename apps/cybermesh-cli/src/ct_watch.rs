@@ -2,7 +2,7 @@
 //!
 //! It records what CyberMesh's CT scan flags, when, and every certificate name it saw, so
 //! detections can later be compared with independently confirmed phishing
-//! (`cybermesh eval ct-lead`). It is also the single-server baseline for measuring what
+//! (`cybermesh ct evaluate`). It is also the single-server baseline for measuring what
 //! decentralisation costs.
 //!
 //! Each log has its own thread. A poll fetches the checkpoint, verifies it against the pinned
@@ -75,6 +75,10 @@ pub struct WatchArgs {
     /// Stop after this many seconds. Default: run until stopped.
     #[arg(long)]
     pub duration_secs: Option<u64>,
+    /// Stop once every tile below this one is scanned (one log only): a fixed range, as the
+    /// single-process baseline for cost comparisons.
+    #[arg(long)]
+    pub end_tile: Option<u64>,
 }
 
 /// One flagged name.
@@ -338,6 +342,7 @@ pub struct Watcher<'a> {
     state: Option<WatchState>,
     next: u64,
     start_tile: Option<u64>,
+    end_tile: Option<u64>,
     max_tiles_per_poll: u64,
     seg: Option<Segment>,
 }
@@ -382,9 +387,21 @@ impl<'a> Watcher<'a> {
             state,
             next,
             start_tile,
+            end_tile: None,
             max_tiles_per_poll: max_tiles_per_poll.max(1),
             seg: None,
         })
+    }
+
+    /// Stops after tile `end - 1` (see [`WatchArgs::end_tile`]).
+    #[must_use]
+    pub fn with_end_tile(mut self, end: Option<u64>) -> Self {
+        self.end_tile = end;
+        self
+    }
+
+    fn finished(&self) -> bool {
+        self.end_tile.is_some_and(|e| self.next >= e)
     }
 
     #[cfg(test)]
@@ -462,7 +479,8 @@ impl<'a> Watcher<'a> {
         self.persist()?;
         let end = cp
             .full_tiles()
-            .min(self.next.saturating_add(self.max_tiles_per_poll));
+            .min(self.next.saturating_add(self.max_tiles_per_poll))
+            .min(self.end_tile.unwrap_or(u64::MAX));
         while self.next < end && !stop.load(Ordering::Relaxed) {
             let n = self.next;
             let bytes = match src.data_tile(n) {
@@ -613,12 +631,12 @@ impl<'a> Watcher<'a> {
         Ok(())
     }
 
-    /// Polls until `stop` is set, then closes the open segment.
+    /// Polls until `stop` is set or the end tile is reached, then closes the open segment.
     pub fn run(&mut self, stop: &AtomicBool, poll: Duration) -> Result<()> {
-        while !stop.load(Ordering::Relaxed) {
+        while !stop.load(Ordering::Relaxed) && !self.finished() {
             let t = Instant::now();
             let o = self.poll_once(stop)?;
-            if o.caught_up || o.tiles == 0 {
+            if (o.caught_up || o.tiles == 0) && !self.finished() {
                 while t.elapsed() < poll && !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(200).min(poll));
                 }
@@ -638,6 +656,7 @@ struct RunRecord<'a> {
     poll_secs: u64,
     max_tiles_per_poll: u64,
     start_tile: Option<u64>,
+    end_tile: Option<u64>,
     duration_secs: Option<u64>,
     segment_tiles: u64,
 }
@@ -661,8 +680,13 @@ impl Drop for StopOnPanic<'_> {
 }
 
 pub fn run(a: &WatchArgs) -> Result<()> {
-    if a.start_tile.is_some() && a.logs.len() != 1 {
-        bail!("--start-tile needs exactly one --log");
+    if (a.start_tile.is_some() || a.end_tile.is_some()) && a.logs.len() != 1 {
+        bail!("--start-tile and --end-tile need exactly one --log");
+    }
+    if let (Some(s), Some(e)) = (a.start_tile, a.end_tile)
+        && e <= s
+    {
+        bail!("--end-tile must be greater than --start-tile");
     }
     let ev = EvidenceBundle::load(&a.evidence)?;
     let infos: Vec<CtLogInfo> = a
@@ -691,6 +715,7 @@ pub fn run(a: &WatchArgs) -> Result<()> {
         poll_secs: a.poll_secs,
         max_tiles_per_poll: a.max_tiles_per_poll,
         start_tile: a.start_tile,
+        end_tile: a.end_tile,
         duration_secs: a.duration_secs,
         segment_tiles: SEGMENT_TILES,
     })?;
@@ -726,13 +751,13 @@ pub fn run(a: &WatchArgs) -> Result<()> {
         let mut handles = Vec::new();
         for (info, src) in infos.iter().zip(&sources) {
             let (engine, out, stop) = (&engine, &out, &stop);
-            let (start, max) = (a.start_tile, a.max_tiles_per_poll);
+            let (start, end, max) = (a.start_tile, a.end_tile, a.max_tiles_per_poll);
             let info = info.clone();
             handles.push(scope.spawn(move || -> Result<()> {
                 let _guard = StopOnPanic(stop);
                 let id = info.log_id.clone();
                 let r = Watcher::new(info, src, engine, out, start, max)
-                    .and_then(|mut w| w.run(stop, poll));
+                    .and_then(|w| w.with_end_tile(end).run(stop, poll));
                 if r.is_err() {
                     // A local failure stops every log so the run ends in a consistent state.
                     stop.store(true, Ordering::Relaxed);
@@ -780,8 +805,7 @@ pub fn run(a: &WatchArgs) -> Result<()> {
 fn process_record() -> ProcessRecord {
     ProcessRecord {
         t_ms: now_ms(),
-        cpu_ms: u64::try_from(cybermesh_node::governor::process_cpu().as_millis())
-            .unwrap_or(u64::MAX),
+        cpu_ms: cybermesh_node::governor::process_cpu_ms(),
         rss_bytes: cybermesh_node::governor::rss_bytes(),
     }
 }
@@ -968,6 +992,25 @@ mod tests {
             (0..5 * 256).collect::<Vec<_>>()
         );
         assert!(events(dir.path()).is_empty(), "{:?}", events(dir.path()));
+    }
+
+    #[test]
+    fn a_fixed_range_stops_at_the_end_tile() {
+        let log = MockLog::build("mock.example/range", &entries(4, &[])).unwrap();
+        let info = log.log_info("mock", "http://127.0.0.1:1/");
+        let src = Shared(Arc::new(RwLock::new(log)));
+        let dir = tempfile::tempdir().unwrap();
+        let out = Outputs::open(dir.path()).unwrap();
+        let eng = engine();
+        let stop = AtomicBool::new(false);
+        let mut w = Watcher::new(info, &src, &eng, &out, Some(1), 256)
+            .unwrap()
+            .with_end_tile(Some(3));
+        w.run(&stop, Duration::from_secs(60)).unwrap();
+        assert_eq!(w.next_tile(), 3);
+        let names = names_in(&dir.path().join("names/mock"));
+        assert_eq!(names.first().unwrap().0, 256);
+        assert_eq!(names.last().unwrap().0, 3 * 256 - 1);
     }
 
     #[test]
