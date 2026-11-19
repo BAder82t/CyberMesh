@@ -6,10 +6,9 @@
 #   scripts/ct-eval.sh start    [RUN_DIR]   start, or resume after a reboot (same end time)
 #   scripts/ct-eval.sh stop     [RUN_DIR]   stop both processes cleanly
 #   scripts/ct-eval.sh status   [RUN_DIR]   processes, progress, disk use, recent events
-#   scripts/ct-eval.sh history  [RUN_DIR]   clone the feeds' public git histories (OpenPhish,
-#                                           phishunt mirror) and export each OpenPhish commit
-#                                           since a day before the run as a snapshot for
-#                                           `cybermesh ct evaluate`
+#   scripts/ct-eval.sh history  [RUN_DIR]   clone OpenPhish's public feed history and export
+#                                           each commit since a day before the run as a
+#                                           snapshot for `cybermesh ct evaluate`
 #
 # Environment:
 #   CT_EVAL_LOGS  space-separated log ids (default: Willow, Sycamore, ParcelYard: about 13 GB a
@@ -156,11 +155,13 @@ for (l,k),n in sorted(c.items()): print(f"  {l} {k}: {n}")' "$RUN/events.jsonl"
     ;;
   history)
     mkdir -p "$RUN/feeds"
-    for r in openphish/public_feed 0xDanielLopez/phishunt-feed; do
-      dst="$RUN/feeds/$(basename "$r").git"
-      if [ -d "$dst" ]; then git -C "$dst" fetch -q origin '+refs/heads/*:refs/heads/*'; else git clone -q --bare "https://github.com/$r.git" "$dst"; fi
-      echo "$r: $(git -C "$dst" rev-list --count HEAD) commits"
-    done
+    dst="$RUN/feeds/public_feed.git"
+    if [ -d "$dst" ]; then
+      git -C "$dst" fetch -q origin '+refs/heads/*:refs/heads/*'
+    else
+      git clone -q --bare https://github.com/openphish/public_feed.git "$dst"
+    fi
+    echo "openphish/public_feed: $(git -C "$dst" rev-list --count HEAD) commits"
     start=$(python3 -I -c 'import json,sys; print(min(json.loads(l)["started_ms"] for l in open(sys.argv[1]) if l.strip()) // 1000)' "$RUN/runs.jsonl")
     since=$(( start - 86400 ))
     mkdir -p "$RUN/feeds/openphish"
@@ -169,7 +170,10 @@ for (l,k),n in sorted(c.items()): print(f"  {l} {k}: {n}")' "$RUN/events.jsonl"
       [ "$ct" -ge "$since" ] || continue
       f="$RUN/feeds/openphish/$(stamp "$ct").txt.gz"
       if [ ! -s "$f" ]; then
-        git -C "$RUN/feeds/public_feed.git" show "$sha:feed.txt" | gzip > "$f.tmp" && mv "$f.tmp" "$f"
+        if ! git -C "$RUN/feeds/public_feed.git" show "$sha:feed.txt" | gzip > "$f.tmp"; then
+          rm -f "$f.tmp"; echo "export of OpenPhish commit $sha failed" >&2; exit 1
+        fi
+        mv "$f.tmp" "$f"
       fi
       n=$((n + 1))
     done < <(git -C "$RUN/feeds/public_feed.git" log --format='%H %ct' HEAD -- feed.txt)

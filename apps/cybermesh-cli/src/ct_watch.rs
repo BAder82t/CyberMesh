@@ -666,6 +666,9 @@ struct ProcessRecord {
     t_ms: u64,
     cpu_ms: u64,
     rss_bytes: u64,
+    /// Everything received from CT logs at the HTTP level (as the network nodes report it).
+    ct_http_bytes: u64,
+    ct_http_requests: u64,
 }
 
 /// Sets the stop flag if the owning thread panics, so the other logs stop too.
@@ -803,10 +806,13 @@ pub fn run(a: &WatchArgs) -> Result<()> {
 }
 
 fn process_record() -> ProcessRecord {
+    let (ct_http_bytes, ct_http_requests) = cybermesh_ct::http::transfer_totals();
     ProcessRecord {
         t_ms: now_ms(),
         cpu_ms: cybermesh_node::governor::process_cpu_ms(),
         rss_bytes: cybermesh_node::governor::rss_bytes(),
+        ct_http_bytes,
+        ct_http_requests,
     }
 }
 

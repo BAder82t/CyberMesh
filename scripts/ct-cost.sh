@@ -29,7 +29,9 @@ mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
 FULL=$("$BIN" ct checkpoint --evidence "$EVIDENCE" --log "$LOG" | sed -E 's/.*full_tiles=([0-9]+).*/\1/')
+[[ "$FULL" =~ ^[0-9]+$ ]] || { echo "could not read the log's checkpoint" >&2; exit 1; }
 FIRST=$(( FULL - TILES ))
+[ "$FIRST" -ge 0 ] || { echo "the log has only $FULL full tiles" >&2; exit 1; }
 END=$FULL
 echo "== $LOG: tiles $FIRST..$END ($TILES tiles, $(( TILES * 256 )) entries, $TPT tiles per task)"
 
@@ -47,8 +49,13 @@ cd "$OUT/net"
 # A fixed range instead of following the log.
 sed -i.bak -e "s/^first_tile = 0$/first_tile = $FIRST/" -e 's/^follow = true$/follow = false/' \
   -e '/^poll_secs = /d' -e '/^until_tile = /d' -e "s/^tiles_per_task = 2$/tiles_per_task = $TPT/" coordinator.toml
-grep -q "^first_tile = $FIRST$" coordinator.toml && grep -q '^follow = false$' coordinator.toml \
-  && grep -q "^tiles_per_task = $TPT$" coordinator.toml
+need() { grep -q "$1" coordinator.toml || { echo "coordinator.toml patch failed: $1" >&2; exit 1; }; }
+refuse() { if grep -q "$1" coordinator.toml; then echo "coordinator.toml patch failed: $1 still set" >&2; exit 1; fi; }
+need "^first_tile = $FIRST$"
+need '^follow = false$'
+need "^tiles_per_task = $TPT$"
+refuse '^poll_secs = '
+refuse '^until_tile = '
 mkdir -p logs
 pids=()
 vpids=()
@@ -59,15 +66,21 @@ for cfg in verifier-*.toml; do
   "$BIN" verifier run --config "$cfg" > "logs/${cfg%.toml}-report.json" 2> "logs/${cfg%.toml}.log" &
   vpids+=($!); pids+=($!)
 done
+wpids=()
 for cfg in worker-*.toml; do
   "$BIN" worker run --config "$cfg" > "logs/${cfg%.toml}.json" 2> "logs/${cfg%.toml}.log" &
-  pids+=($!)
+  wpids+=($!); pids+=($!)
 done
 T0=$(date +%s)
 "$BIN" coordinator run --config coordinator.toml > logs/coordinator-report.json 2> logs/coordinator.log
 echo $(( $(date +%s) - T0 )) > ../net.wall
 for p in "${vpids[@]:-}"; do [ -n "$p" ] && wait "$p"; done
-sleep 12   # workers write status.json periodically: let the last task's numbers land
+# Stop the workers cleanly: each writes a final status.json on exit.
+for cfg in worker-*.toml; do
+  w=${cfg#worker-}; w=${w%.toml}
+  "$BIN" worker stop --control-dir "state/$w/control" > /dev/null
+done
+for p in "${wpids[@]:-}"; do [ -n "$p" ] && wait "$p" || true; done
 for cfg in worker-*.toml; do
   w=${cfg#worker-}; w=${w%.toml}
   "$BIN" worker status --state-dir "state/$w" > "logs/status-$w.json"
@@ -83,12 +96,13 @@ def jl(p):
         return [json.loads(l) for l in f if l.strip()]
 polls = jl(os.path.join(out, "single/polls.jsonl"))
 proc = jl(os.path.join(out, "single/process.jsonl"))
+# HTTP-level counts, as the network nodes report them.
 single = {
     "processes": 1,
     "wall_s": int(open(os.path.join(out, "single.wall")).read()),
     "cpu_ms": proc[-1]["cpu_ms"],
-    "ct_bytes": sum(p["bytes"] for p in polls),
-    "ct_requests": sum(p["requests"] for p in polls),
+    "ct_bytes": proc[-1]["ct_http_bytes"],
+    "ct_requests": proc[-1]["ct_http_requests"],
     "p2p_bytes": 0,
     "tiles_scanned": sum(p["tiles"] for p in polls),
 }
