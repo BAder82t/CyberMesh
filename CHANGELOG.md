@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Live CT detection evaluation harness.**
+  - `cybermesh ct watch` follows live static CT logs in one process, with verified checkpoints, consistency proofs and proven tile roots, and never skips a tile. It records every certificate name and every brand signal, with the log's timestamp and the time it was scanned. It is the single-server baseline for the cost of decentralisation, too.
+  - `scripts/ct-eval.sh` runs it for a fixed window, takes hourly phishunt snapshots and resumes after a reboot.
+  - The method, fixed before any results, is in [docs/ct-evaluation.md](docs/ct-evaluation.md).
+- `cybermesh_ct::names::certificate_dns_names`: names with their wildcard flag (`certificate_names` is unchanged).
+
+### Fixed
+- `cybermesh ct report` counted a certificate twice for a brand named twice in one assessment.
+
 ## v0.3.0 (2026-11-18, research pre-release)
 
 The wire protocol is unchanged, but the `ct-logs` evidence format is not compatible with v0.2.x: each log now needs `origin` and `public_key`. Nodes that run CT tasks must upgrade together and switch to a new evidence bundle. Deployments without a `ct-logs` source are unaffected. **Not production-ready; no external audit.**

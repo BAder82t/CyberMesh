@@ -784,6 +784,8 @@ dependencies = [
  "cybermesh-node",
  "cybermesh-protocol",
  "cybermesh-verifier",
+ "flate2",
+ "hex",
  "serde",
  "serde_json",
  "tempfile",
