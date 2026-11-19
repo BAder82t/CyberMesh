@@ -6,12 +6,26 @@
 //! derived from integers are requested.
 
 use std::io::Read as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use cybermesh_analysis::CtLogInfo;
 
 use crate::tile::{data_tile_path, hash_tile_path};
 use crate::{CtError, MAX_TILE_BYTES, TileSource};
+
+static BYTES: AtomicU64 = AtomicU64::new(0);
+static REQUESTS: AtomicU64 = AtomicU64::new(0);
+
+/// Bytes received (after decompression) and requests made by every [`HttpTileSource`] in
+/// this process, for resource reports.
+#[must_use]
+pub fn transfer_totals() -> (u64, u64) {
+    (
+        BYTES.load(Ordering::Relaxed),
+        REQUESTS.load(Ordering::Relaxed),
+    )
+}
 
 /// Static CT client for one log.
 #[derive(Debug, Clone)]
@@ -37,6 +51,7 @@ impl HttpTileSource {
 
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>, CtError> {
         let url = format!("{}{path}", self.base);
+        REQUESTS.fetch_add(1, Ordering::Relaxed);
         let resp = match self.agent.get(&url).call() {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) => return Err(CtError::NotFound(path.to_owned())),
@@ -54,6 +69,7 @@ impl HttpTileSource {
             .take(max as u64 + 1)
             .read_to_end(&mut body)
             .map_err(|e| CtError::Http(e.to_string()))?;
+        BYTES.fetch_add(body.len() as u64, Ordering::Relaxed);
         if body.len() > max {
             return Err(CtError::TooLarge);
         }

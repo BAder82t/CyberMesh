@@ -117,6 +117,11 @@ pub struct VerifierReport {
     pub net_bytes_out: u64,
     pub net_dropped_rate_limited: u64,
     pub net_dropped_queue_full: u64,
+    /// CPU time of this process (ms), and what it received from CT logs (bytes after
+    /// decompression, requests), for cost comparisons.
+    pub cpu_ms: u64,
+    pub ct_http_bytes: u64,
+    pub ct_http_requests: u64,
     #[serde(skip)]
     pub records: Vec<(Digest, VerificationRecord)>,
     /// The other verifiers' records received (also in `received-records/`).
@@ -774,6 +779,8 @@ pub async fn run_verifier(
     v.report.net_bytes_out = snap.bytes_out;
     v.report.net_dropped_rate_limited = snap.dropped_rate_limited;
     v.report.net_dropped_queue_full = snap.dropped_queue_full;
+    v.report.cpu_ms = crate::governor::process_cpu_ms();
+    (v.report.ct_http_bytes, v.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
     let _ = files::write_json(&v.s.state_dir.join("verifier-report.json"), &v.report);
     net.shutdown().await;
     Ok(v.report)

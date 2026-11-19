@@ -4,6 +4,7 @@
 
 mod anchor_cmd;
 mod ct_cmd;
+mod ct_evaluate;
 mod ct_watch;
 mod demo;
 #[cfg(feature = "dev-tools")]

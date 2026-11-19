@@ -8,6 +8,9 @@
   - `scripts/ct-eval.sh` runs it for a fixed window, takes hourly phishunt snapshots and resumes after a reboot.
   - The method, fixed before any results, is in [docs/ct-evaluation.md](docs/ct-evaluation.md).
 - `cybermesh_ct::names::certificate_dns_names`: names with their wildcard flag (`certificate_names` is unchanged).
+- `cybermesh ct evaluate` scores a run against confirmed phishing. It reports recall at three flag levels with Wilson intervals, lead time per source, a precision floor, a stratified false-alarm sample and a comparison with phishunt. `scripts/ct-eval.sh history` exports the OpenPhish git history as snapshots.
+- `scripts/ct-cost.sh` measures the cost of decentralisation by scanning one fixed range of a live log in one process (`ct watch --end-tile`) and with a local network. The first results are in [docs/ct-evaluation.md](docs/ct-evaluation.md) §8.2: about 2.45× the download and 5.4× the CPU of one process, with every task verified by two organisations.
+- Coordinator and verifier reports and worker status now include `cpu_ms`, `ct_http_bytes` and `ct_http_requests`.
 
 ### Fixed
 - `cybermesh ct report` counted a certificate twice for a brand named twice in one assessment.

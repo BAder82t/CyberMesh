@@ -7,7 +7,9 @@
 #   scripts/ct-eval.sh stop     [RUN_DIR]   stop both processes cleanly
 #   scripts/ct-eval.sh status   [RUN_DIR]   processes, progress, disk use, recent events
 #   scripts/ct-eval.sh history  [RUN_DIR]   clone the feeds' public git histories (OpenPhish,
-#                                           phishunt mirror) for the analysis
+#                                           phishunt mirror) and export each OpenPhish commit
+#                                           since a day before the run as a snapshot for
+#                                           `cybermesh ct evaluate`
 #
 # Environment:
 #   CT_EVAL_LOGS  space-separated log ids (default: Willow, Sycamore, ParcelYard: about 13 GB a
@@ -44,6 +46,7 @@ alive() {
 }
 now() { date -u +%s; }
 utc() { date -u -r "$1" 2>/dev/null || date -u -d "@$1"; }
+stamp() { date -u -r "$1" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "@$1" +%Y%m%dT%H%M%SZ; }
 
 fetch_feeds() {
   local ts tmp
@@ -158,6 +161,19 @@ for (l,k),n in sorted(c.items()): print(f"  {l} {k}: {n}")' "$RUN/events.jsonl"
       if [ -d "$dst" ]; then git -C "$dst" fetch -q origin '+refs/heads/*:refs/heads/*'; else git clone -q --bare "https://github.com/$r.git" "$dst"; fi
       echo "$r: $(git -C "$dst" rev-list --count HEAD) commits"
     done
+    start=$(python3 -I -c 'import json,sys; print(min(json.loads(l)["started_ms"] for l in open(sys.argv[1]) if l.strip()) // 1000)' "$RUN/runs.jsonl")
+    since=$(( start - 86400 ))
+    mkdir -p "$RUN/feeds/openphish"
+    n=0
+    while read -r sha ct; do
+      [ "$ct" -ge "$since" ] || continue
+      f="$RUN/feeds/openphish/$(stamp "$ct").txt.gz"
+      if [ ! -s "$f" ]; then
+        git -C "$RUN/feeds/public_feed.git" show "$sha:feed.txt" | gzip > "$f.tmp" && mv "$f.tmp" "$f"
+      fi
+      n=$((n + 1))
+    done < <(git -C "$RUN/feeds/public_feed.git" log --format='%H %ct' HEAD -- feed.txt)
+    echo "openphish: $n snapshots since $(utc "$since")"
     ;;
   *)
     echo "usage: $0 start|stop|status|history [RUN_DIR]" >&2; exit 2 ;;

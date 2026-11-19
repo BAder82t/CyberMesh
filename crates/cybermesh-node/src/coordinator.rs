@@ -143,6 +143,11 @@ pub struct CoordinatorReport {
     pub net_bytes_out: u64,
     pub net_dropped_rate_limited: u64,
     pub net_dropped_queue_full: u64,
+    /// CPU time of this process (ms), and what it received from CT logs (bytes after
+    /// decompression, requests), for cost comparisons.
+    pub cpu_ms: u64,
+    pub ct_http_bytes: u64,
+    pub ct_http_requests: u64,
     pub ct_tiles_verified: u64,
     pub ct_entries_verified: u64,
     pub ct_matches: u64,
@@ -1583,6 +1588,8 @@ pub async fn run_coordinator(
     c.report.net_bytes_out = snap.bytes_out;
     c.report.net_dropped_rate_limited = snap.dropped_rate_limited;
     c.report.net_dropped_queue_full = snap.dropped_queue_full;
+    c.report.cpu_ms = crate::governor::process_cpu_ms();
+    (c.report.ct_http_bytes, c.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
     let _ = files::write_json(&c.s.state_dir.join("coordinator-report.json"), &c.report);
     net.shutdown().await;
     Ok(c.report)
