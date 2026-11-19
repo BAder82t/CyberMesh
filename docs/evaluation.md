@@ -155,7 +155,7 @@ Regression tests: `sustained_load_settles_every_batch`, `unassignable_batches_ar
 
 ## 5a. Certificate Transparency monitoring
 
-[ct-monitoring.md](ct-monitoring.md) holds the measurements on real logs. In summary:
+[ct-monitoring.md](ct-monitoring.md) holds the measurements on real logs. A week-long live evaluation of detection lead time, recall and false alarms against independently confirmed phishing is in progress; its method is in [ct-evaluation.md](ct-evaluation.md). In summary:
 
 - **Parsing.** 15,360 real certificates and precertificates parsed with 0 failures, and **60 of 60** tile Merkle roots matched the logs' own hash tiles.
 - **Cost.** 70–105 µs of CPU and about 645 B on the wire (gzip) per entry.

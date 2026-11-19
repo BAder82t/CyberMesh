@@ -32,6 +32,8 @@ cybermesh-network.workspace = true
 cybermesh-node.workspace = true
 cybermesh-protocol.workspace = true
 cybermesh-verifier.workspace = true
+flate2.workspace = true
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tiny_http.workspace = true
@@ -42,6 +44,7 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 # Test-only: deterministic test networks (not unified into the shipped binary).
 cybermesh-protocol = { workspace = true, features = ["testkit"] }
+cybermesh-ct = { workspace = true, features = ["http", "mock"] }
 tempfile.workspace = true
 
 [lints]

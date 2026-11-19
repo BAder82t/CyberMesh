@@ -46,6 +46,9 @@ pub enum CtCmd {
         #[arg(long)]
         json_out: Option<PathBuf>,
     },
+    /// Follow live logs in one process and record every name and brand signal, for
+    /// evaluations (see `ct_watch`). Not distributed; tiles are verified and proven.
+    Watch(crate::ct_watch::WatchArgs),
     /// Investigation report (per protected brand) from verified CT records, for security
     /// teams. Includes brand signals below the warning threshold.
     Report {
@@ -62,7 +65,32 @@ pub enum CtCmd {
     },
 }
 
-fn log_info(evidence: &EvidenceBundle, log: &str) -> Result<cybermesh_analysis::CtLogInfo> {
+/// The protected brands named in an assessment's brand-signal findings (their detail ends
+/// with `: brand, ...`, a lookalike written as `token~brand`).
+pub(crate) fn brand_names(a: &cybermesh_protocol::DomainAssessment) -> Vec<String> {
+    let mut out: Vec<String> = a
+        .findings
+        .iter()
+        .filter(|f| cybermesh_ct::is_brand_signal(f.code))
+        .flat_map(|f| {
+            f.detail
+                .rsplit(": ")
+                .next()
+                .unwrap_or("")
+                .split(", ")
+                .map(|b| b.split('~').next_back().unwrap_or(b).to_owned())
+        })
+        .filter(|b| !b.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+pub(crate) fn log_info(
+    evidence: &EvidenceBundle,
+    log: &str,
+) -> Result<cybermesh_analysis::CtLogInfo> {
     evidence
         .ct_logs
         .iter()
@@ -180,6 +208,7 @@ pub fn run(c: CtCmd) -> Result<()> {
             }
             Ok(())
         }
+        CtCmd::Watch(a) => crate::ct_watch::run(&a),
         CtCmd::FollowReset { state } => {
             let mut s: cybermesh_node::ct_follow::FollowState = util::read_json(&state)?;
             let old = s.head.take();
@@ -229,19 +258,7 @@ pub fn run(c: CtCmd) -> Result<()> {
                 for mt in &ct.matches {
                     // Attribute to the brands named in the verifier's own findings.
                     let a = engine.assess(&mt.name)?;
-                    let brands: Vec<String> = a
-                        .findings
-                        .iter()
-                        .filter(|f| cybermesh_ct::is_brand_signal(f.code))
-                        .flat_map(|f| {
-                            f.detail
-                                .rsplit(": ")
-                                .next()
-                                .unwrap_or("")
-                                .split(", ")
-                                .map(|b| b.split('~').next_back().unwrap_or(b).to_owned())
-                        })
-                        .collect();
+                    let brands = brand_names(&a);
                     for b in if brands.is_empty() {
                         vec!["(unattributed)".to_owned()]
                     } else {
