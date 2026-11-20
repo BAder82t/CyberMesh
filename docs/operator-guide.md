@@ -76,7 +76,7 @@ holds and can be made to do. For the pilot itself, see [pilot.md](pilot.md).
    max_queue = 16
    active_hours_utc = ["18:00-07:00"]  # e.g. outside office hours
    ```
-   *Note:* `/dns4/` bootstrap addresses need DNS support in the transport. The MVP build supports `/ip4/` and `/ip6/` only, and `/dns4/` is on the roadmap. Use IP addresses for now.
+   *Note:* bootstrap addresses can name a peer by host name (`/dns4/`, `/dns6/` or `/dns/`), resolved with the system resolver, or by IP (`/ip4/`, `/ip6/`). Always include the `/p2p/<peer id>` part: it is what authenticates the peer, so a wrong DNS answer can only make the connection fail.
 6. **Run under the hardened systemd unit** in [`deploy/systemd/cybermesh-worker.service`](../deploy/systemd/cybermesh-worker.service). It adds OS-enforced limits: `CPUQuota=2%`, `MemoryMax=200M`, a read-only system, no capabilities, and a system-call filter.
    ```bash
    sudo cp deploy/systemd/cybermesh-worker.service /etc/systemd/system/

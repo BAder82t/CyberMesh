@@ -48,7 +48,7 @@ It is compatible with v0.3.0.
   - Witness cosignatures on checkpoints (C2SP `tlog-witness`), to detect split views. Checkpoint signatures and tile-root proofs are done.
   - RFC 6962 logs.
   - Owner-maintained brand infrastructure lists, needed before CT warnings can be enabled widely.
-- **Network.** Enable gossipsub peer scoring (invalid-message penalties), plus `/dns4` bootstrap and Kademlia discovery for more than 20 nodes.
+- **Network.** Enable gossipsub peer scoring (invalid-message penalties), and Kademlia discovery for more than 20 nodes. (Host names in peer addresses are done.)
 - **Witnessed transparency log.** Organisations co-sign log checkpoints using the C2SP `tlog-checkpoint` and `tlog-cosignature` formats. Consistency is checked before co-signing.
 - **Build integrity.** Reproducible release binaries (checked by building every target twice), SLSA Build Level 2 provenance attestations and a published verification procedure are in place: see [build-integrity.md](build-integrity.md). Still to do: SLSA Build Level 3 (an isolated reusable workflow), Apple notarisation, Windows binaries.
 - **Test OpenTimestamps compatibility** against the reference `ots` client and the public calendars, which is a manual and opt-in step.
