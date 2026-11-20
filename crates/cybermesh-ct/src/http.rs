@@ -18,7 +18,8 @@ static BYTES: AtomicU64 = AtomicU64::new(0);
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
 
 /// Bytes received (after decompression) and requests made by every [`HttpTileSource`] in
-/// this process, for resource reports.
+/// this process, for resource reports. Requests that fail are counted too. Several nodes in
+/// one process (as in tests) share these totals.
 #[must_use]
 pub fn transfer_totals() -> (u64, u64) {
     (

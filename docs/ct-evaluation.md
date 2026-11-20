@@ -105,6 +105,8 @@ The question is what independent verification by several organisations costs in 
   - Let's Encrypt certificates are covered through Willow and Sycamore, but certificates from other CAs only in part.
 - **Brands.** Only the 37 brands in the evidence are protected. Phishing against other brands counts against recall.
 - **Length.** One week of data.
+- **Wildcards and apex hosts.** The stored names do not distinguish a certificate for `*.example.com` alone from one that also names `example.com` itself. A phishing host at a domain's apex can therefore count as visible, and as flagged, from a wildcard-only certificate that does not cover it. This biases observability and recall upwards for apex hosts. Wildcard-only certificates are a minority, and the bias cannot be removed from this run's data. (Recorded on 2026-11-19, from an internal review, before any detection result was examined.)
+- **Windows and burn-in.** The 24-hour burn-in applies to any window, including the test window of §5, whose certificates start at its own start.
 - **Data terms.**
   - The OpenPhish community feed is for non-commercial use only.
   - Raw feed data and certificate names stay out of the repository (`eval-data/` is git-ignored).
@@ -124,28 +126,34 @@ The question is what independent verification by several organisations costs in 
   - Every tile goes to 2 workers of different organisations, 8 tiles per task.
   - Each verifier rescans 2 tiles per task.
   - Each worker's 1 % CPU budget is enforced.
-- Both setups verify the log's checkpoint and prove every tile root they rely on. Downloads are counted after decompression.
+- Both setups verify the log's checkpoint and prove every tile root they rely on.
+- Downloads are what the HTTP client received, after decompression, on both sides.
+- Workers are stopped cleanly before their final figures are read.
 
 | | One process | CyberMesh network (7 processes) | Ratio |
 |---|---|---|---|
-| CPU | 1.4 s (43 µs per certificate) | 7.5 s (229 µs per certificate) | 5.4× |
-| Downloaded from the log | 48.8 MB | 119.5 MB | 2.45× |
-| Requests to the log | 133 | 480 | 3.6× |
-| Peer-to-peer traffic | — | 0.69 MB (21 B per certificate) | — |
-| Wall time | 5 s | 132 s | 26× |
+| CPU | 1.3 s (39 µs per certificate) | 4.4 s (135 µs per certificate) | 3.5× |
+| Downloaded from the log | 48.6 MB | 119.6 MB | 2.46× |
+| Requests to the log | 134 | 493 | 3.7× |
+| Peer-to-peer traffic | — | 0.82 MB (25 B per certificate) | — |
+| Wall time | 4 s | 100 s | 25× |
 | Tasks verified | — | 16 of 16, by both verifiers; 0 faults | — |
 
 **By role.**
-- The 5 workers used 5.8 s of CPU and downloaded 97.6 MB, which is 2.0×: every tile is scanned twice.
-- The coordinator and the independent verifier each downloaded about 11 MB, 22 % of what one scanner downloads, and used about 0.9 s of CPU each. The coordinator rescanned 29 of the 128 tiles.
+- The 5 workers used 3.3 s of CPU and downloaded 97.1 MB, which is 2.0×: every tile is scanned twice.
+- The coordinator and the independent verifier each downloaded about 11 MB, 23 % of what one scanner downloads, and used about 0.5 s of CPU each. The coordinator rescanned 28 of the 128 tiles.
+
+**How stable these numbers are.**
+- The download ratio is stable: 2.45× in an earlier run of the same size.
+- The CPU ratio is not. The earlier run, made while the laptop was compiling, gave 5.4× (7.5 s against 1.4 s). On a machine with fast and slow cores, a busy system moves processes to the slower ones, which raises CPU time for the same work. The table shows the run on a quiet machine.
 
 **What it means.**
-- **Download grows with volume.** It is replication (2×) plus the verifiers' spot checks (about 0.45×). Verifying costs about a fifth of scanning, which is the property the CT design depends on.
-- **CPU.** The 5.4× includes fixed costs that a short run makes large: each process loads the engine and evidence (0.15 s each, about 1 s for the 7 processes) and exchanges heartbeats for the whole run. The part that grows with volume is the double scan plus the spot checks, about 2.5× by the components above. That is an estimate, not a long-run measurement.
-- **Wall time** is slow by design: workers are capped at 1 % of a core. Throughput comes from the number of workers. At 43 µs per certificate, the three logs of §1 (about 800 new entries a second) need about 0.035 of a core in one process, or about 0.07 of a core of worker CPU with replication 2, so at least 7 workers at 1 %.
+- **Download grows with volume.** It is replication (2×) plus the verifiers' spot checks (about 0.46×). Verifying costs about a fifth of scanning, which is the property the CT design depends on.
+- **CPU.** The 3.5× includes fixed costs that a short run makes large: each process loads the engine and evidence (0.15 s each, about 1 s for the 7 processes) and exchanges heartbeats for the whole run. The part that grows with volume is the double scan plus the spot checks, about 2.5× by the components above. A long run should come closer to that, but this has not been measured.
+- **Wall time** is slow by design: workers are capped at 1 % of a core. Throughput comes from the number of workers. At about 40 µs per certificate, the three logs of §1 (about 800 new entries a second) need about 0.03 of a core in one process, or about 0.07 of a core of worker CPU with replication 2, so at least 7 workers at 1 %.
 - **Peer-to-peer traffic** is negligible next to the log download.
 
-**What the extra cost buys.** It doesn't buy capacity: one small server does the job. It buys verification by a second, independent organisation of every task, and releases that no single operator can produce. The price is about 2.5× the download and roughly 2.5–5× the CPU of one server.
+**What the extra cost buys.** It doesn't buy capacity: one small server does the job. It buys verification by a second, independent organisation of every task, and releases that no single operator can produce. The price is about 2.5× the download and 2.5–3.5× the CPU of one server.
 
 **Worst case.** With 2 tiles per task, as in the local demo, every verifier rescans every tile (64 tiles: 3.5× the download, 4.5× the CPU). Task size is the knob that sets the cost of verification.
 

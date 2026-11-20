@@ -9,10 +9,24 @@
   - The method, fixed before any results, is in [docs/ct-evaluation.md](docs/ct-evaluation.md).
 - `cybermesh_ct::names::certificate_dns_names`: names with their wildcard flag (`certificate_names` is unchanged).
 - `cybermesh ct evaluate` scores a run against confirmed phishing. It reports recall at three flag levels with Wilson intervals, lead time per source, a precision floor, a stratified false-alarm sample and a comparison with phishunt. `scripts/ct-eval.sh history` exports the OpenPhish git history as snapshots.
-- `scripts/ct-cost.sh` measures the cost of decentralisation by scanning one fixed range of a live log in one process (`ct watch --end-tile`) and with a local network. The first results are in [docs/ct-evaluation.md](docs/ct-evaluation.md) §8.2: about 2.45× the download and 5.4× the CPU of one process, with every task verified by two organisations.
+- `scripts/ct-cost.sh` measures the cost of decentralisation by scanning one fixed range of a live log in one process (`ct watch --end-tile`) and with a local network. The first results are in [docs/ct-evaluation.md](docs/ct-evaluation.md) §8.2: about 2.5× the download and 3.5× the CPU of one process (5.4× on a busier machine), with every task verified by two organisations.
 - Coordinator and verifier reports and worker status now include `cpu_ms`, `ct_http_bytes` and `ct_http_requests`.
 
 ### Fixed
+- **Review of `ct evaluate` before any result was computed:**
+  - The phishunt comparison uses CyberMesh's log time, as pre-registered. Scan time is reported separately.
+  - Each flag level keeps its own earliest time.
+  - Downtime includes time before a log's first poll and after its last, clipped to the window.
+  - Unreadable lines and truncated segments are counted instead of dropped or fatal.
+  - Truncated feed snapshots drop their partial last line, and interrupted exports (`*.tmp`) are ignored.
+  - Parser fixes: the `+00` zone, real month lengths, a scheme only at the start of a URL, the UTF-8 BOM.
+  - New: `--rescore-evidence` re-assesses the stored names with a revised engine (§5), reading segments in parallel (`--threads`), and the "caught by CyberMesh only, phishunt only, both, neither" table.
+  - Brands and codes are stored compactly.
+- **`scripts/ct-cost.sh`:**
+  - Every patch of the generated coordinator config is checked.
+  - Workers are stopped cleanly, so their final figures are read.
+  - The one-process side uses the same HTTP-level counters as the network.
+- **`scripts/ct-eval.sh history`** fails loudly on a bad export and no longer fetches the unused phishunt mirror.
 - `cybermesh ct report` counted a certificate twice for a brand named twice in one assessment.
 
 ## v0.3.0 (2026-11-18, research pre-release)
