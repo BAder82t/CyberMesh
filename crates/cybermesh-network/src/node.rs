@@ -240,6 +240,13 @@ fn build_swarm(keypair: identity::Keypair, cfg: &NetConfig) -> Result<Swarm<Beha
             yamux::Config::default,
         )
         .map_err(|e| NetError::Setup(e.to_string()))?
+        // `/dns4`, `/dns6` and `/dns` peer addresses, resolved with the system resolver
+        // configuration. Only addresses in the node's own configuration are dialled (gossip
+        // never makes a node dial an address a peer supplied), and every bootstrap address
+        // names the peer id that the Noise handshake authenticates, so a spoofed answer can
+        // only make a dial fail.
+        .with_dns()
+        .map_err(|e| NetError::Setup(e.to_string()))?
         .with_behaviour(|key| {
             let gs_config = gossipsub::ConfigBuilder::default()
                 .heartbeat_interval(heartbeat)

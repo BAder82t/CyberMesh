@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Host names in peer addresses.** Bootstrap addresses can name a peer by host name (`/dns4/`, `/dns6/`, `/dns/`), resolved with the system resolver. Only a node's own configured addresses are ever dialled, and the peer id in the address is authenticated by the Noise handshake, so a spoofed DNS answer can only make the dial fail (threat model T27). This uses libp2p's `dns` feature, which adds `hickory-resolver`.
 - **Pilot kit for participating organisations.**
   - [docs/pilot.md](docs/pilot.md): the invitation, covering goals, roles, resources, timeline and what participants accept.
   - [docs/node-risk.md](docs/node-risk.md): a page for security teams on what a node contacts, holds and can be made to do, and how to stop it.

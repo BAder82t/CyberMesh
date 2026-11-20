@@ -40,9 +40,13 @@ Code: `crates/cybermesh-network/src/node.rs`. Tests: `revoked_peer_is_disconnect
 
 Code: `crates/cybermesh-ct/src/http.rs`. A firewall rule allowing outbound HTTPS only to those log hosts is a reasonable extra control. Each log's host is in `ct-logs.json` in the evidence bundle.
 
-**Nothing else.** A node makes no DNS lookups for analysed domains and has no update channel, no telemetry and no other outbound traffic.
-- The optional OpenTimestamps anchoring is run by a release signer on demand, not by nodes.
-- The MVP transport takes IP addresses only, not host names.
+**DNS.** A node resolves only two kinds of host name, both through the system resolver, and never the domains it analyses:
+- peer host names written in its own configuration (`/dns4/...` bootstrap addresses);
+- the pinned CT log hosts, when it scans CT.
+
+A spoofed answer for a peer's name can only make that connection fail: the address names the peer id, which the encrypted handshake authenticates (threat model T27).
+
+**Nothing else.** A node has no update channel, no telemetry and no other outbound traffic. The optional OpenTimestamps anchoring is run by a release signer on demand, not by nodes.
 
 ## What a participant could do to your node
 

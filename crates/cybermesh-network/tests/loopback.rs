@@ -86,6 +86,65 @@ async fn allowlisted_peers_exchange_messages() {
     assert!(b.stats.snapshot().messages_in >= 1);
 }
 
+/// A bootstrap address may name the peer by host name (`/dns4/...`); `localhost` resolves
+/// through the hosts file, so this needs no network access.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn peers_connect_through_a_dns_address() {
+    let (ka, kb) = (key(5), key(6));
+    let (pa, pb) = (ka.public().to_peer_id(), kb.public().to_peer_id());
+    let a = spawn(ka, cfg(vec![pb], vec![])).unwrap();
+    let ip = listening_addr(&a).await;
+    let port = ip
+        .iter()
+        .find_map(|p| match p {
+            Protocol::Tcp(port) => Some(port),
+            _ => None,
+        })
+        .unwrap();
+    let dns: Multiaddr = format!("/dns4/localhost/tcp/{port}/p2p/{pa}")
+        .parse()
+        .unwrap();
+    let b = spawn(kb, cfg(vec![pa], vec![dns])).unwrap();
+
+    publish_until_ok(&a, b"hello by name".to_vec()).await;
+    let m = next_message(&b, Duration::from_secs(10))
+        .await
+        .expect("delivery over a /dns4 address");
+    assert_eq!(m.data, b"hello by name");
+    assert_eq!(m.author, Some(pa));
+}
+
+/// A host name that resolves to a peer with a different identity is refused by the Noise
+/// handshake: DNS can only make a dial fail, never substitute a peer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dns_address_cannot_substitute_another_peer() {
+    let (ka, kb, kc) = (key(7), key(8), key(9));
+    let (pa, pb, pc) = (
+        ka.public().to_peer_id(),
+        kb.public().to_peer_id(),
+        kc.public().to_peer_id(),
+    );
+    // C listens; B is told that `localhost:<C's port>` is A.
+    let c = spawn(kc, cfg(vec![pb], vec![])).unwrap();
+    let ip = listening_addr(&c).await;
+    let port = ip
+        .iter()
+        .find_map(|p| match p {
+            Protocol::Tcp(port) => Some(port),
+            _ => None,
+        })
+        .unwrap();
+    let wrong: Multiaddr = format!("/dns4/localhost/tcp/{port}/p2p/{pa}")
+        .parse()
+        .unwrap();
+    // B would accept C as a peer: only the peer id pinned in the address keeps it out.
+    let b = spawn(kb, cfg(vec![pa, pc], vec![wrong])).unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    // B never connects to C under A's name, so C's message never reaches B.
+    let _ = c.publish(TOPIC, b"impostor".to_vec()).await;
+    assert!(next_message(&b, Duration::from_secs(2)).await.is_none());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unenrolled_peer_cannot_connect_or_inject() {
     let (ka, kc) = (key(3), key(9));
