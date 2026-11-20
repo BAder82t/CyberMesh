@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `cybermesh evidence suggest-owned-domains` finds domains that brand owners run themselves among the names a `ct watch` run flagged, so they can be added to the brand's `legitimate` list.
+  - It uses the shared-certificate rule of CT evaluation revision 1, counting each certificate once however often it was logged or reissued.
+  - It never suggests a hosting platform or a multi-tenant service.
+  - It reports input it could not read and refuses a run without name segments.
+  - It only reports. `--write-brands` writes an extended brand list for review, and outputs inside the evidence or run directory are refused.
+
+  See [docs/ct-monitoring.md](docs/ct-monitoring.md) §7.
+
+### Changed
+- **Demo evidence** (sources dated 2026-11-20).
+  - `brands.json` adds 13 brand-owned domains that the command found in days 1–2 of the CT evaluation: six for Amazon (including `amazonaws.com.cn` and `amazon.dev`), three for Microsoft (including `microsoft-int.com`), two for Netflix, `jpmchase.net` for Chase and `cpdomaintest.in` for Adobe.
+  - `hosting-platforms.txt` adds `onmicrosoft.com`, `nip.io` and `sslip.io`, where names belong to customers.
+  - The bundle's pins change, so nodes that share tasks need the same bundle. The running CT evaluation is unaffected: it is scored with the bundle it started with and with the frozen revision 1.
+
+### Fixed
+- `docs/ct-evaluation.md` §5.1 gave log-entry counts as certificate counts for the revision 1 domains. A correction note gives the distinct certificates, from 1 to 10 per domain. The rule needs one, so the selection is unchanged.
+
 ## v0.3.2 (2026-11-20, research pre-release)
 
 Compatible with v0.3.x: the wire protocol and evidence formats are unchanged. Host names in peer addresses are a node-local configuration option, and nodes on v0.3.1 still interoperate but need IP addresses. **Not production-ready; no external audit.**

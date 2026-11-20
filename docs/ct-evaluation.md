@@ -107,6 +107,16 @@ The run records engine 0.4.0 unchanged. Improvements, for example lists of brand
 | `netflix.net` | `netflix.com` (7) |
 | `jpmchase.net` | `jpmchase.com` (123), `jpmorgan.com` (29), `chase.com` (3) |
 
+*Correction (2026-11-20, after the freeze; the selection is unchanged).* The counts in parentheses are log entries, not distinct certificates. A certificate is logged as a precertificate and as a certificate, in several logs, and is often reissued with the same names. `cybermesh evidence suggest-owned-domains` ([ct-monitoring.md](ct-monitoring.md) §7) counts each set of names once, and groups names by the Public Suffix List as the engine does. With that counting, the certificates shared with the brand's existing domains are:
+- `microsoft-int.com`: 1, logged 56 times over 30 hours;
+- `amazonaws.com.cn`: 2;
+- `amazonwebservices.com.cn`: 6, with `amazonaws.com.cn`;
+- `amazon.dev`: 7;
+- `netflix.net`: 2;
+- `jpmchase.net`: 10. `jpmchase.com` is not on the brand's list.
+
+The rule needs one shared certificate, so the same six domains qualify.
+
 **Rejected.** These candidates did not meet the rule and stay flagged:
 - `amazonaws.eu` and `amazonwebservices.eu`, which share certificates only with each other;
 - `amazongamelift.com`, `microsoft-falcon.net` and `ppe-microsoft-falcon.net`, which share certificates with no other domain.
@@ -117,10 +127,11 @@ The run records engine 0.4.0 unchanged. Improvements, for example lists of brand
 
 Adding brands could have gained at most 5 hosts, chosen from the very examples being scored, at an unknown false-alarm cost from short tokens. They were therefore left out.
 
-**Frozen evidence.** The brand list is [`evaluation-results/ct-eval-rev1-brands.json`](evaluation-results/ct-eval-rev1-brands.json): the shipped list (`datasets/demo/evidence/brands.json`, SHA-256 `f174d379…5ec0c`) with the six domains added.
+**Frozen evidence.** The brand list is [`evaluation-results/ct-eval-rev1-brands.json`](evaluation-results/ct-eval-rev1-brands.json): the shipped list (`datasets/demo/evidence/brands.json` as released in v0.3.2, SHA-256 `f174d379…5ec0c`) with the six domains added.
 - File SHA-256: `3a43b4f0a460d91b7690304c27f02818193e556e0aaac22dcf54a177e843a217`.
 - Pin in the evidence bundle: `sha256:0b2ede82bd042d06fc0f5759da7e3bead1940c7dfa150ce36270fc98864c46e7`.
 - The other sources of the bundle are those of the shipped run.
+- Later changes to the repository's brand list do not affect this evaluation. The run is scored with the bundle it started with and with this frozen one.
 
 **Effect on the dev window**, re-scored offline with `ct evaluate --rescore-evidence`:
 

@@ -5,7 +5,8 @@
       "adobe"
     ],
     "legitimate": [
-      "adobe.com"
+      "adobe.com",
+      "cpdomaintest.in"
     ]
   },
   {
@@ -14,6 +15,7 @@
       "amazon"
     ],
     "legitimate": [
+      "a2z.com",
       "amazon.ca",
       "amazon.co.jp",
       "amazon.co.uk",
@@ -22,6 +24,7 @@
       "amazon.com.br",
       "amazon.com.mx",
       "amazon.de",
+      "amazon.dev",
       "amazon.es",
       "amazon.fr",
       "amazon.in",
@@ -29,7 +32,11 @@
       "amazon.nl",
       "amazon.pl",
       "amazon.se",
-      "amazonaws.com"
+      "amazonaws.com",
+      "amazonaws.com.cn",
+      "amazonoperations.app",
+      "amazonwebservices.com.cn",
+      "aws.dev"
     ]
   },
   {
@@ -82,6 +89,7 @@
     ],
     "legitimate": [
       "chase.com",
+      "jpmchase.net",
       "jpmorgan.com",
       "jpmorganchase.com"
     ]
@@ -253,7 +261,10 @@
       "azure.com",
       "hotmail.com",
       "live.com",
+      "microsoft-int.com",
+      "microsoft-ppe.com",
       "microsoft.com",
+      "microsoft.us",
       "microsoftonline.com",
       "msn.com",
       "office.com",
@@ -270,7 +281,9 @@
       "netflix"
     ],
     "legitimate": [
-      "netflix.com"
+      "netflix.com",
+      "netflix.net",
+      "netflixstudios.com"
     ]
   },
   {
