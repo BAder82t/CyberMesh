@@ -20,7 +20,7 @@ domain names, and the signed release is the delivery format that browsers consum
 system, verification and distribution layers are general; further task types are planned on
 the [roadmap](docs/roadmap.md).
 
-**Second application (v0.2.0): Certificate Transparency monitoring.** Workers that opt in split public CT logs into shards and scan every newly logged certificate for brand lookalikes. The network verifies their work against the logs' own Merkle hashes, authenticated by each log's signed checkpoint,, and the output is an investigation report for security teams. Following every public tiled CT log takes about 243 million certificate entries a day: roughly 20–30 workers at a 1 % CPU budget, or one dedicated server. This is the first workload where pooling small donated slices is a natural fit. See [docs/ct-monitoring.md](docs/ct-monitoring.md).
+**Second application (v0.2.0): Certificate Transparency monitoring.** Workers that opt in split public CT logs into shards and scan every newly logged certificate for brand lookalikes. The network verifies their work against the logs' own Merkle hashes, authenticated by each log's signed checkpoint, and the output is an investigation report for security teams. Following every public tiled CT log takes about 243 million certificate entries a day: roughly 20–30 workers at a 1 % CPU budget, or one dedicated server. This is the first workload where pooling small donated slices is a natural fit. See [docs/ct-monitoring.md](docs/ct-monitoring.md).
 
 > **Status: research MVP (v0.3.1). Not production-ready.** The evaluation in [docs/evaluation.md](docs/evaluation.md) shows two things.
 >
@@ -66,7 +66,9 @@ flowchart LR
   classDef w fill:#eef,stroke:#88a
 ```
 
-Details: [docs/architecture.md](docs/architecture.md) · protocol: [docs/protocol.md](docs/protocol.md) · threat model: [docs/threat-model.md](docs/threat-model.md) · privacy: [docs/privacy.md](docs/privacy.md) · anchoring: [docs/blockchain.md](docs/blockchain.md)
+Details: [docs/architecture.md](docs/architecture.md) · protocol: [docs/protocol.md](docs/protocol.md) · threat model: [docs/threat-model.md](docs/threat-model.md) · privacy: [docs/privacy.md](docs/privacy.md) · anchoring: [docs/blockchain.md](docs/blockchain.md) · verifying binaries: [docs/build-integrity.md](docs/build-integrity.md)
+
+**Organisations interested in running a node:** see the [pilot invitation](docs/pilot.md), the [operator guide](docs/operator-guide.md) and, for your security team, [what running a node exposes you to](docs/node-risk.md).
 
 ## Quick start
 

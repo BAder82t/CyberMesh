@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Pilot kit for participating organisations.**
+  - [docs/pilot.md](docs/pilot.md): the invitation, covering goals, roles, resources, timeline and what participants accept.
+  - [docs/node-risk.md](docs/node-risk.md): a page for security teams on what a node contacts, holds and can be made to do, and how to stop it.
+  - `deploy/systemd/cybermesh-verifier.service`: a hardened unit for independent verifiers.
+  - The operator guide now starts from a verified release binary.
+
+### Fixed
+- The Linux binaries need glibc 2.34 or later (Ubuntu 22.04 included), not 2.36 as `docs/build-integrity.md` said.
+
 ## v0.3.1 (2026-11-20, research pre-release)
 
 Compatible with v0.3.0: the wire protocol and evidence formats are unchanged, and resource reports only gain fields. It is the first release whose binaries are built reproducibly and attested in CI. **Not production-ready; no external audit.**

@@ -1,0 +1,64 @@
+# Hardened systemd unit for an independent CyberMesh verifier (Linux).
+# A verifier recomputes the network's tasks and signs its own verification records. It runs
+# no one else's code, and its CPU use is a fraction of the workers' combined: about 20-30 us
+# per domain, plus a few re-scanned tiles per CT task. CPUQuota leaves headroom for bursts
+# when many tasks settle at once. The sandbox gives write access only to its state directory.
+[Unit]
+Description=CyberMesh independent verifier
+Documentation=https://github.com/BAder82t/CyberMesh/blob/main/docs/operator-guide.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cybermesh
+Group=cybermesh
+ExecStart=/usr/local/bin/cybermesh verifier run --config /etc/cybermesh/verifier.toml
+Restart=on-failure
+RestartSec=10s
+
+# Resource limits (cgroup v2)
+CPUQuota=25%
+CPUWeight=10
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=64
+
+# Filesystem sandbox: records, received records and reports live in the state directory.
+StateDirectory=cybermesh-verifier
+ReadOnlyPaths=/etc/cybermesh
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+
+# Privileges
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LimitNOFILE=1024
+PrivateUsers=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,9 @@
 This guide is for an organisation that wants to contribute a worker to a CyberMesh network.
 Participation is opt-in and can be paused or stopped at any time.
 
+Before you start, your security team may want [node-risk.md](node-risk.md): what a node contacts,
+holds and can be made to do. For the pilot itself, see [pilot.md](pilot.md).
+
 ## 1. What a worker does and does not do
 
 | Does | Does not |
@@ -15,6 +18,21 @@ Participation is opt-in and can be paused or stopped at any time.
 
 ## 2. Enrolment procedure
 
+0. **Install a verified binary.** Download the binary for your platform and `SHA256SUMS` from
+   the [latest release](https://github.com/BAder82t/CyberMesh/releases), then check the checksum
+   and the signed build provenance before installing it
+   ([build-integrity.md](build-integrity.md)):
+   ```bash
+   V=0.3.1 T=x86_64-unknown-linux-gnu        # or aarch64-unknown-linux-gnu
+   sha256sum --ignore-missing -c SHA256SUMS
+   gh attestation verify "cybermesh-$V-$T" --repo BAder82t/CyberMesh \
+     --signer-workflow BAder82t/CyberMesh/.github/workflows/release.yml
+   sudo install -m 0755 "cybermesh-$V-$T" /usr/local/bin/cybermesh
+   cybermesh --version
+   ```
+   The binaries need glibc 2.34 or later: Debian 12, Ubuntu 22.04, RHEL 9 or newer.
+   `gh attestation verify` needs the GitHub CLI, on any machine. You can also rebuild the
+   binary yourself and compare its hash.
 1. **Generate keys on the worker host.** Private keys never leave the host.
    ```bash
    sudo useradd --system --home /var/lib/cybermesh --shell /usr/sbin/nologin cybermesh
@@ -85,19 +103,20 @@ plus, for CT shards, a few re-scanned tiles. Releases need matching records from
 manifest's `min_verifiers` distinct verifier organisations, so each extra verifier removes
 trust from the coordinator.
 
-1. **Enrol a verifier key.** Generate it with `cybermesh keygen --out verifier.key.json` and
-   send the public key to governance. Governance adds a member with role `verifier` for your
+1. **Enrol a verifier key.** Generate it on the verifier host with
+   `sudo -u cybermesh cybermesh keygen --out /etc/cybermesh/keys/verifier.key.json` and send the
+   public key (`cybermesh key-info`) to governance. Governance adds a member with role `verifier` for your
    operator and, once enough organisations run verifiers, raises `"min_verifiers"` in the
    manifest. Keep at least one more verifier than `min_verifiers` running, or publication
    stops while one is down.
 2. **Configure** `verifier.toml`:
    ```toml
    network_id = "cybermesh-pilot"
-   key = "/etc/cybermesh/verifier.key.json"
+   key = "/etc/cybermesh/keys/verifier.key.json"
    manifest = "/etc/cybermesh/manifest.json"
    governance_root = "/etc/cybermesh/governance-root.json"
-   evidence_dir = "/var/lib/cybermesh/evidence"   # the pinned bundle; must match tasks
-   state_dir = "/var/lib/cybermesh/verifier"
+   evidence_dir = "/etc/cybermesh/evidence"     # the pinned bundle; must match tasks
+   state_dir = "/var/lib/cybermesh-verifier"    # the systemd unit's StateDirectory
    listen = ["/ip4/0.0.0.0/tcp/4200"]
    # Dial the coordinator *and* workers, so no single relay can withhold results from you.
    bootstrap = ["/ip4/198.51.100.10/tcp/4100/p2p/12D3Koo..."]
@@ -109,7 +128,14 @@ trust from the coordinator.
    [ct_policy]              # optional: CT spot checks with your own secret seed
    spot_check_tiles = 2
    ```
-3. **Run** `cybermesh verifier run --config verifier.toml`.
+3. **Run it under the hardened systemd unit** in
+   [`deploy/systemd/cybermesh-verifier.service`](../deploy/systemd/cybermesh-verifier.service). It
+   has the same sandbox as the worker's, with `CPUQuota=25%` and `MemoryMax=512M`:
+   ```bash
+   sudo cp deploy/systemd/cybermesh-verifier.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now cybermesh-verifier
+   ```
+   Or run `cybermesh verifier run --config /etc/cybermesh/verifier.toml` directly.
    - It writes its own signed records to `state_dir/records/`.
    - It publishes them on the network's `records` topic.
    - It stores the other verifiers' records it receives in `state_dir/received-records/`.
@@ -117,7 +143,8 @@ trust from the coordinator.
 4. **Build releases from your own node.** Records are exchanged over the network, so your
    organisation's release signer needs only your node's two directories:
    ```bash
-   cybermesh release build --records state/records/ --records state/received-records/ \
+   cybermesh release build --records /var/lib/cybermesh-verifier/records/ \
+     --records /var/lib/cybermesh-verifier/received-records/ \
      --manifest manifest.json --root governance-root.json --sequence 42 --issued-at "$NOW" --out release.payload
    ```
    - `release build` checks every record again against your current manifest. It skips, and

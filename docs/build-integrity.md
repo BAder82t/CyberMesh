@@ -12,7 +12,7 @@ This covers the *software*. The threat-intelligence releases that CyberMesh node
 
 | File | What it is |
 |---|---|
-| `cybermesh-<version>-x86_64-unknown-linux-gnu` | Linux x86-64, built in `rust:1.98.1-slim-bookworm` pinned by digest (`deploy/docker/Dockerfile`). Needs glibc 2.36 or later: Debian 12, Ubuntu 22.04 or newer. |
+| `cybermesh-<version>-x86_64-unknown-linux-gnu` | Linux x86-64, built in `rust:1.98.1-slim-bookworm` pinned by digest (`deploy/docker/Dockerfile`). Needs glibc 2.34 or later (the newest symbol version it uses): Debian 12, Ubuntu 22.04, RHEL 9 or newer. |
 | `cybermesh-<version>-aarch64-unknown-linux-gnu` | Linux arm64, built in the same image. |
 | `cybermesh-<version>-aarch64-apple-darwin` | macOS on Apple silicon, built on a GitHub macOS 15 runner. Not notarised: Gatekeeper warns on first run. |
 | `cybermesh-sbom.spdx.json` | Software bill of materials (SPDX), generated from the tagged source. |
