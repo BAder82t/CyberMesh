@@ -60,7 +60,7 @@ sha256sum dist/cybermesh-*                                        # compare with
 
 The build runs inside the same pinned image as the release, so the hash should match exactly on any machine.
 
-A macOS binary is rebuilt with `scripts/build-release.sh aarch64-apple-darwin dist` and the 1.98.1 toolchain. Rebuilds from a different checkout path, toolchain location and Cargo home were checked to be byte-identical. A different Xcode or SDK version than the release runner's (GitHub's macOS 15 image) may still give a different binary; that has not been tested.
+A macOS binary is rebuilt with `scripts/build-release.sh aarch64-apple-darwin dist` and the 1.98.1 toolchain. Rebuilds from a different checkout path, toolchain location and Cargo home were checked to be byte-identical. A different Xcode or SDK version, however, does give a different binary. A rebuild of the same sources with Xcode 27.2 did not match the binary built on GitHub's `macos-15-arm64` image, which ships an older Xcode. So check a macOS binary on a Mac with the same Xcode version as that image, or rely on its provenance.
 
 ## What makes the build reproducible
 
