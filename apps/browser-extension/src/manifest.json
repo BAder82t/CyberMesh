@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CyberMesh Phishing Shield",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Warns before you open hosts listed in a signed, offline-verified CyberMesh threat-intelligence release. Never uploads your browsing history.",
   "minimum_chrome_version": "137",
   "background": {
