@@ -151,6 +151,10 @@ pub enum EvidenceCmd {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Suggest domains that brand owners run themselves, from the flags of a `ct watch` run:
+    /// only domains sharing a certificate with a domain the brand already owns. Reports, and
+    /// with `--write-brands` writes an updated brand list for review.
+    SuggestOwnedDomains(crate::owned_domains::SuggestArgs),
 }
 
 pub fn evidence(c: EvidenceCmd) -> Result<()> {
@@ -164,6 +168,12 @@ pub fn evidence(c: EvidenceCmd) -> Result<()> {
             write_json(&p, &m)?;
             EvidenceBundle::load(&dir)?;
             println!("pinned {} sources", m.sources.len());
+            Ok(())
+        }
+        EvidenceCmd::SuggestOwnedDomains(a) => {
+            let rep = crate::owned_domains::run(&a)?;
+            crate::owned_domains::print(&rep);
+            println!("report: {}", a.out.display());
             Ok(())
         }
         EvidenceCmd::Verify { dir } => {

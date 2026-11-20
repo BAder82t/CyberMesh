@@ -5,8 +5,8 @@
       "id": "brands",
       "kind": "brands",
       "file": "brands.json",
-      "sha256": "sha256:f174d37972b5b063e0555210d6f88f76a4177cd8bcb9e8d4bd834d48e5e5ec0c",
-      "version": "2026-11-16",
+      "sha256": "sha256:9b1dfaf43037164235756d6a06e2efbe7d498369e6f96776a72839b3603e169a",
+      "version": "2026-11-20",
       "license": "Apache-2.0",
       "origin": "cybermesh"
     },
@@ -23,8 +23,8 @@
       "id": "hosting-platforms",
       "kind": "hosting-platforms",
       "file": "hosting-platforms.txt",
-      "sha256": "sha256:7e5245a687644b6a354c3b7b1430563544991ee6dcbe2a5216b020882f24b6e8",
-      "version": "2026-11-16",
+      "sha256": "sha256:4b2813f958c0f38f4d6c72221fd29f72ed42c506664ac37d27324c435b1bda14",
+      "version": "2026-11-20",
       "license": "Apache-2.0",
       "origin": "cybermesh"
     },

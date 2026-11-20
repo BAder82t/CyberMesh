@@ -11,6 +11,7 @@ mod demo;
 mod dev;
 mod eval;
 mod keys;
+mod owned_domains;
 mod release_cmd;
 mod serve;
 mod util;

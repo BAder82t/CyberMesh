@@ -163,12 +163,62 @@ publish_warnings = false # investigation report only (recommended)
 
 Worker (`[resources]` in `worker.toml`): `ct_scanning = true` and `ct_fetch_kib_per_sec = 256`.
 
+### Keeping the brand table current
+
+On real CT data most brand signals are the brand owners' own services (§4). `cybermesh evidence suggest-owned-domains` finds such domains in a `ct watch` run, so a maintainer can add them to the brand's `legitimate` list:
+
+```bash
+cybermesh evidence suggest-owned-domains --run <ct watch run dir> --evidence <evidence> \
+  --from-ms <start> --to-ms <end> --out suggest.json --write-brands brands.suggested.json
+```
+
+- **Rule.** A domain is suggested for a brand only if a certificate in the window also names a domain already on that brand's list, or one suggested this way. A CA validates every name on a certificate, so one that names both domains was requested by someone who controls both. This is the rule of revision 1 of the CT evaluation ([ct-evaluation.md](ct-evaluation.md) §5.1).
+- **Counting certificates.** Each certificate counts once, however often it was logged: as a precertificate and as a certificate, in several logs, or reissued with the same names. Certificates are told apart by their set of names.
+- **Guards.**
+  - A candidate needs at least `--min-flagged` (default 10) names flagged for the brand.
+  - Domains on the evidence's hosting-platform list are never suggested, because names under them belong to customers.
+  - Neither is a domain whose certificates name more than `--max-co-domains` (default 100) domains the brand does not own. That marks a multi-tenant service where anyone can get a name.
+  - `--min-shared` (default 1, as in revision 1) can ask for more shared certificates. Genuine links often rest on one certificate, reissued many times.
+- **Domains** are grouped as the engine groups them, by the Public Suffix List including its private section. A name such as `bucket.s3.amazonaws.com` is therefore its own domain, not part of `amazonaws.com`, since anyone can create one.
+- **Output.**
+  - The report lists each suggestion with its evidence, and each rejected candidate with the reason.
+  - It also counts input that could not be read. Unreadable lines and damaged segments are reported, and a run with no name segments, or a `matches.jsonl` with no readable line, is refused.
+  - `--write-brands` writes the extended brand list for review. Outputs are refused inside the evidence or run directory, so the evidence is never changed, and an updated list must be pinned again (`cybermesh evidence pin`) like any evidence.
+
+Suggestions are evidence for a maintainer, not a confirmation by the brand owner.
+
+**Applied to the dev window of the CT evaluation** (days 1–2, 2026-11-18 18:05 to 2026-11-20 18:05 UTC). Only certificates logged in that window were read.
+- **Input.** 1.27 million distinct certificates (3.88 million log entries) named one of the 348 domains with at least 10 flagged names for a brand. Three name segments were incomplete: those `ct watch` was still writing, past the window.
+- **Suggested: 13 domains**, including the six of revision 1. Five rest on a single certificate, and those five certificates were checked by hand. For example, the one linking `microsoft-int.com` names `applications`, `apps.dev` and `identity` under both `microsoft.com` and `microsoft-int.com`, and was logged 56 times over 30 hours. The one for `cpdomaintest.in` also names `captivateprime.adobe.com`, Adobe's learning platform, and looks like its test domain.
+
+  | Brand | Suggested domain | Flagged names | Certificates shared with the brand | Shares most with |
+  |---|---|---|---|---|
+  | adobe | `cpdomaintest.in` | 18 | 1 | `adobe.com` |
+  | amazon | `amazonaws.com.cn` | 119,138 | 2 | `amazon.com` |
+  | amazon | `amazonwebservices.com.cn` | 8,338 | 6 | `amazonaws.com.cn`, itself suggested |
+  | amazon | `amazon.dev` | 2,940 | 7 | `amazon.com` (7) and 14 other Amazon domains |
+  | amazon | `aws.dev` | 59 | 34 | `amazonaws.com` (31), `amazon.com` (3) |
+  | amazon | `amazonoperations.app` | 30 | 1 | `amazon.com`, `amazon.dev` |
+  | amazon | `a2z.com` | 11 | 22 | `amazonaws.com` (21), `amazon.com` (2) |
+  | chase | `jpmchase.net` | 20 | 10 | `jpmorgan.com` (9), `chase.com` (1) |
+  | microsoft | `microsoft-int.com` | 113,286 | 1 | `microsoft.com` |
+  | microsoft | `microsoft.us` | 55 | 1 | `azure.com`, `microsoft.com` |
+  | microsoft | `microsoft-ppe.com` | 14 | 3 | `microsoft.com` (3), `windows.net` (3) |
+  | netflix | `netflix.net` | 542 | 2 | `netflix.com` |
+  | netflix | `netflixstudios.com` | 26 | 1 | `netflix.com`, `netflix.net` |
+
+- **Rejected.**
+  - `sslip.io` (for 8 brands) and `nip.io` (for 3) give anyone a name for an IP address. `onmicrosoft.com` holds Microsoft 365 customers' tenant names. All three are hosting platforms. A first version of the command without this guard suggested `sslip.io` and `onmicrosoft.com` for Microsoft, which is why they are now on the list.
+  - 323 shared no certificate with the brand's domains, among them `amazonaws.eu`, `amazongamelift.com` and `microsoft-falcon.net`. They stay flagged.
+
+The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three platforms in `hosting-platforms.txt`.
+
 ## 8. Limitations and next steps
 
 - **Static CT API only.** RFC 6962 `get-entries` logs are not supported.
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
 - **No witnesses yet.** Checkpoints are verified against the log's pinned key and tile roots are proven against them. Checkpoints are not yet cosigned by independent witnesses, so a log showing different trees to different viewers (a split view) goes undetected.
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.
-- **Brand table.** The table needs owner-maintained "own infrastructure" lists, for example `microsoft-int.com`, before CT warnings can be enabled responsibly.
+- **Brand table.** `evidence suggest-owned-domains` proposes brand-owned domains from CT data, and the shipped table includes 13 found this way (§7). Lists confirmed by the brand owners are still needed before CT warnings can be enabled responsibly.
 - **Verifiers.** Independent verifiers check CT shards with their own log access and their own secret spot-check seeds, so their spot checks are independent of the coordinator's. A published CT warning needs the manifest's `min_verifiers` verifier operators.
 - **One coordinator per log.** A single coordinator follows each log. Independent verifiers check its tasks but do not poll the log themselves.

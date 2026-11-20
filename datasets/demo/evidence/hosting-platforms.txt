@@ -26,3 +26,9 @@ weebly.com
 wixsite.com
 wordpress.com
 glitch.me
+# Customer-named hosts outside the Public Suffix List, found while reviewing CT brand signals
+# (2026-11-20): Microsoft 365 tenant domains, and public DNS services that give anyone a
+# name for an IP address.
+onmicrosoft.com
+nip.io
+sslip.io

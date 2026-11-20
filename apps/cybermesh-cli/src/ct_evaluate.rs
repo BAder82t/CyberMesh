@@ -278,7 +278,7 @@ fn set_min(slot: &mut Option<u64>, v: u64) {
 
 /// Reads lines as bytes, so a torn multi-byte character costs one line, not the whole file.
 /// Returns the lines and whether the stream ended in an error (a truncated gzip).
-fn read_lines(mut r: impl BufRead, mut f: impl FnMut(&str)) -> bool {
+pub(crate) fn read_lines(mut r: impl BufRead, mut f: impl FnMut(&str)) -> bool {
     let mut buf = Vec::new();
     loop {
         buf.clear();
