@@ -384,12 +384,22 @@ impl Harness {
             let _ = tx.send(true);
             verifier_reports.push(r);
         }
-        let mut statuses = Vec::new();
-        for (_, tx, h) in self.workers {
+        // Stop every worker first, then collect every status. A worker that does not stop in
+        // time, or whose task panicked, fails the test: before, its status was silently left
+        // out, and on a slow runner a worker still shutting down after 10 s made
+        // `tasks_completed` totals come up short.
+        let mut stopping = Vec::new();
+        for (i, tx, h) in self.workers {
             let _ = tx.send(true);
-            if let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(10), h).await {
-                statuses.push(s);
-            }
+            stopping.push((i, tx, h));
+        }
+        let mut statuses = Vec::new();
+        for (i, _tx, h) in stopping {
+            let s = tokio::time::timeout(Duration::from_secs(30), h)
+                .await
+                .unwrap_or_else(|_| panic!("worker {i} did not stop within 30 s"))
+                .unwrap_or_else(|e| panic!("worker {i} task failed: {e}"));
+            statuses.push(s);
         }
         let _ = self.coord_shutdown;
         (self.net, report, statuses, verifier_reports, self.dir)
