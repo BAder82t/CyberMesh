@@ -59,6 +59,7 @@ A hostname is **confirmed** when an independent source lists it.
 All proportions are reported with 95 % Wilson intervals.
 
 - **Observability.** The share of confirmed hosts that have a matching entry in the three logs, with a log timestamp between the start and the confirmation. Phishing on hosting platforms or compromised sites often has no certificate naming the phishing host, so this bounds what any CT monitor can catch.
+  - *Breakdown added on 2026-11-20, after the dev-window analysis and before any test-window result.* The report also gives observability and recall for hosts whose own name appears in a certificate. A host covered only by a wildcard certificate for its parent counts as visible under §3, but its name never appears in CT, so no name-based monitor can flag it from there. The pre-registered metrics are unchanged; this is an extra breakdown of them.
 - **Recall.** Among observable confirmed hosts, the share flagged before confirmation, at each flag level.
 - **Lead time.** The confirmation time minus the log timestamp of the earliest flagged entry: median and quartiles, per source.
 - **Detection latency, reported separately.** The scan time minus the log timestamp. This is the operational delay: it includes the time for a 256-entry tile to fill and the poll interval. Gaps while the watcher was down are reported, not hidden.
@@ -79,6 +80,61 @@ All proportions are reported with 95 % Wilson intervals.
 ## 5. Engine changes during evaluation
 
 The run records engine 0.4.0 unchanged. Improvements, for example lists of brand owners' own infrastructure, may be derived **only from the first two days** (dev). Revised engines are scored **only on days 3–7** (test), by re-assessing the stored names offline, and are reported next to the shipped engine's results.
+
+### 5.1 Revision 1 (frozen on 2026-11-20)
+
+**What changed.** Revision 1 is engine 0.4.0 with six domains added to the brands' lists of their own domains (`legitimate`). Nothing else in the code or evidence changed.
+
+| Brand | Added |
+|---|---|
+| amazon | `amazonaws.com.cn`, `amazonwebservices.com.cn`, `amazon.dev` |
+| microsoft | `microsoft-int.com` |
+| netflix | `netflix.net` |
+| chase | `jpmchase.net` |
+
+**How the domains were chosen.** Only certificates logged in the dev window were used, 2026-11-18 18:05 to 2026-11-20 18:05 UTC.
+1. **Candidates.** These were the organisation-level domains behind the most warn-level flags. 70 % of all 330,621 such names fell under `amazonaws.com.cn` and `microsoft-int.com` alone.
+2. **Rule.** A candidate is added to a brand's list only if at least one certificate in the dev window also names a domain already on that brand's list, or one added by this rule. A CA validates every name on a certificate, so one that names both domains was requested by someone who controls both.
+
+**Evidence for each domain.**
+
+| Added domain | Shares a certificate with |
+|---|---|
+| `microsoft-int.com` | `microsoft.com` (56) |
+| `amazonaws.com.cn` | `amazon.com` (11) |
+| `amazonwebservices.com.cn` | `amazonaws.com.cn` (22) |
+| `amazon.dev` | `amazon.com` (27), `amazonaws.com` (10) |
+| `netflix.net` | `netflix.com` (7) |
+| `jpmchase.net` | `jpmchase.com` (123), `jpmorgan.com` (29), `chase.com` (3) |
+
+**Rejected.** These candidates did not meet the rule and stay flagged:
+- `amazonaws.eu` and `amazonwebservices.eu`, which share certificates only with each other;
+- `amazongamelift.com`, `microsoft-falcon.net` and `ppe-microsoft-falcon.net`, which share certificates with no other domain.
+
+**Considered and not added: new brands.** All 24 visible confirmed hosts that were missed and had a known target were aimed at brands outside the 37 protected ones. But:
+- the 18 Allegro hosts were covered only by wildcard certificates, so their names never appeared;
+- the other 5 brands (HSBC, DPD, GLS, Bradesco, ING) had one host each.
+
+Adding brands could have gained at most 5 hosts, chosen from the very examples being scored, at an unknown false-alarm cost from short tokens. They were therefore left out.
+
+**Frozen evidence.** The brand list is [`evaluation-results/ct-eval-rev1-brands.json`](evaluation-results/ct-eval-rev1-brands.json): the shipped list (`datasets/demo/evidence/brands.json`, SHA-256 `f174d379…5ec0c`) with the six domains added.
+- File SHA-256: `3a43b4f0a460d91b7690304c27f02818193e556e0aaac22dcf54a177e843a217`.
+- Pin in the evidence bundle: `sha256:0b2ede82bd042d06fc0f5759da7e3bead1940c7dfa150ce36270fc98864c46e7`.
+- The other sources of the bundle are those of the shipped run.
+
+**Effect on the dev window**, re-scored offline with `ct evaluate --rescore-evidence`:
+
+| Days 1–2 | Engine 0.4.0 (shipped) | Revision 1 |
+|---|---|---|
+| Names flagged at warn level | 330,621 | 87,841 (−73 %) |
+| Names flagged at signal level | 376,484 | 132,233 (−65 %) |
+| Names flagged at block level | 2,652 | 2,644 |
+| Recall (warn) among visible confirmed hosts | 13 / 144 | 13 / 144 |
+| Lead time (warn, median) | 24.1 h | 24.1 h |
+
+No detection in the dev window was lost.
+
+The test-window data (days 3–7) had not been examined when revision 1 was frozen. Scripts that read the name store, to find shared certificates and hosts visible under their own name, opened files that also hold later certificates. They used only certificates logged in the dev window.
 
 ## 6. Cost of decentralisation
 
@@ -116,7 +172,35 @@ The question is what independent verification by several organisations costs in 
 
 ### 8.1 Detection
 
-*Pending: the run started on 2026-11-18. `cybermesh ct evaluate` computes every figure in §4 from the run directory.*
+*The test-window results (days 3–7) are pending: the CT window ends on 2026-11-25 and feed snapshots end on 2026-11-28. `cybermesh ct evaluate` computes every figure in §4 from the run directory.*
+
+#### Dev window (days 1–2), engine 0.4.0 as shipped
+
+These are tuning-window figures, published for transparency. They are not the evaluation result.
+- **Window.** 2026-11-18 18:05 to 2026-11-20 18:05 UTC, about 135 million entries from the three logs, with no downtime.
+- **Confirmations.** With the 24-hour burn-in, confirmations cover only the second day: 556 hosts confirmed by the primary sources.
+
+| Measure | Result |
+|---|---|
+| Confirmed hosts visible in the logs before confirmation | 144 / 556 (25.9 %, 95 % CI 22.4–29.7 %) |
+| …of which under their own name | 110 / 556 (19.8 %) |
+| Recall (signal / warn / block) among visible hosts | 18, 13 and 6 of 144 (12.5 %, 9.0 %, 4.2 %) |
+| Recall (signal / warn / block) among hosts visible under their own name | 18, 13 and 6 of 110 (16.4 %, 11.8 %, 5.5 %) |
+| Recall (signal / warn) for the protected brands only | 13 / 13 and 11 / 13 of visible hosts |
+| Lead time over confirmation (warn, median) | 24.1 h (IQR 12.4–29.2 h, n = 13) |
+| Detection latency (scan minus log time, median) | 10 s |
+| Precision floor (warn) | 23 confirmed of 330,621 flagged names |
+| phishunt, same hosts | caught 18 of the 110 visible under their own name; listed 114 hosts in the window, 58 of them visible to us first, of which CyberMesh flagged 21, earlier than phishunt's `first_seen` for all 21 (median 10.2 h) |
+
+**Why visible confirmed hosts were missed.** 126 of the 144 visible hosts were missed:
+- **34 were covered only by wildcard certificates.** These include all 18 Allegro hosts and 12 on `workers.dev`.
+- **87 of the remaining 92 have no known target and no protected brand's token.** Most are random-looking names on `pages.dev` and throwaway domains with no brand word at all.
+- **The last 5 target brands outside the 37 protected ones.** These are HSBC, DPD, GLS, Bradesco and ING, one host each.
+- **None** of the missed hosts contained a protected brand's token.
+
+So recall is limited by the lexical approach (most phishing names carry no brand word) and by brand coverage, not by missed brand matches.
+
+**Where the false alarms come from.** 70 % of warn-level names fall under two brand-owned domains, `amazonaws.com.cn` and `microsoft-int.com`. The rest are mostly hosting platforms (`pages.dev`, `wasmer.app`, `cpanel.site`, `workers.dev`), where many names look like real phishing that no feed has confirmed. Revision 1 (§5.1) addresses the first group.
 
 ### 8.2 Cost of decentralisation (measured 2026-11-19)
 

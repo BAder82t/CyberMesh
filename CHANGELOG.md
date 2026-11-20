@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- **CT evaluation, revision 1 frozen** ([docs/ct-evaluation.md](docs/ct-evaluation.md) §5.1).
+  - Six brand-owned domains were added to the brand lists, chosen from the dev window by a shared-certificate rule. On days 1–2 this gives 73 % fewer warn-level flags with no detection lost. The frozen list is in `docs/evaluation-results/ct-eval-rev1-brands.json`.
+  - The dev-window (days 1–2) results and an analysis of the misses are in §8.1.
+  - `ct evaluate` also reports observability and recall for hosts whose own name appears in a certificate. This is an added breakdown: a host covered only by a wildcard certificate can't be flagged from CT.
 - **Host names in peer addresses.** Bootstrap addresses can name a peer by host name (`/dns4/`, `/dns6/`, `/dns/`), resolved with the system resolver. Only a node's own configured addresses are ever dialled, and the peer id in the address is authenticated by the Noise handshake, so a spoofed DNS answer can only make the dial fail (threat model T27). This uses libp2p's `dns` feature, which adds `hickory-resolver`.
 - **Pilot kit for participating organisations.**
   - [docs/pilot.md](docs/pilot.md): the invitation, covering goals, roles, resources, timeline and what participants accept.
@@ -11,6 +15,7 @@
   - The operator guide now starts from a verified release binary.
 
 ### Fixed
+- `ct evaluate`: the tile and entry counts of a window now count only polls inside it; before, they covered the whole run so far. The whole-run totals are reported separately.
 - The Linux binaries need glibc 2.34 or later (Ubuntu 22.04 included), not 2.36 as `docs/build-integrity.md` said.
 
 ## v0.3.1 (2026-11-20, research pre-release)
