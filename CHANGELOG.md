@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.1 (2026-11-20, research pre-release)
+
+Compatible with v0.3.0: the wire protocol and evidence formats are unchanged, and resource reports only gain fields. It is the first release whose binaries are built reproducibly and attested in CI. **Not production-ready; no external audit.**
 
 ### Added
 - **Build integrity.**

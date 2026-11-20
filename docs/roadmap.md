@@ -27,11 +27,18 @@ The Docker Compose demo runs organisation B's independent verifier in its own ha
 ## v0.2.2: verification records over the network
 Verifiers publish the records they sign on a `records` gossip topic and store the others' records. Each organisation's release signer builds from its own node alone. It is wire-compatible with v0.2.x: older nodes ignore the topic.
 
-## v0.3.0 (this release): authenticated CT logs and continuous tailing
+## v0.3.0: authenticated CT logs and continuous tailing
 - **Checkpoint verification.** Each log's checkpoint must be signed by the key pinned in the `ct-logs` evidence and be fresh. Every tile root the verifier relies on is proven against the signed root.
 - **Follow mode.** The coordinator follows a log as it grows. It accepts a new checkpoint only with a consistency proof that it extends the previous one, and it resumes after a restart without skipping tiles.
 
 The wire protocol is unchanged, but the `ct-logs` evidence format is not compatible with v0.2.x. Nodes that run CT tasks must upgrade together; see the changelog.
+
+## v0.3.1 (this release): evaluation tooling and verifiable binaries
+- **Live CT evaluation.** `cybermesh ct watch` records every certificate name and brand signal of live logs. `cybermesh ct evaluate` scores a run against independently confirmed phishing, following a method fixed before any results ([ct-evaluation.md](ct-evaluation.md)). A week-long run is in progress.
+- **Cost of decentralisation.** `scripts/ct-cost.sh` measured about 2.5× the download and 3.5× the CPU of a single process, with every task verified by two organisations.
+- **Build integrity.** Release binaries are built twice and must match. They carry SLSA Build Level 2 provenance and can be rebuilt bit for bit on Linux ([build-integrity.md](build-integrity.md)).
+
+It is compatible with v0.3.0.
 
 ## Next: harden the pilot
 - **Verifiers.**
