@@ -20,6 +20,7 @@ Compatible with v0.3.0: the wire protocol and evidence formats are unchanged, an
 - Coordinator and verifier reports and worker status now include `cpu_ms`, `ct_http_bytes` and `ct_http_requests`.
 
 ### Fixed
+- Test harness: worker statuses were collected one at a time with a 10 s timeout, and a worker still stopping was silently left out. That made `full_pipeline_over_libp2p` fail on a slow CI runner. Now all workers are stopped first, every status is required, and a worker that does not stop fails the test with its name.
 - **Review of `ct evaluate` before any result was computed:**
   - The phishunt comparison uses CyberMesh's log time, as pre-registered. Scan time is reported separately.
   - Each flag level keeps its own earliest time.
