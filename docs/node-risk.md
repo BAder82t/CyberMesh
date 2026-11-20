@@ -2,7 +2,7 @@
 
 This page is for the security team of an organisation asked to run a CyberMesh worker or an independent verifier. It states what a node contacts, what it holds, what other participants can make it do, and how to stop it. Each claim points to the code, test or document behind it.
 
-CyberMesh is a research project (v0.3.1). It has had internal security reviews but **no external audit**. A pilot should run on a machine you would be comfortable isolating.
+CyberMesh is a research project (v0.3.2). It has had internal security reviews but **no external audit**. A pilot should run on a machine you would be comfortable isolating.
 
 ## At a glance
 

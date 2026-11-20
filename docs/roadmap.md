@@ -33,12 +33,19 @@ Verifiers publish the records they sign on a `records` gossip topic and store th
 
 The wire protocol is unchanged, but the `ct-logs` evidence format is not compatible with v0.2.x. Nodes that run CT tasks must upgrade together; see the changelog.
 
-## v0.3.1 (this release): evaluation tooling and verifiable binaries
+## v0.3.1: evaluation tooling and verifiable binaries
 - **Live CT evaluation.** `cybermesh ct watch` records every certificate name and brand signal of live logs. `cybermesh ct evaluate` scores a run against independently confirmed phishing, following a method fixed before any results ([ct-evaluation.md](ct-evaluation.md)). A week-long run is in progress.
 - **Cost of decentralisation.** `scripts/ct-cost.sh` measured about 2.5× the download and 3.5× the CPU of a single process, with every task verified by two organisations.
 - **Build integrity.** Release binaries are built twice and must match. They carry SLSA Build Level 2 provenance and can be rebuilt bit for bit on Linux ([build-integrity.md](build-integrity.md)).
 
 It is compatible with v0.3.0.
+
+## v0.3.2 (this release): ready for a pilot
+- **Pilot kit.** An invitation for organisations ([pilot.md](pilot.md)), a page for their security teams on what a node exposes them to ([node-risk.md](node-risk.md)), and a hardened systemd unit for independent verifiers. The operator guide now installs from a verified release.
+- **Host names in peer addresses** (`/dns4/...`). The peer id in the address is authenticated, so a spoofed DNS answer can only make a connection fail.
+- **CT evaluation.** Revision 1 is frozen before the test window. The dev-window results are published ([ct-evaluation.md](ct-evaluation.md) §5.1, §8.1).
+
+It is compatible with v0.3.x.
 
 ## Next: harden the pilot
 - **Verifiers.**

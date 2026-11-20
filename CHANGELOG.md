@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.2 (2026-11-20, research pre-release)
+
+Compatible with v0.3.x: the wire protocol and evidence formats are unchanged. Host names in peer addresses are a node-local configuration option, and nodes on v0.3.1 still interoperate but need IP addresses. **Not production-ready; no external audit.**
 
 ### Added
 - **CT evaluation, revision 1 frozen** ([docs/ct-evaluation.md](docs/ct-evaluation.md) §5.1).
