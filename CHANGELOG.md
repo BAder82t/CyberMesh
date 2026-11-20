@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- **Build integrity.**
+  - `.github/workflows/release.yml` builds the release binaries (Linux x86-64 and arm64 in the pinned Rust image, macOS arm64) twice each, on separate runners, and fails unless both copies are identical.
+  - On a version tag it creates a SLSA build provenance attestation (GitHub artifact attestations, Sigstore) for the binaries and the SBOM, and attaches binaries, `SHA256SUMS`, SBOM and attestation bundle to a draft release.
+  - `scripts/build-release.sh [--docker]` is the build both CI and anyone rebuilding a release use.
+  - The verification procedure is in [docs/build-integrity.md](docs/build-integrity.md).
 - **Live CT detection evaluation harness.**
   - `cybermesh ct watch` follows live static CT logs in one process, with verified checkpoints, consistency proofs and proven tile roots, and never skips a tile. It records every certificate name and every brand signal, with the log's timestamp and the time it was scanned. It is the single-server baseline for the cost of decentralisation, too.
   - `scripts/ct-eval.sh` runs it for a fixed window, takes hourly phishunt snapshots and resumes after a reboot.

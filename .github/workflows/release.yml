@@ -1,0 +1,135 @@
+name: release
+
+# Release binaries (docs/build-integrity.md).
+# - Every target is built twice, on separate runners; the run fails unless both copies are
+#   byte-identical.
+# - On a version tag, the binaries, SHA256SUMS and the SBOM get a SLSA build provenance
+#   attestation (GitHub artifact attestations, signed through Sigstore) and are attached to a
+#   draft GitHub release.
+# - Pull requests that change the build only build and compare; nothing is published.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-release.sh
+      - rust-toolchain.toml
+      - Cargo.lock
+      - deploy/docker/Dockerfile
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.platform.target }} (copy ${{ matrix.copy }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2]
+        platform:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-24.04, docker: true }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, docker: true }
+          - { target: aarch64-apple-darwin, runner: macos-15, docker: false }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - if: ${{ !matrix.platform.docker }}
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with: { toolchain: 1.98.1, targets: aarch64-apple-darwin }
+      - name: Build
+        run: scripts/build-release.sh ${{ matrix.platform.docker && '--docker' || '' }} ${{ matrix.platform.target }} dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.platform.target }}-${{ matrix.copy }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { pattern: "bin-*", path: bins }
+      - name: Compare the two copies of every binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          status=0
+          for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
+            a=$(sha256sum "bins/bin-$t-1/"cybermesh-* | cut -d' ' -f1)
+            b=$(sha256sum "bins/bin-$t-2/"cybermesh-* | cut -d' ' -f1)
+            echo "$t: copy 1 $a, copy 2 $b"
+            if [ "$a" != "$b" ]; then
+              echo "::error::$t: the two builds differ (not reproducible)"
+              status=1
+            fi
+            cp "bins/bin-$t-1/"cybermesh-* dist/
+          done
+          [ "$status" = 0 ]
+          (cd dist && sha256sum cybermesh-* > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: The tag must match the workspace version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          [ "$TAG" = "v$v" ] || { echo "::error::tag $TAG does not match workspace version $v"; exit 1; }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: release-files, path: dist }
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/cybermesh-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Add the SBOM to SHA256SUMS
+        run: (cd dist && sha256sum cybermesh-sbom.spdx.json >> SHA256SUMS && cat SHA256SUMS)
+      - id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Keep the attestation bundle for offline verification
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" dist/cybermesh-provenance.sigstore.json
+      - name: Attach to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --prerelease --verify-tag --title "$TAG" \
+              --notes "Draft. Verify the binaries as described in docs/build-integrity.md."
+          fi
+          gh release upload "$TAG" dist/* --clobber

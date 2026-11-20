@@ -38,6 +38,8 @@ or release-signing keys, and denial of service by an enrolled peer within its ra
 
 Only the latest commit on `main` and the latest tagged release receive fixes.
 
+Release binaries come with SHA-256 checksums, an SBOM and a signed build provenance attestation, and the Linux binaries can be rebuilt bit for bit. [docs/build-integrity.md](docs/build-integrity.md) explains how to verify them.
+
 ## False positives
 
 A wrongly listed domain is not a security vulnerability. Use the
