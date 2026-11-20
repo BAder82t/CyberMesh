@@ -272,3 +272,85 @@ async fn a_log_that_rewrites_history_is_not_followed() {
         "nothing scheduled from the rewritten tree"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn verifiers_witness_a_growing_log_and_agree_on_one_view() {
+    // The coordinator and an independent verifier poll, cosign and exchange checkpoints of a
+    // log that grows while they run; every comparison shows one append-only log.
+    let mut o = options(None);
+    o.independent_verifiers = 1;
+    o.ct_log = Some(Arc::new(
+        MockLog::build("ct.example/test", &demo_entries(2)).unwrap(),
+    ));
+    o.ct_tiles = 2;
+    o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_grow = Some((Duration::from_secs(3), 2));
+    o.ct_witness = Some(Duration::from_millis(300));
+    let h = Harness::start(o);
+    let (_net, report, _, verifiers, dir) = h.finish_all(Duration::from_secs(150)).await;
+    let c = report
+        .ct_witness
+        .as_ref()
+        .expect("the coordinator witnesses");
+    let v = verifiers[0]
+        .ct_witness
+        .as_ref()
+        .expect("the verifier witnesses");
+    assert!(c.published >= 1 && v.published >= 1, "{c:?} {v:?}");
+    assert!(c.received >= 1 && v.received >= 1, "{c:?} {v:?}");
+    assert!(c.consistent >= 1 && v.consistent >= 1, "{c:?} {v:?}");
+    assert_eq!((c.split_views, v.split_views), (0, 0));
+    assert!(!report.ct_follow_halted);
+    assert_eq!(report.ct_tiles_verified, 4);
+    assert!(dir.path().join("coordinator/ct-witness.json").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_log_showing_organisations_different_trees_is_proven_and_not_followed() {
+    // One log key, two trees of the same size: the coordinator's organisation is served one,
+    // the independent verifier's organisation the other. Neither can tell from its own view;
+    // their exchanged checkpoints prove the split view on both sides.
+    let mut o = options(None);
+    o.independent_verifiers = 1;
+    let log = MockLog::build("ct.example/test", &demo_entries(2)).unwrap();
+    let info = log.log_info("mock-log", "http://127.0.0.1:9/");
+    o.ct_log = Some(Arc::new(log));
+    o.ct_verifier_view = Some(Arc::new(
+        MockLog::build("ct.example/test", &demo_entries(2)).unwrap(),
+    ));
+    o.ct_tiles = 2;
+    // Following would wait for tile 4, which never comes: the proven split view ends it.
+    o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_witness = Some(Duration::from_millis(300));
+    let h = Harness::start(o);
+    let (_net, report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
+    assert!(report.ct_follow_halted, "{report:?}");
+    let c = report.ct_witness.as_ref().unwrap();
+    assert_eq!(c.split_views, 1, "{c:?}");
+    let ev: cybermesh_node::ct_witness::SplitViewEvidence =
+        serde_json::from_slice(&std::fs::read(&c.proofs[0]).unwrap()).unwrap();
+    assert!(ev.reported_by.is_some());
+    // The proof stands on its own: the log's key is all that is needed to check it.
+    let key = cybermesh_ct::LogKey::from_info(&info).unwrap();
+    let (l, s) = ev.proof.verify(&key).unwrap();
+    assert_eq!((l.size, s.size), (512, 512));
+    assert_ne!(l.root, s.root);
+    let v = verifiers[0].ct_witness.as_ref().unwrap();
+    assert_eq!(v.split_views, 1, "{v:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_split_view_proven_before_a_restart_keeps_following_halted() {
+    // The witness state says a split view of the followed log was proven before the
+    // restart: following stays halted and nothing is scheduled from the log.
+    let mut o = options(None);
+    o.ct_tiles = 2;
+    o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_witness = Some(Duration::from_millis(300));
+    o.ct_witness_state = Some(r#"{"logs":{"mock-log":{"head":null,"split":true}}}"#);
+    let h = Harness::start(o);
+    let (_net, report, _, _dir) = h.finish(Duration::from_secs(120)).await;
+    assert!(report.ct_follow_halted, "{report:?}");
+    assert_eq!(report.ct_next_tile, 0, "{report:?}");
+    assert_eq!(report.ct_tiles_verified, 0);
+}

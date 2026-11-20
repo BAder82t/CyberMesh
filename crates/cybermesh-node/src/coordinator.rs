@@ -73,6 +73,8 @@ pub struct CoordinatorSetup {
     pub manifest_source: Option<files::ManifestSource>,
     /// Certificate Transparency monitoring (None = domain tasks only).
     pub ct: Option<CtSetup>,
+    /// CT logs this coordinator witnesses with its verifier key (by default the followed log).
+    pub witness: Option<crate::ct_witness::WitnessSetup>,
 }
 
 /// CT monitoring setup for the coordinator.
@@ -101,6 +103,17 @@ pub struct CtFollowSetup {
     pub max_tiles_per_poll: u64,
     /// Stop following once every tile below this one is settled (bounded runs, demos).
     pub until_tile: Option<u64>,
+}
+
+/// The followed log, if a split view of it has been proven.
+fn followed_log_split(
+    ct: Option<&CtSetup>,
+    witness: Option<&crate::ct_witness::Witness>,
+) -> Option<String> {
+    let ct = ct.filter(|c| c.follow.is_some())?;
+    witness
+        .filter(|w| w.is_split(&ct.log.log_id))
+        .map(|_| ct.log.log_id.clone())
 }
 
 /// Consecutive inconsistent checkpoints after which following stops.
@@ -171,8 +184,12 @@ pub struct CoordinatorReport {
     pub ct_lag_tiles: u64,
     /// Follow mode: tiles given up for good in this run (left below the resume point).
     pub ct_tiles_unverified: u64,
-    /// Follow mode: following stopped after repeated inconsistent checkpoints.
+    /// Follow mode: following stopped after repeated inconsistent checkpoints, or because the
+    /// log was proven to show a split view.
     pub ct_follow_halted: bool,
+    /// CT log witnessing, including proven split views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ct_witness: Option<crate::ct_witness::WitnessStats>,
     /// The other verifiers' records received (also in `received-records/`).
     #[serde(skip)]
     pub received: Vec<(Digest, VerificationRecord)>,
@@ -307,6 +324,13 @@ pub fn setup_from_config(
             })
         }
     };
+    let followed = cfg
+        .ct
+        .as_ref()
+        .filter(|c| c.follow && c.witness)
+        .map(|c| c.log_id.as_str());
+    let witness =
+        crate::ct_witness::setup_from_config(cfg.ct_witness.as_ref(), followed, engine.evidence())?;
     let text = String::from_utf8_lossy(&files::read_bytes(&cfg.domains_file)?).into_owned();
     let (domains, skipped) = prepare_domains(&text);
     Ok((
@@ -338,6 +362,7 @@ pub fn setup_from_config(
                 governance_root: cfg.governance_root.clone(),
             }),
             ct,
+            witness,
         },
         skipped,
     ))
@@ -590,6 +615,8 @@ struct Coordinator {
     /// Consecutive polls whose checkpoint did not extend the accepted head.
     ct_inconsistent_streak: u32,
     ct_poll_tx: tokio::sync::mpsc::UnboundedSender<PollOutcome>,
+    witness: Option<crate::ct_witness::Witness>,
+    witness_tx: tokio::sync::mpsc::UnboundedSender<crate::ct_witness::JobOutcome>,
 }
 
 impl Coordinator {
@@ -846,7 +873,14 @@ impl Coordinator {
                 // bounded concurrency, and apply the record when it comes back.
                 self.ct_finalizing += 1;
                 let engine = Arc::clone(&self.engine_arc);
-                let ct = self.s.ct.clone();
+                // A log proven to show a split view is not relied on: settle as without log
+                // access (disagreement disputed, nothing confirmed).
+                let ct = self.s.ct.clone().filter(|c| {
+                    !self
+                        .witness
+                        .as_ref()
+                        .is_some_and(|w| w.is_split(&c.log.log_id))
+                });
                 let permits = Arc::clone(&self.ct_permits);
                 let tx = self.ct_finalized.clone();
                 let task_id = task_id.to_owned();
@@ -1104,6 +1138,35 @@ impl Coordinator {
         net.report(m, acc).await;
     }
 
+    async fn on_checkpoint(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
+        let acc = match &mut self.witness {
+            Some(w) => w.on_message(&m.data, &self.s.manifest, self.s.clock.now()),
+            None => Acceptance::Ignore,
+        };
+        net.report(m, acc).await;
+    }
+
+    /// A witnessing job finished. A proven split view of the followed log halts following:
+    /// nothing more is scheduled from a log that showed organisations different trees.
+    fn on_witness(&mut self, o: crate::ct_witness::JobOutcome) {
+        let Some(w) = &mut self.witness else { return };
+        let proven = w.on_outcome(o, self.s.clock.now());
+        if !proven.is_empty() {
+            self.halt_if_split();
+        }
+    }
+
+    /// Halts following if a split view of the followed log has been proven, in this run or
+    /// before a restart (the witness state survives restarts).
+    fn halt_if_split(&mut self) {
+        if let Some(log) = followed_log_split(self.s.ct.as_ref(), self.witness.as_ref())
+            && !self.report.ct_follow_halted
+        {
+            self.report.ct_follow_halted = true;
+            error!(log = %log, "CT follow halted: the log was proven to show a split view (see ct-split-views/); investigate, then remove it from ct-witness.json and run `cybermesh ct follow-reset`");
+        }
+    }
+
     /// A CT batch is finished (verified, or given up): advance the follow resume point.
     /// Only a verified batch advances the resume point; a given-up one is retried later.
     fn ct_batch_finished(&mut self, first_tile: u64, count: u32, verified: bool) {
@@ -1286,11 +1349,14 @@ pub async fn run_coordinator(
         listen: setup.listen.clone(),
         bootstrap: setup.bootstrap.clone(),
         allowed_peers: allowed_peers(&setup.manifest, &me),
-        subscribe: vec![
+        subscribe: [
             topics.results.clone(),
             topics.presence.clone(),
             topics.records.clone(),
-        ],
+        ]
+        .into_iter()
+        .chain(setup.witness.is_some().then(|| topics.checkpoints.clone()))
+        .collect(),
         heartbeat: setup.gossip_heartbeat,
         // Per-author allowance (cost = 1 + KiB). Workers cap their own outbound traffic
         // (64 KiB/s by default); the coordinator allows comfortably more than that so honest
@@ -1400,7 +1466,23 @@ pub async fn run_coordinator(
     )?;
     let mut records_out = crate::records::RecordPublisher::new(max_message);
     records_out.load_recent(&setup.state_dir.join("records"), setup.clock.now());
+    let witness = match &setup.witness {
+        Some(ws) => Some(crate::ct_witness::Witness::new(
+            ws,
+            &setup.verifier,
+            &setup.manifest.network_id,
+            &setup.state_dir,
+        )?),
+        None => None,
+    };
+    if let Some(w) = &witness {
+        crate::ct_witness::log_started(w);
+    }
+    let (witness_tx, mut witness_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::ct_witness::JobOutcome>();
     let mut c = Coordinator {
+        witness,
+        witness_tx,
         follower,
         ct_polling: false,
         ct_inconsistent_streak: 0,
@@ -1426,6 +1508,7 @@ pub async fn run_coordinator(
         replay: ReplayCache::new(200_000),
         settled: HashMap::new(),
     };
+    c.halt_if_split();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let started = Instant::now();
     let mut warmed_up = c.s.start_after_workers == 0;
@@ -1450,6 +1533,8 @@ pub async fn run_coordinator(
                         c.on_record(&net, &m).await;
                     } else if m.topic == c.topics.presence {
                         c.on_heartbeat(&net, &m).await;
+                    } else if m.topic == c.topics.checkpoints {
+                        c.on_checkpoint(&net, &m).await;
                     } else {
                         net.report(&m, Acceptance::Ignore).await;
                     }
@@ -1460,6 +1545,7 @@ pub async fn run_coordinator(
             },
             Some(done) = ct_finalized_rx.recv() => c.on_ct_finalized(done),
             Some(outcome) = ct_poll_rx.recv() => c.on_ct_poll(outcome),
+            Some(o) = witness_rx.recv() => c.on_witness(o),
             _ = follow_tick.tick(), if c.follower.is_some() && !c.ct_polling && !c.report.ct_follow_halted => c.start_ct_poll(),
             _ = manifest_tick.tick() => {
                 c.records_in.prune(c.s.clock.now());
@@ -1544,6 +1630,11 @@ pub async fn run_coordinator(
                     crate::records::REPUBLISH_WINDOW_SECS,
                 );
                 c.records_out.flush(&net, &c.topics.records).await;
+                if let Some(w) = &mut c.witness {
+                    let now = c.s.clock.now();
+                    crate::ct_witness::start_jobs(w, &c.witness_tx, now);
+                    crate::ct_witness::publish_due(w, &net, &c.topics.checkpoints, now).await;
+                }
                 if c.s.exit_when_done
                     && c.pending.is_empty()
                     && c.inflight.is_empty()
@@ -1590,6 +1681,7 @@ pub async fn run_coordinator(
     c.report.net_dropped_queue_full = snap.dropped_queue_full;
     c.report.cpu_ms = crate::governor::process_cpu_ms();
     (c.report.ct_http_bytes, c.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
+    c.report.ct_witness = c.witness.as_ref().map(|w| w.stats.clone());
     let _ = files::write_json(&c.s.state_dir.join("coordinator-report.json"), &c.report);
     net.shutdown().await;
     Ok(c.report)

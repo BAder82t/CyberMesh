@@ -57,6 +57,7 @@ The signed message is `PAE(type, body) = "DSSEv1" SP len(type) SP type SP len(bo
 | `application/vnd.cybermesh.manifest+json;v=1` | `TrustManifest` | governance threshold |
 | `application/vnd.cybermesh.appeal-decision+json;v=1` | `AppealDecision` | governance threshold |
 | `application/vnd.cybermesh.verification+json;v=1` | `VerificationRecord` | member with role `verifier` |
+| `application/vnd.cybermesh.ct-checkpoint+json;v=1` | `CheckpointObservation` | member with role `verifier` |
 | `application/vnd.cybermesh.release+json;v=1` | `ThreatRelease` | release-signer threshold of distinct operators |
 
 ## 2. Trust manifest
@@ -172,6 +173,16 @@ CtMatch { index (global entry index within the tile), name (normalised), risk_sc
   - **Checkpoint.** The checkpoint must carry a note signature `— <origin> base64(keyID ‖ timestamp ‖ 0x04 0x03 ‖ len ‖ DER signature)`, where `keyID = SHA-256(origin ‖ 0x0A ‖ 0x05 ‖ LogID)[:4]` and `LogID = SHA-256(SPKI)`. Its ECDSA P-256 / SHA-256 signature must verify over the RFC 6962 `TreeHeadSignature` (`0x00 ‖ 0x01 ‖ timestamp ‖ size ‖ root`). No extension lines are allowed.
   - **Tile roots.** A tile root counts only if recomputing the RFC 6962 root of the signed size through it, with hash tiles at levels 0 and up, yields the signed root.
   - **Follow mode (coordinator).** Each newly polled checkpoint must also extend the previously accepted one: an RFC 6962 consistency proof is assembled from hash tiles and checked as in RFC 9162 §2.1.4.2.
+- **Witnessing (split-view detection).** Verifiers that witness a log publish
+  ```
+  CheckpointObservation { v, network_id, log_id, witness: KeyId, observed_at, checkpoint }
+  ```
+  on the `checkpoints` topic, signed by `witness`, which must have the `verifier` role.
+  - **Checkpoint.** `checkpoint` is the latest checkpoint the witness accepted (signed by the pinned key, at most an hour old, consistent with its previous one), at most 8 KiB, with the witness's C2SP `cosignature/v1` line appended: `— <name> base64(keyID ‖ time (u64 BE, seconds) ‖ Ed25519 signature)`. The name is `cybermesh/<network_id>/<witness KeyId>`, `keyID = SHA-256(name ‖ 0x0A ‖ 0x04 ‖ public key)[:4]`, and the signed message is `"cosignature/v1\ntime <time>\n"` followed by the checkpoint's origin, size and root lines.
+  - **Freshness.** Observations older than an hour, or more than `max_clock_skew_secs` ahead, are ignored, and so are checkpoints signed more than a day ago.
+  - **Acceptance.** A malformed message, another network, a `witness` that is not the signer, or a bad cosignature is `Reject`ed. Anything that is not proof of misbehaviour is `Ignore`d: a signer the receiver's manifest does not know as a verifier (it may lag), clock skew, a log signature that does not verify against the receiver's pinned key, or a log the receiver does not witness.
+  - **Comparison.** A receiver compares each observation with its own latest checkpoint once its own tree is at least as large. It computes the root of its tree's first `size` entries, and the consistency proof from that root to its own, from hash tiles; the proof must verify against its own signed root. A different root from the peer's signed one proves a split view; equal sizes with different roots need no proof.
+  - **Proof file.** `state_dir/ct-split-views/<log>-<larger>-<smaller>-<time>.json`: `{log_id, detected_at, detected_by, reported_by, observation, proof: {v, origin, larger, smaller, prefix_root, proof}}`, with notes as text and hashes in base64. `cybermesh ct verify-split-view --evidence <dir> <file>` checks it against the pinned key alone.
 - **Names digest.** `SHA-256("cybermesh/ct-names/v1" || 0x00 || for each name: index (u64 BE) || len(name) (u64 BE) || name)`, over every normalised name of every parsed entry in entry order, then sorted and de-duplicated per entry, up to 8,192 names.
 - **Match selection.** Matches are capped at 4 per entry and 16 per tile. The kept matches are the highest by (risk descending, index, name). They are then sorted by (index, name). `truncated` is true when any cap applied.
 - **Entries.** Every `TileLeaf` must carry a `leaf_index` extension equal to its position.
@@ -238,7 +249,7 @@ ThreatRelease {
 
 ## 8. Transport
 
-- **Topics.** `/cybermesh/<network_id>/v1/{tasks,results,presence,records}` on gossipsub over libp2p TCP with Noise and Yamux. Workers subscribe to `tasks`. The coordinator subscribes to `results`, `presence` and `records`. Independent verifiers subscribe to `tasks`, `results` and `records`.
+- **Topics.** `/cybermesh/<network_id>/v1/{tasks,results,presence,records,checkpoints}` on gossipsub over libp2p TCP with Noise and Yamux. Workers subscribe to `tasks`. The coordinator subscribes to `results`, `presence` and `records`. Independent verifiers subscribe to `tasks`, `results` and `records`. Nodes that witness CT logs also subscribe to `checkpoints`: the coordinator for its followed log by default, and independent verifiers configured with `[ct_witness]`.
 - **Record distribution.** Every verifier publishes each signed `VerificationRecord` envelope it writes on `records`. It also re-publishes those verified within the last hour every 15 minutes, which outlasts the 10-minute duplicate cache. On receipt, a verifier:
   - authenticates the record exactly as a release builder does (enrolled verifier signature, canonical record, network id, named verifier equals signer and its operator);
   - refuses its own echoes, records dated more than 300 s in the future, and records older than 30 days;

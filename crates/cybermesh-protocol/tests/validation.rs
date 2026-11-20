@@ -372,3 +372,75 @@ fn min_verifiers_is_bounded_by_verifier_operators_and_omitted_when_one() {
     let m = TrustManifest::verify(&n.manifest_envelope, &n.root, NOW, 0).unwrap();
     assert_eq!(m.min_verifiers, 2);
 }
+
+#[test]
+fn checkpoint_observations_come_from_verifiers_naming_themselves() {
+    use cybermesh_protocol::ct::{
+        CheckpointObservation, MAX_OBSERVED_NOTE_BYTES, verify_checkpoint_observation,
+    };
+    let n = net();
+    let limits = Limits::default();
+    let obs = CheckpointObservation {
+        v: PROTOCOL_VERSION,
+        network_id: n.network_id.clone(),
+        log_id: "letsencrypt-willow-2027h1".into(),
+        witness: n.verifier.key_id(),
+        observed_at: NOW,
+        checkpoint: "log.example/1\n10\nAAAA\n\n\u{2014} log.example/1 AAAA\n".into(),
+    };
+    let sign = |o: &CheckpointObservation, k: &cybermesh_crypto::SecretKey| {
+        sign_bytes(payload_type::CT_CHECKPOINT, o, k)
+    };
+    let ok =
+        verify_checkpoint_observation(&sign(&obs, &n.verifier), &n.manifest, NOW, &limits).unwrap();
+    assert_eq!(ok.message, obs);
+
+    // Only verifiers witness; a worker or issuer key is refused, as is naming another key.
+    let mut by_worker = obs.clone();
+    by_worker.witness = n.worker_id(0);
+    assert!(matches!(
+        verify_checkpoint_observation(
+            &sign(&by_worker, &n.workers[0].key),
+            &n.manifest,
+            NOW,
+            &limits
+        ),
+        Err(ProtocolError::NotAuthorized(_))
+    ));
+    let other = &n.other_verifiers[0].0;
+    assert_eq!(
+        verify_checkpoint_observation(&sign(&obs, other), &n.manifest, NOW, &limits).unwrap_err(),
+        ProtocolError::SignerMismatch
+    );
+    // Another network, an invalid log id, an oversized note, a stale or future observation.
+    let mut wrong = obs.clone();
+    wrong.network_id = "other-net".into();
+    assert!(matches!(
+        verify_checkpoint_observation(&sign(&wrong, &n.verifier), &n.manifest, NOW, &limits),
+        Err(ProtocolError::WrongNetwork { .. })
+    ));
+    let mut wrong = obs.clone();
+    wrong.log_id = "Bad Log".into();
+    assert!(
+        verify_checkpoint_observation(&sign(&wrong, &n.verifier), &n.manifest, NOW, &limits)
+            .is_err()
+    );
+    let mut wrong = obs.clone();
+    wrong.checkpoint = "x".repeat(MAX_OBSERVED_NOTE_BYTES + 1);
+    assert!(
+        verify_checkpoint_observation(&sign(&wrong, &n.verifier), &n.manifest, NOW, &limits)
+            .is_err()
+    );
+    let bytes = sign(&obs, &n.verifier);
+    assert_eq!(
+        verify_checkpoint_observation(&bytes, &n.manifest, NOW + 3601, &limits).unwrap_err(),
+        ProtocolError::Expired
+    );
+    assert_eq!(
+        verify_checkpoint_observation(&bytes, &n.manifest, NOW - 1000, &limits).unwrap_err(),
+        ProtocolError::NotYetValid
+    );
+    // A signature over another message kind does not pass as an observation.
+    let as_heartbeat = sign_bytes(payload_type::HEARTBEAT, &obs, &n.verifier);
+    assert!(verify_checkpoint_observation(&as_heartbeat, &n.manifest, NOW, &limits).is_err());
+}

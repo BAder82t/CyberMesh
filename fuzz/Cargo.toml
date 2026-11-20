@@ -16,6 +16,7 @@ cybermesh-analysis = { path = "../crates/cybermesh-analysis" }
 cybermesh-intelligence = { path = "../crates/cybermesh-intelligence" }
 cybermesh-anchor = { path = "../crates/cybermesh-anchor" }
 cybermesh-ct = { path = "../crates/cybermesh-ct" }
+serde_json = "1"
 
 [workspace]
 members = ["."]

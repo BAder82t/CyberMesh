@@ -63,7 +63,7 @@ Workers whose signed results differ from the log or from the verifier's rescan g
   - Signature lines from unknown keys (witnesses, other key types) are ignored.
   - A bad signature by the pinned key rejects the checkpoint.
 - **Each tile root.** It is proven by recomputing the tree root of the signed size *through* that tile's level-1 entry, using the other hashes from the log's hash tiles at levels 0 and up. The result must equal the signed root.
-- **What this buys.** A CDN, mirror or network attacker can no longer substitute hash tiles or a checkpoint. In follow mode, each new checkpoint must also provably extend the previous one, so a log that rewrites its history is detected over time.
+- **What this buys.** A CDN, mirror or network attacker can no longer substitute hash tiles or a checkpoint. In follow mode, each new checkpoint must also provably extend the previous one, so a log that rewrites its history is detected over time. Verifiers that witness the log also compare their views, so a log that shows organisations different trees is caught too (below).
 - **When verification fails.**
   - A checkpoint that does not verify, or is more than an hour old, or is dated in the future, means no log access: disagreement is disputed and nothing is confirmed.
   - A tile whose root cannot be proven (hash tiles unavailable) leaves the task `insufficient`, to be retried. The verifier's own rescan of such a tile is not used against workers, so withholding hash tiles and forging a data tile cannot get honest workers faulted.
@@ -80,7 +80,32 @@ Nobody is faulted, the tile is listed in `log_inconsistent_tiles`, and the task 
 
 - Two colluding operators that omit the *same* real match, and report the tile as empty, are caught only by the uniform spot check: probability 1/`tile_count` per task (1/8 by default). Omission hides a finding; it cannot create a false one.
 - Colluders that fabricate a match for the investigation report (publishing off) are caught when that tile is spot-checked. The second check is drawn from tiles that report matches. In `spot_checks_favour_tiles_with_reported_matches` (4-tile tasks, 3 tiles with matches) they were caught in 39 of 64 seeded runs, against 1 in 4 for a single uniform check. With publishing on, every published finding is confirmed anyway.
-- **Split views are not detected.** A log that signs *different* trees for different viewers would not be detected by one verifier alone. Witness cosignatures (C2SP `tlog-witness`) are on the roadmap.
+- **Split views are caught only between witnessing organisations.** A log that shows *every* CyberMesh organisation the same fork, while showing the public another, is not caught by CyberMesh alone. That needs witnesses outside the network.
+
+**Witnessing: catching split views.** A log could sign one tree for some viewers and another for others, for example to hide a certificate from the monitors that would flag it. Each view is consistent on its own, so one organisation checking its own checkpoints cannot see it. Organisations that compare views can, and two checkpoints the log signed then prove it.
+- **Who witnesses.** The coordinator witnesses the log it follows (unless `[ct] witness = false`), and independent verifiers the logs listed in `[ct_witness]`. Each uses its own verifier key.
+- **What a witness does.**
+  - It polls the log's checkpoint every `poll_secs` (default 60). It accepts the checkpoint only if it is signed by the pinned key, at most an hour old and consistent with the last one it accepted, and persists it in `state_dir/ct-witness.json`.
+  - Every `publish_secs` (default 300), it cosigns its latest checkpoint and publishes it on the `checkpoints` topic. The cosignature is a C2SP `cosignature/v1` line, so it can be checked outside CyberMesh too.
+- **Comparing views.**
+  - A witness compares each peer's checkpoint with its own, once its own tree is at least as large.
+  - It recomputes the root of its own tree's first `size` entries, and a consistency proof from that root to its own signed root, from hash tiles. The proof must verify, so the tiles are authenticated by its own checkpoint.
+  - If the peer's signed root differs, the log has signed two trees that cannot both belong to one append-only log. Equal sizes with different roots need no tiles at all.
+  - Tiles that cannot be read, or do not match, prove nothing either way: the comparison is retried up to 3 times.
+- **The proof.** It is written to `state_dir/ct-split-views/`: both signed checkpoints, the peer's signed observation, the prefix root and the consistency proof (at most about log₂ of the tree size in hashes: some 30 for a real log). Anyone with the log's public key can check it offline:
+  ```bash
+  cybermesh ct verify-split-view --evidence <evidence> <proof.json>
+  ```
+- **What happens next.**
+  - The log is no longer relied on. The coordinator halts following it (`ct_follow_halted`), and CT tasks of that log are settled as without log access, so disagreement is disputed and nothing is confirmed.
+  - The witness keeps publishing its own view, so organisations that share it see the conflict too.
+  - The state survives restarts, and a restarted coordinator stays halted. After investigating, remove the log from `ct-witness.json` (and run `cybermesh ct follow-reset` on the coordinator).
+- **Saved state.** A checkpoint is cosigned only once it is saved in `ct-witness.json`, so a witness never cosigns a tree inconsistent with one it cosigned before, also across restarts. If the saved checkpoint no longer verifies (the pinned key or origin changed), the log is not witnessed until an operator removes its entry: starting afresh would lose that guarantee.
+- **Bounds.**
+  - Observations must be signed and cosigned by an enrolled verifier naming itself, and carry a checkpoint the log signed: a peer cannot fabricate a split view.
+  - Each witness keeps at most one pending observation per peer and log, compared at most once a minute, at most 8 per job and for at most 2 minutes per job. A comparison downloads a few hash tiles of the witness's own checkpoint, cached across the observations it compares.
+  - A peer that the receiver's manifest does not know as a verifier yet is ignored, not penalised.
+- **Counters** are in the node's report under `ct_witness`: checkpoints accepted, observations published, received and refused, comparisons consistent and inconclusive, split views and proof files.
 
 ## 4. Measurements on real CT data (2026-11-17)
 
@@ -144,6 +169,7 @@ follow = true            # keep following the log as it grows (otherwise: scan o
 poll_secs = 60           # checkpoint poll interval
 max_tiles_per_poll = 256 # new tiles scheduled per poll at most
 # until_tile = 5000000   # optional: stop (with exit_when_done) once tiles below this are settled
+witness = true           # witness the followed log with the other verifiers (the default)
 
 [ct.policy]
 publish_warnings = false # investigation report only (recommended)
@@ -162,6 +188,17 @@ publish_warnings = false # investigation report only (recommended)
 - **Live rates.** On real logs (2026-11-17), Let's Encrypt Willow 2027h1 and Google ParcelYard 2027h1 each grew by about one full tile per second. Both checkpoints in each pair verified, and the consistency proof between them took under a second (`cargo run -p cybermesh-ct --features http --example follow_log`).
 
 Worker (`[resources]` in `worker.toml`): `ct_scanning = true` and `ct_fetch_kib_per_sec = 256`.
+
+Independent verifier (`verifier.toml`), to witness logs with the coordinator and the other verifiers:
+
+```toml
+[ct_witness]
+logs = ["letsencrypt-willow-2027h1"]   # log ids from the pinned ct-logs evidence (at most 16)
+poll_secs = 60                         # 10..=3600
+publish_secs = 300                     # 60..=3600
+```
+
+The coordinator accepts the same `[ct_witness]` section for further logs.
 
 ### Keeping the brand table current
 
@@ -217,7 +254,7 @@ The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three pl
 
 - **Static CT API only.** RFC 6962 `get-entries` logs are not supported.
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
-- **No witnesses yet.** Checkpoints are verified against the log's pinned key and tile roots are proven against them. Checkpoints are not yet cosigned by independent witnesses, so a log showing different trees to different viewers (a split view) goes undetected.
+- **Witnesses are CyberMesh's own verifiers.** Their cosignatures use the C2SP format, but they are not yet exchanged with external witness networks (C2SP `tlog-witness`). A log showing every CyberMesh organisation the same fork is therefore not caught. The cosignatures are Ed25519; C2SP recommends ML-DSA-44 for new witnesses.
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.
 - **Brand table.** `evidence suggest-owned-domains` proposes brand-owned domains from CT data, and the shipped table includes 13 found this way (§7). Lists confirmed by the brand owners are still needed before CT warnings can be enabled responsibly.
 - **Verifiers.** Independent verifiers check CT shards with their own log access and their own secret spot-check seeds, so their spot checks are independent of the coordinator's. A published CT warning needs the manifest's `min_verifiers` verifier operators.

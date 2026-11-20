@@ -127,6 +127,9 @@ trust from the coordinator.
 
    [ct_policy]              # optional: CT spot checks with your own secret seed
    spot_check_tiles = 2
+
+   [ct_witness]             # optional: witness CT logs with the other verifiers, to catch a
+   logs = ["letsencrypt-willow-2027h1"]  # log showing organisations different trees
    ```
 3. **Run it under the hardened systemd unit** in
    [`deploy/systemd/cybermesh-verifier.service`](../deploy/systemd/cybermesh-verifier.service). It
@@ -139,6 +142,7 @@ trust from the coordinator.
    - It writes its own signed records to `state_dir/records/`.
    - It publishes them on the network's `records` topic.
    - It stores the other verifiers' records it receives in `state_dir/received-records/`.
+   - With `[ct_witness]`, it publishes cosigned checkpoints of those logs and compares the others'. A proven split view is written to `state_dir/ct-split-views/`; check one with `cybermesh ct verify-split-view --evidence <dir> <file>` ([ct-monitoring.md](ct-monitoring.md) §3).
    - It writes its counters to `verifier-report.json` on exit.
 4. **Build releases from your own node.** Records are exchanged over the network, so your
    organisation's release signer needs only your node's two directories:

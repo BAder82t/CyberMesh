@@ -21,6 +21,22 @@ use crate::{CtError, TileSource};
 
 type Hash = [u8; 32];
 
+/// How another checkpoint of a log relates to a verified, larger (or equal) one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Consistency {
+    /// The other checkpoint's tree is this tree, or a prefix of it.
+    Consistent,
+    /// The log signed two trees that cannot both belong to one append-only log: the other
+    /// checkpoint's root is not the root of this tree's first `size` entries.
+    Inconsistent {
+        /// The root of this tree's first `other.size` entries (this root for equal sizes).
+        prefix_root: Hash,
+        /// RFC 6962 consistency proof from `(other.size, prefix_root)` to this checkpoint.
+        /// Empty for equal sizes: two roots for one size need no proof.
+        proof: Vec<Hash>,
+    },
+}
+
 /// Proves data tile roots against one verified checkpoint.
 pub struct TileAuthenticator<'a> {
     src: &'a dyn TileSource,
@@ -204,6 +220,54 @@ impl<'a> TileAuthenticator<'a> {
                 "checkpoint of size {n} is not consistent with the earlier checkpoint of size {m}"
             )))
         }
+    }
+
+    /// Compares `other`, a verified checkpoint of the same log no larger than this one, with
+    /// this tree, using hash tiles authenticated against this checkpoint's signed root.
+    ///
+    /// The root of this tree's first `other.size` entries and the RFC 6962 consistency proof
+    /// from it to this checkpoint's root are both computed from the tiles, and the proof must
+    /// verify. Then the comparison is decided by the signed roots alone. An error means the
+    /// tiles could not be read or do not match this checkpoint: nothing is proven either way.
+    pub fn consistency_with(&self, other: &Checkpoint) -> Result<Consistency, CtError> {
+        let (m, n) = (other.size, self.checkpoint.size);
+        if m > n {
+            return Err(CtError::Unauthenticated(format!(
+                "compare against the larger checkpoint ({m} > {n})"
+            )));
+        }
+        if m == n {
+            return Ok(if other.root == self.checkpoint.root {
+                Consistency::Consistent
+            } else {
+                Consistency::Inconsistent {
+                    prefix_root: self.checkpoint.root,
+                    proof: Vec::new(),
+                }
+            });
+        }
+        let (prefix_root, proof) = if m == 0 {
+            (merkle::empty_root(), Vec::new())
+        } else {
+            let mut ranges = Vec::new();
+            subproof_ranges(m, 0, n, true, &mut ranges);
+            let proof = ranges
+                .iter()
+                .map(|(a, b)| self.mth(*a, *b))
+                .collect::<Result<Vec<Hash>, CtError>>()?;
+            let prefix = self.mth(0, m)?;
+            if !merkle::verify_consistency(m, n, &prefix, &self.checkpoint.root, &proof) {
+                return Err(CtError::Unauthenticated(format!(
+                    "hash tiles do not match the signed checkpoint of size {n}"
+                )));
+            }
+            (prefix, proof)
+        };
+        Ok(if prefix_root == other.root {
+            Consistency::Consistent
+        } else {
+            Consistency::Inconsistent { prefix_root, proof }
+        })
     }
 
     /// The root of the whole tree recomputed from the hash tiles (equals the signed root for
@@ -452,5 +516,69 @@ mod tests {
             .pop();
         let auth = TileAuthenticator::new(&log, log.checkpoint());
         assert!(matches!(auth.tile_root(1), Err(CtError::Malformed(_))));
+    }
+
+    #[test]
+    fn a_forked_view_is_proven_with_a_checkable_consistency_proof() {
+        // Consistent: every earlier size of the same log, and the same tree.
+        let big = HashLog::new(70_000);
+        let auth = TileAuthenticator::new(&big, big.checkpoint());
+        for m in [0u64, 1, 256, 300, 65_536, 69_999, 70_000] {
+            assert_eq!(
+                auth.consistency_with(&HashLog::new(m).checkpoint())
+                    .unwrap(),
+                Consistency::Consistent,
+                "m = {m}"
+            );
+        }
+        // Another view: a tree that shares only its first 50,000 entries with this one.
+        for m in [60_000u64, 65_536, 69_999] {
+            let other = forked(m, 50_000).checkpoint();
+            let Consistency::Inconsistent { prefix_root, proof } =
+                auth.consistency_with(&other).unwrap()
+            else {
+                panic!("m = {m}: a forked view must be proven");
+            };
+            // The proof alone (no tiles) shows the log committed to another root at size m.
+            assert_ne!(prefix_root, other.root);
+            assert_eq!(prefix_root, HashLog::new(m).root);
+            assert!(merkle::verify_consistency(
+                m,
+                70_000,
+                &prefix_root,
+                &big.root,
+                &proof
+            ));
+            assert!(!merkle::verify_consistency(
+                m,
+                70_000,
+                &other.root,
+                &big.root,
+                &proof
+            ));
+        }
+        // Equal sizes with different roots need no proof.
+        let other = forked(70_000, 50_000).checkpoint();
+        assert_eq!(
+            auth.consistency_with(&other).unwrap(),
+            Consistency::Inconsistent {
+                prefix_root: big.root,
+                proof: Vec::new()
+            }
+        );
+        // Comparing against a larger checkpoint is the caller's mistake, not evidence.
+        assert!(
+            auth.consistency_with(&HashLog::new(70_001).checkpoint())
+                .is_err()
+        );
+        // Tiles that do not match the signed root prove nothing: an error, never a verdict.
+        let mut bad = HashLog::new(70_000);
+        let cp = bad.checkpoint();
+        bad.files.get_mut(&hash_tile_path(1, 0, None)).unwrap()[3 * 32] ^= 1;
+        let auth = TileAuthenticator::new(&bad, cp);
+        assert!(matches!(
+            auth.consistency_with(&HashLog::new(60_000).checkpoint()),
+            Err(CtError::Unauthenticated(_))
+        ));
     }
 }

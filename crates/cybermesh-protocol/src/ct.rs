@@ -340,3 +340,68 @@ pub fn verify_ct_result(
     }
     Ok(v)
 }
+
+/// Payload type of checkpoint observations (CT log witnessing).
+pub const CT_CHECKPOINT: &str = "application/vnd.cybermesh.ct-checkpoint+json;v=1";
+/// Largest cosigned checkpoint note carried in an observation.
+pub const MAX_OBSERVED_NOTE_BYTES: usize = 8 * 1024;
+/// Observations older than this are refused (they are re-sent while current).
+pub const MAX_OBSERVATION_AGE_SECS: u64 = 3600;
+
+/// A verifier's signed statement of the latest checkpoint it accepted for a CT log
+/// (`checkpoints` topic). The checkpoint carries the log's signature and the witness's C2SP
+/// `cosignature/v1` cosignature, so it can also be checked outside CyberMesh. Peers compare
+/// it with their own view of the log: a log that shows organisations different trees (a
+/// split view) is caught, and the two checkpoints prove it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointObservation {
+    pub v: u16,
+    pub network_id: String,
+    /// Identifier of a CT log listed in the pinned `ct-logs` evidence.
+    pub log_id: String,
+    /// The verifier that observed and cosigned the checkpoint (the envelope signer).
+    pub witness: KeyId,
+    pub observed_at: u64,
+    /// Signed checkpoint note, cosigned by the witness.
+    pub checkpoint: String,
+}
+
+/// The note key name under which a CyberMesh verifier cosigns checkpoints.
+#[must_use]
+pub fn witness_key_name(network_id: &str, witness: &KeyId) -> String {
+    format!("cybermesh/{network_id}/{}", witness.as_str())
+}
+
+/// Authenticates a checkpoint observation: signed by an enrolled verifier naming itself, for
+/// this network, fresh, and of bounded size. The checkpoint's log signature and the
+/// cosignature are checked by the caller, which holds the pinned log keys.
+pub fn verify_checkpoint_observation(
+    bytes: &[u8],
+    manifest: &TrustManifest,
+    now: u64,
+    limits: &Limits,
+) -> Result<Verified<CheckpointObservation>, ProtocolError> {
+    let v: Verified<CheckpointObservation> =
+        crate::validate::verify_signed(bytes, CT_CHECKPOINT, Role::Verifier, manifest, limits)?;
+    let o = &v.message;
+    check_header(o.v, &o.network_id, manifest)?;
+    if v.signer != o.witness {
+        return Err(ProtocolError::SignerMismatch);
+    }
+    if !is_valid_log_id(&o.log_id) {
+        return Err(ProtocolError::Invalid("invalid log id".into()));
+    }
+    if o.checkpoint.is_empty() || o.checkpoint.len() > MAX_OBSERVED_NOTE_BYTES {
+        return Err(ProtocolError::Invalid(
+            "checkpoint size out of range".into(),
+        ));
+    }
+    if o.observed_at > now.saturating_add(limits.max_clock_skew_secs) {
+        return Err(ProtocolError::NotYetValid);
+    }
+    if o.observed_at.saturating_add(MAX_OBSERVATION_AGE_SECS) < now {
+        return Err(ProtocolError::Expired);
+    }
+    Ok(v)
+}

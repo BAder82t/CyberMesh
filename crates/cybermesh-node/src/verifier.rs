@@ -80,6 +80,8 @@ pub struct VerifierSetup {
     /// With `idle_exit`: how long to keep waiting for the other verifiers' records of the
     /// tasks this verifier settled (when the manifest requires more than one verifier).
     pub records_wait: Duration,
+    /// CT logs this verifier witnesses (`[ct_witness]`).
+    pub witness: Option<crate::ct_witness::WitnessSetup>,
 }
 
 /// Counters written to `verifier-report.json` on exit.
@@ -122,6 +124,9 @@ pub struct VerifierReport {
     pub cpu_ms: u64,
     pub ct_http_bytes: u64,
     pub ct_http_requests: u64,
+    /// CT log witnessing (`[ct_witness]`), including proven split views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ct_witness: Option<crate::ct_witness::WitnessStats>,
     #[serde(skip)]
     pub records: Vec<(Digest, VerificationRecord)>,
     /// The other verifiers' records received (also in `received-records/`).
@@ -143,9 +148,12 @@ pub fn setup_from_config(
     )?;
     verifier_identity(&manifest, &key)?;
     cfg.policy.validate().map_err(NodeError::Config)?;
+    let evidence = EvidenceBundle::load(&cfg.evidence_dir)?;
+    let witness = crate::ct_witness::setup_from_config(cfg.ct_witness.as_ref(), None, &evidence)?;
     Ok(VerifierSetup {
         key,
-        engine: Engine::new(EvidenceBundle::load(&cfg.evidence_dir)?),
+        witness,
+        engine: Engine::new(evidence),
         manifest,
         listen: parse_addrs(&cfg.listen)?,
         bootstrap: parse_addrs(&cfg.bootstrap)?,
@@ -210,6 +218,8 @@ struct Verifier {
     last_activity: Instant,
     records_in: crate::records::RecordStore,
     records_out: crate::records::RecordPublisher,
+    witness: Option<crate::ct_witness::Witness>,
+    witness_tx: tokio::sync::mpsc::UnboundedSender<crate::ct_witness::JobOutcome>,
 }
 
 impl Verifier {
@@ -468,13 +478,19 @@ impl Verifier {
             }
             AnyVerifier::Ct(v) => {
                 self.ct_finalizing += 1;
+                // A log proven to show a split view is not relied on: the task is settled
+                // as without log access (disagreement disputed, nothing confirmed).
+                let split = self
+                    .witness
+                    .as_ref()
+                    .is_some_and(|w| w.is_split(&v.task().log_id));
                 let log = self
                     .s
                     .engine
                     .evidence()
                     .ct_logs
                     .iter()
-                    .find(|l| l.log_id == v.task().log_id)
+                    .find(|l| l.log_id == v.task().log_id && !split)
                     .cloned();
                 let engine = Arc::clone(&self.engine_arc);
                 let seed = self.s.ct_seed;
@@ -575,6 +591,14 @@ impl Verifier {
         net.report(m, acc).await;
     }
 
+    async fn on_checkpoint(&mut self, net: &NetworkHandle, m: &InboundMessage) {
+        let acc = match &mut self.witness {
+            Some(w) => w.on_message(&m.data, &self.s.manifest, self.s.clock.now()),
+            None => Acceptance::Ignore,
+        };
+        net.report(m, acc).await;
+    }
+
     fn expire_early_results(&mut self) {
         while let Some((at, _)) = self.early_order.front() {
             if at.elapsed() < EARLY_RESULT_TTL {
@@ -614,11 +638,14 @@ pub async fn run_verifier(
         listen: setup.listen.clone(),
         bootstrap: setup.bootstrap.clone(),
         allowed_peers: allowed_peers(&setup.manifest, &id.key),
-        subscribe: vec![
+        subscribe: [
             topics.tasks.clone(),
             topics.results.clone(),
             topics.records.clone(),
-        ],
+        ]
+        .into_iter()
+        .chain(setup.witness.is_some().then(|| topics.checkpoints.clone()))
+        .collect(),
         heartbeat: setup.gossip_heartbeat,
         // Same per-author allowance as the coordinator: results arrive in bursts.
         per_peer_burst: 4096,
@@ -646,7 +673,23 @@ pub async fn run_verifier(
     )?;
     let mut records_out = crate::records::RecordPublisher::new(max_message);
     records_out.load_recent(&setup.state_dir.join("records"), setup.clock.now());
+    let witness = match &setup.witness {
+        Some(ws) => Some(crate::ct_witness::Witness::new(
+            ws,
+            &setup.key,
+            &setup.manifest.network_id,
+            &setup.state_dir,
+        )?),
+        None => None,
+    };
+    if let Some(w) = &witness {
+        crate::ct_witness::log_started(w);
+    }
+    let (witness_tx, mut witness_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::ct_witness::JobOutcome>();
     let mut v = Verifier {
+        witness,
+        witness_tx,
         records_in,
         records_out,
         report: VerifierReport {
@@ -688,6 +731,8 @@ pub async fn run_verifier(
                         v.on_result(&net, &m).await;
                     } else if m.topic == v.topics.records {
                         v.on_record(&net, &m).await;
+                    } else if m.topic == v.topics.checkpoints {
+                        v.on_checkpoint(&net, &m).await;
                     } else {
                         net.report(&m, Acceptance::Ignore).await;
                     }
@@ -696,6 +741,13 @@ pub async fn run_verifier(
                 Some(_) => {}
                 None => break,
             },
+            Some(o) = witness_rx.recv() => {
+                if let Some(w) = &mut v.witness {
+                    for sv in w.on_outcome(o, v.s.clock.now()) {
+                        warn!(log = %sv.log_id, "CT tasks of this log are now settled without log access");
+                    }
+                }
+            }
             Some(done) = ct_rx.recv() => {
                 v.ct_finalizing = v.ct_finalizing.saturating_sub(1);
                 match done.record {
@@ -739,6 +791,11 @@ pub async fn run_verifier(
                     crate::records::REPUBLISH_WINDOW_SECS,
                 );
                 v.records_out.flush(&net, &v.topics.records).await;
+                if let Some(w) = &mut v.witness {
+                    let now = v.s.clock.now();
+                    crate::ct_witness::start_jobs(w, &v.witness_tx, now);
+                    crate::ct_witness::publish_due(w, &net, &v.topics.checkpoints, now).await;
+                }
                 if let Some(idle) = v.s.idle_exit
                     && v.report.tasks_seen > 0
                     && v.pending.is_empty()
@@ -781,6 +838,7 @@ pub async fn run_verifier(
     v.report.net_dropped_queue_full = snap.dropped_queue_full;
     v.report.cpu_ms = crate::governor::process_cpu_ms();
     (v.report.ct_http_bytes, v.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
+    v.report.ct_witness = v.witness.as_ref().map(|w| w.stats.clone());
     let _ = files::write_json(&v.s.state_dir.join("verifier-report.json"), &v.report);
     net.shutdown().await;
     Ok(v.report)
@@ -816,6 +874,7 @@ mod tests {
                 manifest_source: None,
                 idle_exit: None,
                 records_wait: Duration::from_secs(1),
+                witness: None,
             },
             id: VerifierId {
                 key: key.key_id(),
@@ -847,6 +906,8 @@ mod tests {
             )
             .unwrap(),
             records_out: crate::records::RecordPublisher::new(256 * 1024),
+            witness: None,
+            witness_tx: tokio::sync::mpsc::unbounded_channel().0,
         }
     }
 

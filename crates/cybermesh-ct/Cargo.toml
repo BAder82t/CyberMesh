@@ -25,6 +25,7 @@ cybermesh-protocol.workspace = true
 # ECDSA P-256 verification of log checkpoint signatures (already used by the TLS stack).
 ring = "0.17"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"], optional = true }
+serde.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tiny_http = { workspace = true, optional = true }

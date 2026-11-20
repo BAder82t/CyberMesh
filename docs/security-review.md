@@ -151,7 +151,7 @@ An independent internal review covered the checkpoint verifier, the Merkle proof
 | LOW | The public mock-log key could be pinned for a real log by mistake. | Refused unless the log is a plain-HTTP loopback test log. | `ct_log_key_and_origin_policy` |
 | LOW | The pinned key's point is not checked to be on the curve. | Not changed: an invalid point fails closed at verification. | — |
 
-Residual risk: a log that signs different trees for different viewers (a split view) is not detected without witnesses (roadmap).
+Residual risk: a log that signs different trees for different viewers (a split view) is not detected without witnesses (roadmap). *Update: verifiers now witness CT logs and compare their views (threat model T28).*
 
 ## Seventh pass: CT follow mode
 

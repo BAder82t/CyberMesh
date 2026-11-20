@@ -80,6 +80,9 @@ pub struct CoordinatorConfig {
     /// Certificate Transparency monitoring (optional).
     #[serde(default)]
     pub ct: Option<CtScanConfig>,
+    /// Further CT logs to witness (the followed log is witnessed unless `ct.witness = false`).
+    #[serde(default)]
+    pub ct_witness: Option<CtWitnessConfig>,
 }
 
 /// Independent verifier configuration (`verifier.toml`).
@@ -111,6 +114,10 @@ pub struct VerifierConfig {
     /// CT verification policy (spot checks with this verifier's own secret seed).
     #[serde(default)]
     pub ct_policy: cybermesh_verifier::ct::CtPolicy,
+    /// Witness CT logs: poll their checkpoints, cosign them and compare them with the other
+    /// verifiers' (`ct_witness`).
+    #[serde(default)]
+    pub ct_witness: Option<CtWitnessConfig>,
 }
 
 impl VerifierConfig {
@@ -165,6 +172,47 @@ pub struct CtScanConfig {
     /// Follow mode: stop (with `exit_when_done`) once every tile below this is settled.
     #[serde(default)]
     pub until_tile: Option<u64>,
+    /// Follow mode: witness the followed log (publish cosigned checkpoints and compare them
+    /// with the other verifiers').
+    #[serde(default = "d_true")]
+    pub witness: bool,
+}
+
+/// `[ct_witness]`: CT logs whose checkpoints this node witnesses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CtWitnessConfig {
+    /// Log ids from the pinned `ct-logs` evidence.
+    #[serde(default)]
+    pub logs: Vec<String>,
+    /// How often each log's checkpoint is polled.
+    #[serde(default = "d_witness_poll")]
+    pub poll_secs: u64,
+    /// How often the latest checkpoint is cosigned and published.
+    #[serde(default = "d_witness_publish")]
+    pub publish_secs: u64,
+}
+
+impl Default for CtWitnessConfig {
+    fn default() -> Self {
+        Self {
+            logs: Vec::new(),
+            poll_secs: d_witness_poll(),
+            publish_secs: d_witness_publish(),
+        }
+    }
+}
+
+fn d_true() -> bool {
+    true
+}
+
+fn d_witness_poll() -> u64 {
+    crate::ct_witness::DEFAULT_POLL_SECS
+}
+
+fn d_witness_publish() -> u64 {
+    crate::ct_witness::DEFAULT_PUBLISH_SECS
 }
 
 fn d_poll() -> u64 {

@@ -46,4 +46,5 @@ pub mod payload_type {
     pub const VERIFICATION: &str = "application/vnd.cybermesh.verification+json;v=1";
     pub const CT_TASK: &str = crate::ct::CT_TASK;
     pub const CT_RESULT: &str = crate::ct::CT_RESULT;
+    pub const CT_CHECKPOINT: &str = crate::ct::CT_CHECKPOINT;
 }

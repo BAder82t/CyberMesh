@@ -10,7 +10,7 @@ CyberMesh is a research project (v0.3.2). It has had internal security reviews b
 |---|---|---|
 | Runs code, scripts or URLs sent by others? | No | No |
 | Contacts the domains it analyses? | No: it analyses *names* only | No |
-| Outbound connections | Enrolled peers (TCP, libp2p). CT log hosts over HTTPS only if you enable CT scanning. | Enrolled peers. The pinned CT log hosts, for spot checks. |
+| Outbound connections | Enrolled peers (TCP, libp2p). CT log hosts over HTTPS only if you enable CT scanning. | Enrolled peers. The pinned CT log hosts, for spot checks and, if you enable `[ct_witness]`, checkpoint polls. |
 | Inbound connections | Optional: one TCP port if peers should dial you | One TCP port, usually, so workers and the coordinator reach you directly |
 | Accepts connections from | Enrolled peers only (allowlist from the signed manifest) | Same |
 | Data it handles | Public domain names and certificate names; scores; signatures | The same, plus everyone's results for the tasks it verifies |
@@ -42,7 +42,7 @@ Code: `crates/cybermesh-ct/src/http.rs`. A firewall rule allowing outbound HTTPS
 
 **DNS.** A node resolves only two kinds of host name, both through the system resolver, and never the domains it analyses:
 - peer host names written in its own configuration (`/dns4/...` bootstrap addresses);
-- the pinned CT log hosts, when it scans CT.
+- the pinned CT log hosts, when it scans or witnesses CT.
 
 A spoofed answer for a peer's name can only make that connection fail: the address names the peer id, which the encrypted handshake authenticates (threat model T27).
 
@@ -54,7 +54,7 @@ A spoofed answer for a peer's name can only make that connection fail: the addre
 |---|---|---|
 | any enrolled peer, including a compromised one | see your node's IP address and how it participates; send messages, which are rejected unless correctly signed and within limits; use up its rate allowance | make your node run code, fetch arbitrary URLs, read files outside its state directory, or exceed its resource limits |
 | the coordinator (the task issuer), if compromised | send your worker tasks to analyse: lists of domain names, or tile ranges of a pinned CT log; see your results | change your local evidence or trust root, make your node contact the domains, or forge another organisation's results or releases (threat model T4) |
-| another verifier | see your verifier's records, which are public by design | make your verifier sign anything it did not recompute itself |
+| another verifier | see your verifier's records, which are public by design; send it cosigned CT log checkpoints, which it compares with its own view (a few hash-tile downloads per peer and minute) | make your verifier sign anything it did not recompute itself, or make it believe a log misbehaved: a split view is proven only by two checkpoints the log itself signed |
 
 Malformed input is the usual way into network software. The parsers for tasks, envelopes, releases, OpenTimestamps proofs, domains, CT checkpoints and CT tiles are fuzzed (`fuzz/`), and the protocol uses canonical encodings and signature domain separation (`docs/protocol.md`).
 

@@ -34,6 +34,8 @@ pub struct Topics {
     pub presence: String,
     /// Signed verification records, exchanged between verifiers (workers do not subscribe).
     pub records: String,
+    /// Cosigned CT log checkpoints, exchanged between verifiers that witness logs.
+    pub checkpoints: String,
 }
 
 impl Topics {
@@ -44,6 +46,7 @@ impl Topics {
             results: format!("/cybermesh/{network_id}/v1/results"),
             presence: format!("/cybermesh/{network_id}/v1/presence"),
             records: format!("/cybermesh/{network_id}/v1/records"),
+            checkpoints: format!("/cybermesh/{network_id}/v1/checkpoints"),
         }
     }
 }
