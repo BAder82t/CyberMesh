@@ -18,6 +18,7 @@ use cybermesh_node::coordinator::CtSetup;
 use cybermesh_node::coordinator::{
     CoordinatorReport, CoordinatorSetup, prepare_domains, run_coordinator,
 };
+use cybermesh_node::ct_witness::WitnessSetup;
 use cybermesh_node::governor::ResourcePolicy;
 use cybermesh_node::verifier::{VerifierReport, VerifierSetup, run_verifier};
 use cybermesh_node::worker::{WorkerSetup, WorkerStatus, run_worker};
@@ -124,6 +125,14 @@ pub struct Options {
     pub ct_grow: Option<(Duration, usize)>,
     /// Instead of growing, replace the log with a different (forked) tree of that size.
     pub ct_fork: bool,
+    /// Witness the CT log (coordinator and independent verifiers), polling and publishing
+    /// at this interval.
+    pub ct_witness: Option<Duration>,
+    /// Independent verifiers are served this log instead (same log id and key, another
+    /// tree: a split view).
+    pub ct_verifier_view: Option<Arc<MockLog>>,
+    /// The coordinator's `ct-witness.json` before it starts (a restart).
+    pub ct_witness_state: Option<&'static str>,
 }
 
 impl Default for Options {
@@ -146,6 +155,9 @@ impl Default for Options {
             ct_follow: None,
             ct_grow: None,
             ct_fork: false,
+            ct_witness: None,
+            ct_verifier_view: None,
+            ct_witness_state: None,
         }
     }
 }
@@ -238,6 +250,20 @@ impl Harness {
             }
             log.log_info("mock-log", &url)
         });
+        let verifier_ct_info = match &o.ct_verifier_view {
+            Some(view) => {
+                let (url, _h) = cybermesh_ct::mock::serve(Arc::clone(view), "127.0.0.1:0").unwrap();
+                Some(view.log_info("mock-log", &url))
+            }
+            None => ct_info.clone(),
+        };
+        let witness_for = |info: Option<&CtLogInfo>| {
+            o.ct_witness.zip(info).map(|(every, info)| WitnessSetup {
+                logs: vec![info.clone()],
+                poll: every,
+                publish: every,
+            })
+        };
         let ct = ct_info.as_ref().map(|info| CtSetup {
             log: info.clone(),
             first_tile: Some(0),
@@ -281,7 +307,12 @@ impl Harness {
             gossip_heartbeat: Duration::from_millis(100),
             manifest_source: None,
             ct,
+            witness: witness_for(ct_info.as_ref()),
         };
+        if let Some(state) = o.ct_witness_state {
+            std::fs::create_dir_all(&setup.state_dir).unwrap();
+            std::fs::write(setup.state_dir.join("ct-witness.json"), state).unwrap();
+        }
         let (ctx, crx) = watch::channel(false);
         // Independent verifiers dial the coordinator; workers dial both, so results reach a
         // verifier directly as well as through the coordinator.
@@ -298,7 +329,7 @@ impl Harness {
             let vsetup = VerifierSetup {
                 key: cybermesh_crypto::SecretKey::from_seed(&key.seed()),
                 manifest: net.manifest.clone(),
-                engine: Engine::new(evidence_with_ct(ct_info.as_ref())),
+                engine: Engine::new(evidence_with_ct(verifier_ct_info.as_ref())),
                 listen: vec![format!("/ip4/127.0.0.1/tcp/{vport}").parse().unwrap()],
                 bootstrap: vec![addr.clone()],
                 state_dir: dir.path().join(format!("verifier-{op}")),
@@ -314,6 +345,7 @@ impl Harness {
                 manifest_source: None,
                 idle_exit: Some(Duration::from_secs(3)),
                 records_wait: Duration::from_secs(20),
+                witness: witness_for(verifier_ct_info.as_ref()),
             };
             let (vtx, vrx) = watch::channel(false);
             verifiers.push((

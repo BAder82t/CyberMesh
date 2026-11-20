@@ -31,6 +31,7 @@ toml.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+cybermesh-ct = { workspace = true, features = ["http", "mock"] }
 cybermesh-protocol = { workspace = true, features = ["testkit"] }
 tempfile.workspace = true
 

@@ -9,6 +9,8 @@
 //!   (RFC 6962 ECDSA P-256 note signatures) and origin.
 //! * [`proof`]: authenticates hash tiles against a verified checkpoint, so tile roots are
 //!   trusted because the log signed them, not because they arrived over HTTPS.
+//! * [`witness`]: C2SP `cosignature/v1` witness cosignatures on checkpoints, and portable
+//!   proofs that a log showed a split view.
 //! * `http` feature: [`http::HttpTileSource`], an HTTPS client restricted to a pinned
 //!   monitoring prefix (no redirects, size caps, timeouts).
 //! * `mock` feature: a synthetic static CT log with real X.509 certificates, and a loopback
@@ -28,9 +30,10 @@ pub mod names;
 pub mod proof;
 pub mod scan;
 pub mod tile;
+pub mod witness;
 
 pub use checkpoint::{Checkpoint, LogKey, verify_checkpoint};
-pub use proof::authenticated_tile_root;
+pub use proof::{Consistency, authenticated_tile_root};
 pub use scan::{is_brand_signal, scan_tile, scan_tiles};
 pub use tile::{Entry, EntryKind, parse_data_tile};
 

@@ -25,6 +25,15 @@ pub enum CtCmd {
         #[arg(long)]
         state: PathBuf,
     },
+    /// Check a split-view proof (`state_dir/ct-split-views/*.json`) offline against the
+    /// log's pinned key: two checkpoints signed by the log that cannot both be correct.
+    VerifySplitView {
+        /// Evidence bundle pinning the log (its `ct-logs` source).
+        #[arg(long)]
+        evidence: PathBuf,
+        /// The proof file.
+        proof: PathBuf,
+    },
     /// Show a pinned log's current checkpoint.
     Checkpoint {
         #[arg(long)]
@@ -141,6 +150,55 @@ struct Report<'a> {
     brands: &'a BTreeMap<String, Vec<ReportItem>>,
 }
 
+/// Checks a split-view proof against the pinned log keys; returns a description.
+fn check_split_view(
+    ev: &cybermesh_node::ct_witness::SplitViewEvidence,
+    logs: &[cybermesh_analysis::CtLogInfo],
+) -> Result<Vec<String>> {
+    let log = logs
+        .iter()
+        .find(|l| l.log_id == ev.log_id)
+        .with_context(|| format!("log {} is not in the ct-logs evidence", ev.log_id))?;
+    let key = cybermesh_ct::LogKey::from_info(log)?;
+    let (larger, smaller) = ev
+        .proof
+        .verify(&key)
+        .map_err(|e| anyhow::anyhow!("NOT a valid split-view proof for {}: {e}", ev.log_id))?;
+    let b64 = |h: &[u8; 32]| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(h)
+    };
+    let mut out = vec![format!(
+        "VALID: {} ({}) signed two trees that cannot both be correct",
+        ev.log_id,
+        key.origin()
+    )];
+    for cp in [&larger, &smaller] {
+        out.push(format!(
+            "  size {} root {} (signed at {} ms)",
+            cp.size,
+            b64(&cp.root),
+            cp.signed_at_ms
+        ));
+    }
+    if smaller.size < larger.size {
+        out.push(format!(
+            "  the larger tree's first {} entries have another root, shown by a {}-hash consistency proof",
+            smaller.size,
+            ev.proof.proof.len()
+        ));
+    }
+    out.push(format!(
+        "  detected by {} at {}; other view reported by {}",
+        ev.detected_by.short(),
+        ev.detected_at,
+        ev.reported_by
+            .as_ref()
+            .map_or("this node's own view", |k| k.short())
+    ));
+    Ok(out)
+}
+
 pub fn run(c: CtCmd) -> Result<()> {
     match c {
         CtCmd::Checkpoint { evidence, log } => {
@@ -228,6 +286,14 @@ pub fn run(c: CtCmd) -> Result<()> {
                 old.map_or(0, |h| h.size),
                 s.resume_from
             );
+            Ok(())
+        }
+        CtCmd::VerifySplitView { evidence, proof } => {
+            let ev: cybermesh_node::ct_witness::SplitViewEvidence = util::read_json(&proof)?;
+            let bundle = EvidenceBundle::load(&evidence)?;
+            for line in check_split_view(&ev, &bundle.ct_logs)? {
+                println!("{line}");
+            }
             Ok(())
         }
         CtCmd::Report {
@@ -334,5 +400,57 @@ pub fn run(c: CtCmd) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use cybermesh_ct::mock::{MockLog, demo_entries};
+    use cybermesh_ct::proof::TileAuthenticator;
+    use cybermesh_ct::verify_checkpoint;
+    use cybermesh_ct::witness::SplitViewProof;
+    use cybermesh_node::ct_witness::SplitViewEvidence;
+
+    use super::*;
+
+    #[test]
+    fn a_split_view_proof_is_checked_against_the_pinned_key_only() {
+        let base = MockLog::build("ct.example/test", &demo_entries(1)).unwrap();
+        let mut a = base.clone();
+        a.extend(&demo_entries(2)).unwrap();
+        let mut b = base.clone();
+        b.extend(&demo_entries(1)).unwrap();
+        let info = base.log_info("mock-log", "http://127.0.0.1:9/");
+        let key = cybermesh_ct::LogKey::from_info(&info).unwrap();
+        let (na, nb) = (a.checkpoint().unwrap(), b.checkpoint().unwrap());
+        let (ca, cb) = (
+            verify_checkpoint(&na, &key).unwrap(),
+            verify_checkpoint(&nb, &key).unwrap(),
+        );
+        let c = TileAuthenticator::new(&a, ca)
+            .consistency_with(&cb)
+            .unwrap();
+        let who = cybermesh_crypto::SecretKey::from_seed(&[3; 32]).key_id();
+        let mut ev = SplitViewEvidence {
+            log_id: "mock-log".into(),
+            detected_at: 1,
+            detected_by: who.clone(),
+            reported_by: Some(who),
+            observation: None,
+            proof: SplitViewProof::new(key.origin(), &na, &nb, &c).unwrap(),
+        };
+        let lines = check_split_view(&ev, std::slice::from_ref(&info)).unwrap();
+        assert!(lines[0].starts_with("VALID: mock-log"), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("first 512 entries")));
+        // Another log's key, a log not pinned, or a tampered proof: refused.
+        let other = MockLog::build("other.example/log", &demo_entries(1))
+            .unwrap()
+            .log_info("mock-log", "http://127.0.0.1:9/");
+        assert!(check_split_view(&ev, &[other]).is_err());
+        assert!(check_split_view(&ev, &[]).is_err());
+        ev.proof.smaller = base.checkpoint().unwrap();
+        let e = check_split_view(&ev, &[info]).unwrap_err().to_string();
+        assert!(e.starts_with("NOT a valid split-view proof"), "{e}");
     }
 }

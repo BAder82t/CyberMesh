@@ -52,7 +52,7 @@ It is compatible with v0.3.x.
   - Let the coordinator act on faults proven by other verifiers.
   - Prove late equivocation at independent verifiers.
 - **CT.**
-  - Witness cosignatures on checkpoints (C2SP `tlog-witness`), to detect split views. Checkpoint signatures and tile-root proofs are done.
+  - Exchange checkpoint cosignatures with external witness networks (C2SP `tlog-witness`), and consider ML-DSA-44 cosignatures. Witnessing between CyberMesh verifiers is done: they cosign checkpoints, compare their views and prove split views ([ct-monitoring.md](ct-monitoring.md) §3).
   - RFC 6962 logs.
   - Brand infrastructure lists confirmed by the brand owners, needed before CT warnings can be enabled widely. `cybermesh evidence suggest-owned-domains` already proposes candidates from CT data.
 - **Network.** Enable gossipsub peer scoring (invalid-message penalties), and Kademlia discovery for more than 20 nodes. (Host names in peer addresses are done.)

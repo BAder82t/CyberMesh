@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- **CT log witnessing: split views are caught between organisations.** A log could show different organisations different trees, each consistent on its own; one organisation cannot see that alone.
+  - Verifiers now witness logs. Each polls a log's checkpoint, accepts it only if signed, fresh and consistent with its previous one, cosigns it (C2SP `cosignature/v1`, Ed25519) and publishes it on a new `checkpoints` gossip topic.
+  - Each witness compares the others' checkpoints with its own view, using hash tiles authenticated against its own signed checkpoint. Two checkpoints the log signed that cannot belong to one append-only log are written to `state_dir/ct-split-views/` as a proof anyone can check offline: `cybermesh ct verify-split-view`.
+  - The log is then no longer relied on: following halts, and its CT tasks are settled without log access.
+  - The coordinator witnesses its followed log by default (`[ct] witness`). Independent verifiers opt in with `[ct_witness] logs = [...]`.
+  - Threat model T28; [docs/ct-monitoring.md](docs/ct-monitoring.md) §3. Wire-compatible: nodes that do not witness ignore the new topic.
 - `cybermesh evidence suggest-owned-domains` finds domains that brand owners run themselves among the names a `ct watch` run flagged, so they can be added to the brand's `legitimate` list.
   - It uses the shared-certificate rule of CT evaluation revision 1, counting each certificate once however often it was logged or reissued.
   - It never suggests a hosting platform or a multi-tenant service.
