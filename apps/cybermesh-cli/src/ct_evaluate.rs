@@ -665,9 +665,13 @@ pub struct RunStats {
     pub window_to_ms: u64,
     pub starts: usize,
     pub logs: Vec<String>,
+    /// Tiles, entries and unparsed entries scanned by the polls inside the window.
     pub tiles_scanned: u64,
     pub entries_scanned: u64,
     pub unparsed_entries: u64,
+    /// The same for the whole run so far.
+    pub tiles_scanned_run: u64,
+    pub entries_scanned_run: u64,
     pub name_segments: usize,
     pub truncated_segments: usize,
     pub name_lines_unreadable: u64,
@@ -729,6 +733,8 @@ fn gaps(intervals: &[(u64, u64)], from: u64, to: u64) -> Vec<(u64, u64)> {
 
 struct Polls {
     by_log: BTreeMap<String, Vec<(u64, u64)>>,
+    /// (poll time, tiles, entries, unparsed) of every poll, for the window's totals.
+    counts: Vec<(u64, u64, u64, u64)>,
 }
 
 fn run_stats(run: &Path) -> Result<(RunStats, Polls)> {
@@ -743,10 +749,11 @@ fn run_stats(run: &Path) -> Result<(RunStats, Polls)> {
     st.starts = runs.len();
     let polls: Vec<PollRecord> = jsonl(&run.join("polls.jsonl"), &mut st.poll_lines_unreadable)?;
     let mut by_log: BTreeMap<String, Vec<(u64, u64)>> = BTreeMap::new();
+    let mut counts = Vec::with_capacity(polls.len());
     for p in &polls {
-        st.tiles_scanned += p.tiles;
-        st.entries_scanned += p.entries;
-        st.unparsed_entries += p.unparsed;
+        st.tiles_scanned_run += p.tiles;
+        st.entries_scanned_run += p.entries;
+        counts.push((p.t_ms, p.tiles, p.entries, p.unparsed));
         st.window_to_ms = st.window_to_ms.max(p.t_ms + p.elapsed_ms);
         by_log
             .entry(p.log.clone())
@@ -762,20 +769,30 @@ fn run_stats(run: &Path) -> Result<(RunStats, Polls)> {
     for e in events {
         *st.events.entry(e.kind).or_default() += 1;
     }
-    Ok((st, Polls { by_log }))
+    Ok((st, Polls { by_log, counts }))
 }
 
 /// Earliest log timestamp at which each tracked host (or registrable domain) appeared in a
 /// certificate, from the name segments.
 #[derive(Debug, Default)]
 struct Observed {
+    /// Seen under its own name or under a wildcard for its parent.
     host: HashMap<String, u64>,
+    /// Seen under its own name: a wildcard certificate for a parent does not reveal the
+    /// host's name, so no name-based CT monitor can flag the host from it.
+    host_own_name: HashMap<String, u64>,
     regdom: HashMap<String, u64>,
 }
 
 impl Observed {
     fn see_host(&mut self, h: &str, ts: u64) {
         let e = self.host.entry(h.to_owned()).or_insert(ts);
+        *e = (*e).min(ts);
+    }
+
+    fn see_own_name(&mut self, h: &str, ts: u64) {
+        self.see_host(h, ts);
+        let e = self.host_own_name.entry(h.to_owned()).or_insert(ts);
         *e = (*e).min(ts);
     }
 
@@ -787,6 +804,9 @@ impl Observed {
     fn merge(&mut self, o: Observed) {
         for (h, t) in o.host {
             self.see_host(&h, t);
+        }
+        for (h, t) in o.host_own_name {
+            self.see_own_name(&h, t);
         }
         for (r, t) in o.regdom {
             self.see_regdom(&r, t);
@@ -842,7 +862,7 @@ fn scan_segment(
         }
         for n in names.split(' ').filter(|n| !n.is_empty()) {
             if lk.hosts.contains(n) {
-                acc.obs.see_host(n, ts);
+                acc.obs.see_own_name(n, ts);
             }
             for s in suffixes(n) {
                 if lk.regdoms.contains(s) {
@@ -1065,6 +1085,12 @@ pub struct Detection {
     pub confirmed: u64,
     /// ...with a certificate in the followed logs before confirmation.
     pub observability: Proportion,
+    /// ...with a certificate naming the host itself before confirmation, and recall among
+    /// those, per level. Added on 2026-11-20 after the dev-window analysis: a host covered
+    /// only by a wildcard certificate for its parent is counted as visible above, but its
+    /// name never appears in CT (docs/ct-evaluation.md 4).
+    pub observability_own_name: Proportion,
+    pub recall_own_name: BTreeMap<String, Proportion>,
     /// Flagged before confirmation, among observable hosts, per level.
     pub recall: BTreeMap<String, Proportion>,
     /// Flagged before confirmation, among all confirmed hosts (end to end), per level.
@@ -1157,6 +1183,19 @@ fn detection(
         .filter(|(h, c)| obs.host.get(*h).is_some_and(|t| t <= c))
         .collect();
     d.observability = Proportion::of(observable.len() as u64, d.confirmed);
+    let own: Vec<&(&str, u64)> = hosts
+        .iter()
+        .filter(|(h, c)| obs.host_own_name.get(*h).is_some_and(|t| t <= c))
+        .collect();
+    d.observability_own_name = Proportion::of(own.len() as u64, d.confirmed);
+    for level in Level::ALL {
+        let hit = own
+            .iter()
+            .filter(|(h, c)| flags.covering(h, level).is_some_and(|o| o.ts <= *c))
+            .count() as u64;
+        d.recall_own_name
+            .insert(level.name().into(), Proportion::of(hit, own.len() as u64));
+    }
     for level in Level::ALL {
         let mut hit = 0u64;
         let mut lead = Vec::new();
@@ -1270,6 +1309,13 @@ pub fn run(a: &EvaluateArgs) -> Result<Report> {
     }
     st.window_from_ms = from;
     st.window_to_ms = to;
+    for &(t, tiles, entries, unparsed) in &polls.counts {
+        if t >= from && t < to {
+            st.tiles_scanned += tiles;
+            st.entries_scanned += entries;
+            st.unparsed_entries += unparsed;
+        }
+    }
     for (log, iv) in &polls.by_log {
         let g = gaps(iv, from, to);
         st.downtime_ms
@@ -1615,12 +1661,13 @@ fn hours(q: &Quantiles) -> String {
 pub fn print(rep: &Report) {
     let r = &rep.run;
     println!(
-        "window {} .. {}: {} tiles, {} entries from {} log(s); {} flagged names{}; downtime {:?} ms",
+        "window {} .. {}: {} tiles, {} entries from {} log(s) in polls inside the window ({} tiles in the whole run); {} flagged names{}; downtime {:?} ms",
         utc(r.window_from_ms),
         utc(r.window_to_ms),
         r.tiles_scanned,
         r.entries_scanned,
         r.logs.len(),
+        r.tiles_scanned_run,
         r.flagged_names,
         if rep.rescored_with.is_some() {
             format!(" (re-scored: {} names assessed)", r.names_rescored)
@@ -1656,13 +1703,15 @@ pub fn print(rep: &Report) {
     ] {
         println!("{label}: {} confirmed hosts", d.confirmed);
         println!(
-            "  visible in the followed logs before confirmation: {}",
-            pct(&d.observability)
+            "  visible in the followed logs before confirmation: {}; under its own name: {}",
+            pct(&d.observability),
+            pct(&d.observability_own_name)
         );
         for l in ["signal", "warn", "block"] {
             println!(
-                "  recall [{l}]: {} of visible, {} end to end; lead {}",
+                "  recall [{l}]: {} of visible, {} of visible under its own name, {} end to end; lead {}",
                 pct(&d.recall[l]),
+                pct(&d.recall_own_name[l]),
                 pct(&d.recall_end_to_end[l]),
                 hours(&d.lead_hours[l])
             );
@@ -2055,6 +2104,15 @@ mod tests {
         // Visible before confirmation: phish-paypal-login, secure.paypa1-verify (wildcard),
         // plain-unflagged. Not: invisible (no cert), late-phish (cert after confirmation).
         assert_eq!((p.observability.k, p.observability.n), (3, 5));
+        // secure.paypa1-verify.net was visible only through *.paypa1-verify.net.
+        assert_eq!(
+            (p.observability_own_name.k, p.observability_own_name.n),
+            (2, 5)
+        );
+        assert_eq!(
+            (p.recall_own_name["warn"].k, p.recall_own_name["warn"].n),
+            (1, 2)
+        );
         assert_eq!((p.recall["warn"].k, p.recall["warn"].n), (2, 3));
         assert_eq!((p.recall["block"].k, p.recall["block"].n), (1, 3));
         assert_eq!(p.recall_end_to_end["warn"].n, 5);
@@ -2113,6 +2171,16 @@ mod tests {
         assert_eq!(rep.run.match_lines_unreadable, 1);
         assert_eq!(rep.run.poll_lines_unreadable, 2);
         assert_eq!(rep.run.flagged_names, 4);
+        assert_eq!(
+            (rep.run.tiles_scanned, rep.run.tiles_scanned_run),
+            (241, 241)
+        );
+        // A shorter window counts only the polls inside it (hourly polls, t0 .. t0 + 47 h).
+        let mut short = args(run, &run.join("eval-short"), false);
+        short.to_ms = Some(t0 + 48 * h);
+        let r2 = super::run(&short).unwrap();
+        assert_eq!((r2.run.tiles_scanned, r2.run.tiles_scanned_run), (48, 241));
+        assert_eq!(r2.run.entries_scanned, 48 * 256);
         // Polls an hour apart (1 s each): every pause is longer than two minutes.
         assert_eq!(rep.run.downtime["log-a"].len(), 240);
         assert_eq!(rep.run.downtime_ms["log-a"], 240 * (h - 1000));
