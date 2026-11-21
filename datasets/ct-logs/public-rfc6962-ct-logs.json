@@ -1,0 +1,138 @@
+[
+  {
+    "log_id": "cloudflare-nimbus2026",
+    "description": "Cloudflare Nimbus2026 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://ct.cloudflare.com/logs/nimbus2026/",
+    "origin": "ct.cloudflare.com/logs/nimbus2026",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2FxhT6xq0iCATopC9gStS9SxHHmOKTLeaVNZ661488Aq8tARXQV+6+jB0983v5FkRm4OJxPqu29GJ1iG70Ahow=="
+  },
+  {
+    "log_id": "cloudflare-nimbus2027",
+    "description": "Cloudflare Nimbus2027 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://ct.cloudflare.com/logs/nimbus2027/",
+    "origin": "ct.cloudflare.com/logs/nimbus2027",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYjd/jE0EoAhNBbfcNhrTb7F0x10KZK8r2SDjx1GdjJ75hJrHx2OCQ+BXRjXi+czoREN1u0j9cWl8d6OoPMPogQ=="
+  },
+  {
+    "log_id": "digicert-sphinx2026h2",
+    "description": "DigiCert Sphinx2026h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://sphinx.ct.digicert.com/2026h2/",
+    "origin": "sphinx.ct.digicert.com/2026h2",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEquD0JkRQT/2inuaA4HC1sc6UpfiXgURVQmQcInmnZFnTiZMhZvsJgWAfYlU0OIykOC6slQzr7U9kvEVC9wZ6zQ=="
+  },
+  {
+    "log_id": "digicert-sphinx2027h1",
+    "description": "DigiCert Sphinx2027h1 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://sphinx.ct.digicert.com/2027h1/",
+    "origin": "sphinx.ct.digicert.com/2027h1",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvirIq1XPwgwG7BnbMh2zoUbEt+T8z8XAtg9lo8jma+aaTQl8iVCypUFXtLpt4/SHaoUzbvcjDX/6B1IbL3OoIQ=="
+  },
+  {
+    "log_id": "digicert-sphinx2027h2",
+    "description": "DigiCert Sphinx2027h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://sphinx.ct.digicert.com/2027h2/",
+    "origin": "sphinx.ct.digicert.com/2027h2",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUCe23M889mAsUVeTTBcNsAmP374ZWQboLdR8RdGwM3VZ6P/sDwhrL7wK4zrXPh3HwLDDLxDjvRBeivUSbpZSwA=="
+  },
+  {
+    "log_id": "digicert-wyvern2026h2",
+    "description": "DigiCert Wyvern2026h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://wyvern.ct.digicert.com/2026h2/",
+    "origin": "wyvern.ct.digicert.com/2026h2",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEenPbSvLeT+zhFBu+pqk8IbhFEs16iCaRIFb1STLDdWzL6XwTdTWcbOzxMTzB3puME5K3rT0PoZyPSM50JxgjmQ=="
+  },
+  {
+    "log_id": "digicert-wyvern2027h1",
+    "description": "DigiCert Wyvern2027h1 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://wyvern.ct.digicert.com/2027h1/",
+    "origin": "wyvern.ct.digicert.com/2027h1",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEastxYj1mntGuyv74k4f+yaIx+ZEzlSJ+iVTYWlw8SpSKJ4TfxYWuBhnETlhpyG/5seJn0mOSnVgXsZ1JRflI7g=="
+  },
+  {
+    "log_id": "digicert-wyvern2027h2",
+    "description": "DigiCert Wyvern2027h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://wyvern.ct.digicert.com/2027h2/",
+    "origin": "wyvern.ct.digicert.com/2027h2",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEuOg8hcgaYT/MShxpag2Hige0zsLzz8vOLZXp6faCdzM+Mn/njyU9ROAuwDxuu88/Grxn46kmehdOKVDFexbdSg=="
+  },
+  {
+    "log_id": "sectigo-elephant2026h2",
+    "description": "Sectigo Elephant2026h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://elephant2026h2.ct.sectigo.com/",
+    "origin": "elephant2026h2.ct.sectigo.com",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEO/t4Uwkoou78zkCchh9tfAKbIUJmbOoUAb8szD8StnnHFKAVY5kq1Ljs8YD7CfzdD7xcVjmQYpbtNUhxRMRtmA=="
+  },
+  {
+    "log_id": "sectigo-elephant2027h1",
+    "description": "Sectigo Elephant2027h1 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://elephant2027h1.ct.sectigo.com/",
+    "origin": "elephant2027h1.ct.sectigo.com",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4fu36JygUwaaVO+ddWJ97FJZlA5SjPLmT+RHwg0pavkIrbT1b5LNQrsaEw0CoGraf7BkzKZf7PC8gYAScw2woA=="
+  },
+  {
+    "log_id": "sectigo-elephant2027h2",
+    "description": "Sectigo Elephant2027h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://elephant2027h2.ct.sectigo.com/",
+    "origin": "elephant2027h2.ct.sectigo.com",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAECTPhpJnRFroRRpP/1DdAns+PrnmUywtqIV+EeL4Jg8zKouoW7kuAkYo+kZeoHtyK7CBhflIlMk7T2Qrn4w/t8g=="
+  },
+  {
+    "log_id": "sectigo-tiger2026h2",
+    "description": "Sectigo Tiger2026h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://tiger2026h2.ct.sectigo.com/",
+    "origin": "tiger2026h2.ct.sectigo.com",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfJFUD/FRkonvZIA9ZT1J3yvA4EpSp3innbIVpMTDR1oCe5vguapheQ7wYiWaCES1EL1B+2BEC+P5bUfwF44lnA=="
+  },
+  {
+    "log_id": "sectigo-tiger2027h1",
+    "description": "Sectigo Tiger2027h1 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://tiger2027h1.ct.sectigo.com/",
+    "origin": "tiger2027h1.ct.sectigo.com",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmMQofpsDjCVYzF4jXdFWM/ioYBJIPcsQQrNAHE6v4lOsADoI+/jN1lph8x4K3NgnXDXwmyJcFwRYgVOBMhaYhA=="
+  },
+  {
+    "log_id": "sectigo-tiger2027h2",
+    "description": "Sectigo Tiger2027h2 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://tiger2027h2.ct.sectigo.com/",
+    "origin": "tiger2027h2.ct.sectigo.com",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEb0AgkemhsPmYe1goCSy5ncf2lG9vtK6f+SzODKJMYEgPOT+z93cUEKM1EaTuo09rozfdqhjeihIl25y9A3JhyQ=="
+  },
+  {
+    "log_id": "trustasia-hetu2027",
+    "description": "TrustAsia HETU2027 (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://hetu2027.trustasia.com/hetu2027/",
+    "origin": "hetu2027.trustasia.com/hetu2027",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE14jG8D9suqIVWPtTNOL33uXKZ4mUnnOMrIwOWeZU7GtoDRCWIXfy/9/SC8lTAbtP2NOP4wjIufAk6f64sY4DWg=="
+  },
+  {
+    "log_id": "trustasia-log2026a",
+    "description": "TrustAsia log2026a (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://ct2026-a.trustasia.com/log2026a/",
+    "origin": "ct2026-a.trustasia.com/log2026a",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEp056yaYH+f907JjLSeEAJLNZLoP9wHA1M0xjynSDwDxbU0B8MR81pF8P5O5PiRfoWy7FrAAFyXY3RZcDFf9gWQ=="
+  },
+  {
+    "log_id": "trustasia-log2026b",
+    "description": "TrustAsia log2026b (RFC 6962 API). Listed in Google's CT log list v3 on 2026-11-21 (log list v98.2); key from that list. The origin is the API prefix, chosen here: a classic log has none.",
+    "api": "rfc6962",
+    "monitoring_url": "https://ct2026-b.trustasia.com/log2026b/",
+    "origin": "ct2026-b.trustasia.com/log2026b",
+    "public_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDxKMqebj7GLu31jIUOYmcHYQtwQ5s6f4THM7wzhaEgBM4NoOFopFMgoxqiLHnX0FU8eelOqbV0a/T6R++9/6hQ=="
+  }
+]

@@ -59,7 +59,7 @@ Workers whose signed results differ from the log or from the verifier's rescan g
 
 **Trusting the log.** The log's signature, not HTTPS, is the root of trust.
 - **The checkpoint.** It must carry a valid RFC 6962 `TreeHeadSignature` (ECDSA P-256) by the log's **pinned key**, encoded as a C2SP note signature. Its origin must equal the **pinned origin**.
-  - Key and origin come from the `ct-logs` evidence. For real logs they are taken from Google's CT log list v3 (`datasets/ct-logs/public-static-ct-logs.json`).
+  - Key and origin come from the `ct-logs` evidence. For real logs they are taken from Google's CT log list v3 (`datasets/ct-logs/public-static-ct-logs.json`; the 17 usable classic logs are in `public-rfc6962-ct-logs.json`).
   - Signature lines from unknown keys (witnesses, other key types) are ignored.
   - A bad signature by the pinned key rejects the checkpoint.
 - **Each tile root.** It is proven by recomputing the tree root of the signed size *through* that tile's level-1 entry, using the other hashes from the log's hash tiles at levels 0 and up. The result must equal the signed root.
@@ -149,7 +149,7 @@ CT monitoring is the first CyberMesh workload large enough that pooling many sma
 ## 7. Using it
 
 ```bash
-# Pin logs in the evidence bundle (see datasets/ct-logs/public-static-ct-logs.json for real ones)
+# Pin logs in the evidence bundle (see datasets/ct-logs/public-static-ct-logs.json and public-rfc6962-ct-logs.json for real ones)
 cybermesh evidence pin --dir <evidence>
 cybermesh ct checkpoint --evidence <evidence> --log <log-id>
 cybermesh ct scan --evidence <evidence> --log <log-id> --tiles 4        # one-off local scan
@@ -267,7 +267,9 @@ The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three pl
 
 ## 8. Limitations and next steps
 
-- **Classic RFC 6962 logs are supported, with limits.** A `ct-logs` entry with `"api": "rfc6962"` (omitted for static logs) names a classic log by its API prefix (the part before `ct/v1/`); its `origin` is a name you choose, because a classic log has none and its signature does not cover one. Workers, verifiers, the coordinator (including following) and witnesses then use it like a static log. Differences: a tile is 256 entries fetched with `get-entries` (a log may need several calls), the tile root is proven with one `get-proof-by-hash` audit path instead of hash tiles, and consistency comes from `get-sth-consistency`. Only ECDSA P-256 logs work. A tile costs about two extra requests, and the CLI's request counters do not include the audit-path and consistency calls. Classic logs are those of DigiCert, Cloudflare and Sectigo (17 usable on 2026-11-21, against 63 static).
+- **Classic RFC 6962 logs are supported, with limits.** A `ct-logs` entry with `"api": "rfc6962"` (omitted for static logs) names a classic log by its API prefix (the part before `ct/v1/`); its `origin` is a name you choose, because a classic log has none and its signature does not cover one. Workers, verifiers, the coordinator (including following) and witnesses then use it like a static log. Differences: a tile is 256 entries fetched with `get-entries` (a log may need several calls), the tile root is proven with one `get-proof-by-hash` audit path instead of hash tiles, and consistency comes from `get-sth-consistency`. Only ECDSA P-256 logs work. A tile costs about two extra requests, and the CLI's request counters do not include the audit-path and consistency calls. Classic logs are those of DigiCert, Cloudflare, Sectigo and TrustAsia (17 usable on 2026-11-21, against 63 static), listed in `datasets/ct-logs/public-rfc6962-ct-logs.json` with keys from Google's CT log list v3.
+  - **Checked against the live logs on 2026-11-21.** `ct checkpoint` verified all 17 signed tree heads with the pinned keys. `ct scan` of the two newest full tiles of each log gave 0 unparsed certificates and 2 of 2 tile roots proven for 16 logs. About 1 KiB per entry was downloaded, decoded.
+  - **Some logs serve their newest entries late.** Sectigo Tiger2026h2 answered `get-entries` with HTTP 400 for the newest ~1,000 entries, while its signed tree head already counted them. Tiles that close to the head are then unavailable, not wrong: a worker's task for them fails and a follower retries on its next poll. Scan a few tiles behind the head (`--first-tile`) when you want a one-off result.
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
 - **Witnesses are CyberMesh's own verifiers.** Their cosignatures use the C2SP format, but they are not yet exchanged with external witness networks (C2SP `tlog-witness`). A log showing every CyberMesh organisation the same fork is therefore not caught. The cosignatures are Ed25519; C2SP recommends ML-DSA-44 for new witnesses.
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.

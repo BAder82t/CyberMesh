@@ -64,7 +64,7 @@ The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on
 ## Next: harden the pilot
 - **CT.**
   - Exchange checkpoint cosignatures with external witness networks (C2SP `tlog-witness`), and consider ML-DSA-44 cosignatures. Witnessing between CyberMesh verifiers is done: they cosign checkpoints, compare their views and prove split views ([ct-monitoring.md](ct-monitoring.md) §3).
-  - RFC 6962 logs are supported: workers, verifiers, the coordinator (also following) and the CLI use them, selected by `api` in the `ct-logs` evidence ([ct-monitoring.md](ct-monitoring.md) §8). Still to do: pin real classic logs in the shipped evidence, and check their cost.
+  - RFC 6962 logs are supported: workers, verifiers, the coordinator (also following) and the CLI use them, selected by `api` in the `ct-logs` evidence ([ct-monitoring.md](ct-monitoring.md) §8). The 17 usable classic logs are listed in `datasets/ct-logs/public-rfc6962-ct-logs.json` and were checked against the live logs. Still to do: measure their cost and decide which to follow in the evaluation.
   - Brand infrastructure lists confirmed by the brand owners, needed before CT warnings can be enabled widely. `cybermesh evidence suggest-owned-domains` already proposes candidates from CT data.
 - **Network.** Kademlia discovery for more than 20 nodes. (Host names in peer addresses and penalty-only gossipsub peer scoring are done.)
 - **Witnessed transparency log.** Organisations co-sign log checkpoints using the C2SP `tlog-checkpoint` and `tlog-cosignature` formats. Consistency is checked before co-signing.

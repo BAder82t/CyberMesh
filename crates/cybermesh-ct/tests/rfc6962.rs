@@ -144,10 +144,14 @@ fn a_log_that_pages_wrongly_is_refused() {
     l.max_entries_per_call = 10;
     let src = Rfc6962Source::new(Box::new(Greedy(l)), &info(&log)).unwrap();
     assert!(matches!(src.entries(0), Err(CtError::Malformed(_))));
-    // A log that returns nothing is refused too, not retried forever.
+    // A log that returns nothing is refused too, not retried forever: unavailable, as for a
+    // log that has not yet served its newest entries.
     let mut empty = log.clone();
     empty.max_entries_per_call = 0;
-    assert!(source(&empty).entries(0).is_err());
+    assert!(matches!(
+        source(&empty).entries(0),
+        Err(CtError::NotFound(_))
+    ));
 }
 
 #[test]
