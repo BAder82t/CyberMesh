@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -23,15 +23,15 @@ repository = "https://github.com/BAder82t/CyberMesh"
 authors = ["VaultBytes Innovations Ltd"]
 
 [workspace.dependencies]
-cybermesh-crypto = { path = "crates/cybermesh-crypto", version = "0.3.3" }
-cybermesh-protocol = { path = "crates/cybermesh-protocol", version = "0.3.3" }
-cybermesh-analysis = { path = "crates/cybermesh-analysis", version = "0.3.3" }
-cybermesh-verifier = { path = "crates/cybermesh-verifier", version = "0.3.3" }
-cybermesh-intelligence = { path = "crates/cybermesh-intelligence", version = "0.3.3" }
-cybermesh-anchor = { path = "crates/cybermesh-anchor", version = "0.3.3" }
-cybermesh-ct = { path = "crates/cybermesh-ct", version = "0.3.3" }
-cybermesh-network = { path = "crates/cybermesh-network", version = "0.3.3" }
-cybermesh-node = { path = "crates/cybermesh-node", version = "0.3.3" }
+cybermesh-crypto = { path = "crates/cybermesh-crypto", version = "0.3.4" }
+cybermesh-protocol = { path = "crates/cybermesh-protocol", version = "0.3.4" }
+cybermesh-analysis = { path = "crates/cybermesh-analysis", version = "0.3.4" }
+cybermesh-verifier = { path = "crates/cybermesh-verifier", version = "0.3.4" }
+cybermesh-intelligence = { path = "crates/cybermesh-intelligence", version = "0.3.4" }
+cybermesh-anchor = { path = "crates/cybermesh-anchor", version = "0.3.4" }
+cybermesh-ct = { path = "crates/cybermesh-ct", version = "0.3.4" }
+cybermesh-network = { path = "crates/cybermesh-network", version = "0.3.4" }
+cybermesh-node = { path = "crates/cybermesh-node", version = "0.3.4" }
 
 anyhow = "1"
 base64 = "0.22"
