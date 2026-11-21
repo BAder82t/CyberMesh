@@ -250,6 +250,21 @@ Suggestions are evidence for a maintainer, not a confirmation by the brand owner
 
 The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three platforms in `hosting-platforms.txt`.
 
+**Effect on the dev window**, re-scored offline with `ct evaluate --rescore-evidence`. The run's other evidence is unchanged; the three new hosting platforms change no score here, as none of them is on the popularity list.
+
+| Days 1–2 | v0.3.2 brand list | Revision 1 (6 domains) | This list (13 domains) |
+|---|---|---|---|
+| Names flagged at warn level | 330,621 | 87,841 | 87,700 (−73.5 %) |
+| Names flagged at signal level | 376,484 | 132,233 | 132,036 |
+| Names flagged at block level | 2,652 | 2,644 | 2,628 |
+| Confirmed phishing hosts caught at warn level | 13 | 13 | 13 |
+| Lead time (warn, median) | 24.1 h | 24.1 h | 24.1 h |
+
+- **No detection is lost.** A brand's own domains on its list only remove flags for names under them, and no confirmed phishing host in any feed of the run is under one of the 13 domains: not in the OpenPhish history (12,153 commits), nor in its snapshots or phishunt's. Recall at every level and the lead times are unchanged.
+- **Almost all the reduction comes from the six domains of revision 1.** The seven others remove about 140 more names. They are brand-owned too, so they belong on the list, but they matter little for volume.
+- **Not the same denominator.** This run scored against slightly more confirmed hosts (558, against 556), because more feed snapshots had arrived.
+- **Dev window only.** These are tuning-window figures, not an evaluation result. The evaluation itself scores the bundle it started with and the frozen revision 1 ([ct-evaluation.md](ct-evaluation.md) §5.1).
+
 ## 8. Limitations and next steps
 
 - **Static CT API only.** RFC 6962 `get-entries` logs are not supported.
