@@ -4,6 +4,8 @@
 //!   leaf hashes and per-tile Merkle roots (equal to the log's level-1 hash tile entries).
 //! * [`names`]: DNS names (SAN `dNSName` and subject CN) from certificates and
 //!   precertificate TBSCertificates, using the `x509-parser` crate.
+//! * [`rfc6962`]: classic RFC 6962 logs (`get-sth`, `get-entries`, audit paths) presented
+//!   like static logs: checkpoints, tile entries and authentication.
 //! * [`scan`]: deterministic brand-lookalike scanning of tiles with the CyberMesh engine.
 //! * [`checkpoint`]: checkpoints (signed notes), verified against the log's pinned key
 //!   (RFC 6962 ECDSA P-256 note signatures) and origin.
@@ -28,13 +30,14 @@ pub mod http;
 pub mod mock;
 pub mod names;
 pub mod proof;
+pub mod rfc6962;
 pub mod scan;
 pub mod tile;
 pub mod witness;
 
 pub use checkpoint::{Checkpoint, LogKey, verify_checkpoint};
-pub use proof::{Consistency, authenticated_tile_root};
-pub use scan::{is_brand_signal, scan_tile, scan_tiles};
+pub use proof::{Consistency, LogAuthenticator, authenticated_tile_root, authenticator};
+pub use scan::{is_brand_signal, scan_entries, scan_tile, scan_tiles};
 pub use tile::{Entry, EntryKind, parse_data_tile};
 
 /// Maximum size of one downloaded data tile (a full tile is typically 0.5-2 MiB).
@@ -68,4 +71,15 @@ pub trait TileSource: Send + Sync {
     fn hash_tile(&self, level: u8, n: u64, width: Option<u8>) -> Result<Vec<u8>, CtError>;
     /// The current checkpoint text (unverified; see [`checkpoint::verify_checkpoint`]).
     fn checkpoint(&self) -> Result<String, CtError>;
+    /// The parsed entries of full tile `n` (256), and the bytes downloaded for them. Static
+    /// logs parse their data tile; classic logs ([`rfc6962`]) fetch the entries.
+    fn entries(&self, n: u64) -> Result<(Vec<Entry>, usize), CtError> {
+        let data = self.data_tile(n)?;
+        Ok((parse_data_tile(&data, n)?, data.len()))
+    }
+    /// The classic RFC 6962 API of this log, if it is one: tile roots and consistency are then
+    /// proven with its audit paths ([`authenticator`]) instead of hash tiles.
+    fn api(&self) -> Option<&dyn rfc6962::LogApi> {
+        None
+    }
 }

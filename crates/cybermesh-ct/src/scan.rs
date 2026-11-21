@@ -9,7 +9,7 @@ use cybermesh_protocol::ct::{
 use sha2::{Digest as _, Sha256};
 
 use crate::names::certificate_names;
-use crate::tile::{parse_data_tile, tile_root};
+use crate::tile::{Entry, parse_data_tile, tile_root};
 use crate::{CtError, TileSource};
 
 /// Domain separation for [`TileScanResult::names_digest`].
@@ -47,8 +47,16 @@ pub fn scan_tile(
     tile_index: u64,
     engine: &Engine,
 ) -> Result<TileScanResult, CtError> {
-    let entries = parse_data_tile(bytes, tile_index)?;
-    let root = Digest(tile_root(&entries));
+    scan_entries(&parse_data_tile(bytes, tile_index)?, tile_index, engine)
+}
+
+/// Scans the 256 entries of tile `tile_index`, as [`scan_tile`] does for a data tile.
+pub fn scan_entries(
+    entries: &[Entry],
+    tile_index: u64,
+    engine: &Engine,
+) -> Result<TileScanResult, CtError> {
+    let root = Digest(tile_root(entries));
     let mut unparsed: u16 = 0;
     let mut names: u32 = 0;
     let mut truncated = false;
@@ -56,7 +64,7 @@ pub fn scan_tile(
     digest.update(NAMES_DIGEST_TAG);
     digest.update([0u8]);
     let mut matches = Vec::new();
-    for e in &entries {
+    for e in entries {
         let Ok(raw) = certificate_names(e) else {
             unparsed += 1;
             continue;
@@ -131,9 +139,9 @@ pub fn scan_tiles(
         let n = first_tile
             .checked_add(i)
             .ok_or_else(|| CtError::Malformed("tile range overflow".into()))?;
-        let data = source.data_tile(n)?;
-        bytes += data.len() as u64;
-        out.push(scan_tile(&data, n, engine)?);
+        let (entries, size) = source.entries(n)?;
+        bytes += size as u64;
+        out.push(scan_entries(&entries, n, engine)?);
     }
     Ok((out, bytes))
 }

@@ -26,6 +26,7 @@ cybermesh-protocol.workspace = true
 ring = "0.17"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"], optional = true }
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tiny_http = { workspace = true, optional = true }
@@ -36,7 +37,6 @@ x509-parser = "=0.18.1"
 
 [dev-dependencies]
 cybermesh-ct = { path = ".", features = ["mock", "http"] }
-serde_json.workspace = true
 proptest.workspace = true
 
 [lints]

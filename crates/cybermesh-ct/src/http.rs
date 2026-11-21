@@ -78,6 +78,65 @@ impl HttpTileSource {
     }
 }
 
+/// Classic RFC 6962 client for one log: only the four read calls, on the pinned base URL.
+/// Requests never follow redirects, have timeouts, and responses are capped at
+/// [`MAX_RESPONSE_BYTES`](crate::rfc6962::MAX_RESPONSE_BYTES). Paths and queries are built
+/// only from integers and base64 of hashes.
+#[derive(Debug, Clone)]
+pub struct HttpLogApi {
+    inner: HttpTileSource,
+}
+
+impl HttpLogApi {
+    /// Creates a client for a validated, pinned log whose `monitoring_url` is the log's API
+    /// prefix (the part before `ct/v1/`).
+    pub fn new(log: &CtLogInfo, timeout: Duration) -> Result<Self, CtError> {
+        Ok(Self {
+            inner: HttpTileSource::new(log, timeout)?,
+        })
+    }
+
+    fn get(&self, path_and_query: &str) -> Result<Vec<u8>, CtError> {
+        self.inner
+            .get(path_and_query, crate::rfc6962::MAX_RESPONSE_BYTES)
+    }
+}
+
+impl crate::rfc6962::LogApi for HttpLogApi {
+    fn get_sth(&self) -> Result<crate::rfc6962::Sth, CtError> {
+        crate::rfc6962::parse_sth(&self.get("ct/v1/get-sth")?)
+    }
+
+    fn get_entries(&self, start: u64, end: u64) -> Result<Vec<Vec<u8>>, CtError> {
+        crate::rfc6962::parse_entries(
+            &self.get(&format!("ct/v1/get-entries?start={start}&end={end}"))?,
+        )
+    }
+
+    fn get_proof_by_hash(
+        &self,
+        leaf_hash: &[u8; 32],
+        tree_size: u64,
+    ) -> Result<(u64, Vec<[u8; 32]>), CtError> {
+        use base64::Engine as _;
+        // The standard alphabet contains `+`, `/` and `=`, which a query must escape.
+        let h = base64::engine::general_purpose::STANDARD
+            .encode(leaf_hash)
+            .replace('+', "%2B")
+            .replace('/', "%2F")
+            .replace('=', "%3D");
+        crate::rfc6962::parse_proof(&self.get(&format!(
+            "ct/v1/get-proof-by-hash?hash={h}&tree_size={tree_size}"
+        ))?)
+    }
+
+    fn get_sth_consistency(&self, first: u64, second: u64) -> Result<Vec<[u8; 32]>, CtError> {
+        crate::rfc6962::parse_consistency(&self.get(&format!(
+            "ct/v1/get-sth-consistency?first={first}&second={second}"
+        ))?)
+    }
+}
+
 impl TileSource for HttpTileSource {
     fn data_tile(&self, n: u64) -> Result<Vec<u8>, CtError> {
         self.get(&data_tile_path(n), MAX_TILE_BYTES)

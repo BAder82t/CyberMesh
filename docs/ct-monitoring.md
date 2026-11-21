@@ -267,7 +267,7 @@ The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three pl
 
 ## 8. Limitations and next steps
 
-- **Static CT API only.** RFC 6962 `get-entries` logs are not supported.
+- **Static CT API only, for now.** The CT library reads classic RFC 6962 logs (`rfc6962` module: the signed tree head as a checkpoint, `get-entries` as tiles, audit paths instead of hash tiles, `get-sth-consistency`), but nodes and the CLI do not use it yet, so the `ct-logs` evidence still lists static logs only. Classic logs are the ones of DigiCert, Cloudflare and Sectigo (17 usable on 2026-11-21, against 63 static).
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
 - **Witnesses are CyberMesh's own verifiers.** Their cosignatures use the C2SP format, but they are not yet exchanged with external witness networks (C2SP `tlog-witness`). A log showing every CyberMesh organisation the same fork is therefore not caught. The cosignatures are Ed25519; C2SP recommends ML-DSA-44 for new witnesses.
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.
