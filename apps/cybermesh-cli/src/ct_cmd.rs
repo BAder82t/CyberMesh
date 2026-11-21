@@ -8,9 +8,8 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use cybermesh_analysis::{Engine, EvidenceBundle};
 use cybermesh_ct::checkpoint::fetch_verified_checkpoint;
-use cybermesh_ct::http::HttpTileSource;
-use cybermesh_ct::proof::TileAuthenticator;
-use cybermesh_ct::{TileSource as _, scan_tile};
+use cybermesh_ct::http::open_log;
+use cybermesh_ct::{TileSource, scan_entries};
 use serde::Serialize;
 
 use crate::release_cmd::load_records;
@@ -111,8 +110,8 @@ pub(crate) fn log_info(
         .with_context(|| format!("log {log} is not in the ct-logs evidence"))
 }
 
-fn source(evidence: &EvidenceBundle, log: &str) -> Result<HttpTileSource> {
-    Ok(HttpTileSource::new(
+fn source(evidence: &EvidenceBundle, log: &str) -> Result<Box<dyn TileSource>> {
+    Ok(open_log(
         &log_info(evidence, log)?,
         Duration::from_secs(30),
     )?)
@@ -204,7 +203,7 @@ pub fn run(c: CtCmd) -> Result<()> {
         CtCmd::Checkpoint { evidence, log } => {
             let ev = EvidenceBundle::load(&evidence)?;
             let info = log_info(&ev, &log)?;
-            let cp = fetch_verified_checkpoint(&source(&ev, &log)?, &info)
+            let cp = fetch_verified_checkpoint(&*source(&ev, &log)?, &info)
                 .context("checkpoint not verified against the pinned log key")?;
             println!(
                 "origin={} size={} full_tiles={} signed_at_ms={} (signature verified with the pinned key)",
@@ -225,9 +224,9 @@ pub fn run(c: CtCmd) -> Result<()> {
             let ev = EvidenceBundle::load(&evidence)?;
             let src = source(&ev, &log)?;
             let info = log_info(&ev, &log)?;
-            let cp = fetch_verified_checkpoint(&src, &info)
+            let cp = fetch_verified_checkpoint(&*src, &info)
                 .context("checkpoint not verified against the pinned log key")?;
-            let auth = TileAuthenticator::new(&src, cp.clone());
+            let auth = cybermesh_ct::authenticator(&*src, cp.clone());
             let first = first_tile.unwrap_or(cp.full_tiles().saturating_sub(tiles));
             let end = first
                 .checked_add(tiles)
@@ -239,9 +238,9 @@ pub fn run(c: CtCmd) -> Result<()> {
             let (mut bytes, mut matches, mut unparsed, mut roots_ok) =
                 (0u64, Vec::new(), 0u64, 0u64);
             for n in first..end {
-                let data = src.data_tile(n)?;
-                bytes += data.len() as u64;
-                let r = scan_tile(&data, n, &engine)?;
+                let (tile_entries, size) = src.entries(n)?;
+                bytes += size as u64;
+                let r = scan_entries(&tile_entries, n, &engine)?;
                 // The worker's root must equal the root proven against the signed checkpoint.
                 if auth.tile_root(n).is_ok_and(|x| x == r.root.0) {
                     roots_ok += 1;
@@ -406,8 +405,8 @@ pub fn run(c: CtCmd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use cybermesh_ct::authenticator;
     use cybermesh_ct::mock::{MockLog, demo_entries};
-    use cybermesh_ct::proof::TileAuthenticator;
     use cybermesh_ct::verify_checkpoint;
     use cybermesh_ct::witness::SplitViewProof;
     use cybermesh_node::ct_witness::SplitViewEvidence;
@@ -428,9 +427,7 @@ mod tests {
             verify_checkpoint(&na, &key).unwrap(),
             verify_checkpoint(&nb, &key).unwrap(),
         );
-        let c = TileAuthenticator::new(&a, ca)
-            .consistency_with(&cb)
-            .unwrap();
+        let c = authenticator(&a, ca).consistency_with(&cb).unwrap();
         let who = cybermesh_crypto::SecretKey::from_seed(&[3; 32]).key_id();
         let mut ev = SplitViewEvidence {
             log_id: "mock-log".into(),

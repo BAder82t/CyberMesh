@@ -8,9 +8,8 @@ use std::time::{Duration, Instant};
 
 use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec};
 use cybermesh_crypto::{Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce};
-use cybermesh_ct::TileSource as _;
-use cybermesh_ct::http::HttpTileSource;
-use cybermesh_ct::scan_tile;
+use cybermesh_ct::http::open_log;
+use cybermesh_ct::scan_entries;
 use cybermesh_network::{
     Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed, peer_id_of,
 };
@@ -364,7 +363,7 @@ impl Worker {
         );
         tokio::task::spawn_blocking(move || {
             let run = || -> CtOutcome {
-                let src = match HttpTileSource::new(&log, Duration::from_secs(30)) {
+                let src = match open_log(&log, Duration::from_secs(30)) {
                     Ok(s) => s,
                     Err(e) => return CtOutcome::Failed(e.to_string()),
                 };
@@ -376,15 +375,15 @@ impl Worker {
                     if !ct_wait(&c, &hold, pace, deadline) {
                         return CtOutcome::Abandoned("cancelled or expired");
                     }
-                    let data = match src.data_tile(n) {
+                    let (entries, size) = match src.entries(n) {
                         Ok(d) => d,
                         Err(e) => return CtOutcome::Failed(e.to_string()),
                     };
-                    bytes += data.len() as u64;
+                    bytes += size as u64;
                     if !ct_wait(&c, &hold, None, deadline) {
                         return CtOutcome::Abandoned("cancelled or expired");
                     }
-                    match scan_tile(&data, n, &engine) {
+                    match scan_entries(&entries, n, &engine) {
                         Ok(t) => out.push(t),
                         Err(e) => return CtOutcome::Failed(e.to_string()),
                     }

@@ -103,6 +103,7 @@ fn mock_info(log_id: &str, monitoring_url: &str, origin: &str) -> CtLogInfo {
     CtLogInfo {
         log_id: log_id.to_owned(),
         description: "Synthetic static CT log (demonstration key)".to_owned(),
+        api: cybermesh_analysis::CtLogApi::Static,
         monitoring_url: monitoring_url.to_owned(),
         origin: origin.to_owned(),
         public_key: MOCK_LOG_PUBLIC_KEY.to_owned(),
@@ -271,6 +272,97 @@ pub fn serve_shared(
     Ok((url, handle))
 }
 
+/// Serves a mock classic RFC 6962 log on a loopback address. Returns its API prefix URL.
+pub fn serve_rfc6962(
+    log: Arc<MockRfc6962Log>,
+    addr: &str,
+) -> Result<(String, JoinHandle<()>), CtError> {
+    serve_rfc6962_shared(Arc::new(RwLock::new((*log).clone())), addr)
+}
+
+/// Serves a mock classic log that may grow while it is served.
+pub fn serve_rfc6962_shared(
+    log: Arc<RwLock<MockRfc6962Log>>,
+    addr: &str,
+) -> Result<(String, JoinHandle<()>), CtError> {
+    let server = tiny_http::Server::http(addr).map_err(|e| CtError::Http(e.to_string()))?;
+    let local = server
+        .server_addr()
+        .to_ip()
+        .ok_or_else(|| CtError::Http("no ip address".into()))?;
+    let url = format!("http://{local}/");
+    let handle = std::thread::spawn(move || {
+        for req in server.incoming_requests() {
+            let target = req.url().to_owned();
+            let body = log.read().ok().and_then(|l| rfc6962_response(&l, &target));
+            let resp = match body {
+                Some(b) => {
+                    let mut r = tiny_http::Response::from_data(b);
+                    if let Ok(h) = tiny_http::Header::from_bytes(
+                        &b"Content-Type"[..],
+                        &b"application/json"[..],
+                    ) {
+                        r = r.with_header(h);
+                    }
+                    r
+                }
+                None => tiny_http::Response::from_data(Vec::new()).with_status_code(404),
+            };
+            let _ = req.respond(resp);
+        }
+    });
+    Ok((url, handle))
+}
+
+/// The JSON body for one classic API request, `None` if it is not a valid one.
+fn rfc6962_response(log: &MockRfc6962Log, target: &str) -> Option<Vec<u8>> {
+    use crate::rfc6962::LogApi as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let arg = |name: &str| -> Option<String> {
+        query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
+            .map(|v| {
+                v.replace("%2B", "+")
+                    .replace("%2F", "/")
+                    .replace("%3D", "=")
+            })
+    };
+    let num = |name: &str| arg(name)?.parse::<u64>().ok();
+    let enc = |hs: &[[u8; 32]]| hs.iter().map(|h| b64.encode(h)).collect::<Vec<_>>();
+    let json = match path.strip_prefix("/ct/v1/")? {
+        "get-sth" => {
+            let s = log.get_sth().ok()?;
+            serde_json::json!({
+                "tree_size": s.tree_size,
+                "timestamp": s.timestamp,
+                "sha256_root_hash": b64.encode(s.root),
+                "tree_head_signature": b64.encode(&s.signature),
+            })
+        }
+        "get-entries" => {
+            let leafs = log.get_entries(num("start")?, num("end")?).ok()?;
+            serde_json::json!({ "entries": leafs.iter()
+                .map(|l| serde_json::json!({ "leaf_input": b64.encode(l), "extra_data": "" }))
+                .collect::<Vec<_>>() })
+        }
+        "get-proof-by-hash" => {
+            let hash: [u8; 32] = b64.decode(arg("hash")?).ok()?.try_into().ok()?;
+            let (i, path) = log.get_proof_by_hash(&hash, num("tree_size")?).ok()?;
+            serde_json::json!({ "leaf_index": i, "audit_path": enc(&path) })
+        }
+        "get-sth-consistency" => {
+            let c = log
+                .get_sth_consistency(num("first")?, num("second")?)
+                .ok()?;
+            serde_json::json!({ "consistency": enc(&c) })
+        }
+        _ => return None,
+    };
+    serde_json::to_vec(&json).ok()
+}
+
 /// A deterministic demo population: mostly ordinary names plus a few brand lookalikes.
 #[must_use]
 pub fn demo_entries(tiles: usize) -> Vec<MockEntry> {
@@ -383,7 +475,10 @@ impl MockRfc6962Log {
     /// The `ct-logs` evidence entry for this log; `monitoring_url` is its API prefix.
     #[must_use]
     pub fn log_info(&self, log_id: &str, monitoring_url: &str) -> CtLogInfo {
-        mock_info(log_id, monitoring_url, &self.origin)
+        CtLogInfo {
+            api: cybermesh_analysis::CtLogApi::Rfc6962,
+            ..mock_info(log_id, monitoring_url, &self.origin)
+        }
     }
 
     /// Serves `leaf_input` as entry `index` while the tree keeps the hash of the original

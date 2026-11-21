@@ -36,7 +36,7 @@ Outputs are deterministic, so honest workers scanning the same shard produce byt
 ## 2. Safety and consent
 
 - **Opt-in.** A worker accepts CT tasks only if its operator sets `ct_scanning = true`. Workers advertise the capability in their signed heartbeats, and the coordinator assigns CT shards only to workers that advertise it.
-- **Pinned egress only.** Tasks never contain URLs. The only reachable endpoints are the `checkpoint` and `tile/...` paths under monitoring prefixes listed in the governance-pinned `ct-logs` evidence.
+- **Pinned egress only.** Tasks never contain URLs. The only reachable endpoints are the `checkpoint` and `tile/...` paths (for a classic log, the four `ct/v1/` read calls) under monitoring prefixes listed in the governance-pinned `ct-logs` evidence.
   - Prefixes must be HTTPS. Plain HTTP is allowed for loopback, for tests and demos only.
   - Requests never follow redirects, and only HTTP 200 responses are used.
   - Responses are capped at 16 MiB after decompression, and requests time out after 30 s. Hash tiles must have exactly the expected length.
@@ -267,7 +267,7 @@ The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three pl
 
 ## 8. Limitations and next steps
 
-- **Static CT API only, for now.** The CT library reads classic RFC 6962 logs (`rfc6962` module: the signed tree head as a checkpoint, `get-entries` as tiles, audit paths instead of hash tiles, `get-sth-consistency`), but nodes and the CLI do not use it yet, so the `ct-logs` evidence still lists static logs only. Classic logs are the ones of DigiCert, Cloudflare and Sectigo (17 usable on 2026-11-21, against 63 static).
+- **Classic RFC 6962 logs are supported, with limits.** A `ct-logs` entry with `"api": "rfc6962"` (omitted for static logs) names a classic log by its API prefix (the part before `ct/v1/`); its `origin` is a name you choose, because a classic log has none and its signature does not cover one. Workers, verifiers, the coordinator (including following) and witnesses then use it like a static log. Differences: a tile is 256 entries fetched with `get-entries` (a log may need several calls), the tile root is proven with one `get-proof-by-hash` audit path instead of hash tiles, and consistency comes from `get-sth-consistency`. Only ECDSA P-256 logs work. A tile costs about two extra requests, and the CLI's request counters do not include the audit-path and consistency calls. Classic logs are those of DigiCert, Cloudflare and Sectigo (17 usable on 2026-11-21, against 63 static).
 - **Parser version is part of the engine version.** `x509-parser` is pinned to `=0.18.1` and recorded in `ENGINE_VERSION`, because it determines which names are extracted.
 - **Witnesses are CyberMesh's own verifiers.** Their cosignatures use the C2SP format, but they are not yet exchanged with external witness networks (C2SP `tlog-witness`). A log showing every CyberMesh organisation the same fork is therefore not caught. The cosignatures are Ed25519; C2SP recommends ML-DSA-44 for new witnesses.
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.

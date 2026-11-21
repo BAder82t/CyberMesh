@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use cybermesh_analysis::{Brand, CtLogInfo, Engine, EvidenceBundle};
 use cybermesh_crypto::Digest;
-use cybermesh_ct::mock::MockLog;
+use cybermesh_ct::mock::{MockLog, MockRfc6962Log};
 use cybermesh_network::Multiaddr;
 use cybermesh_node::coordinator::CtSetup;
 use cybermesh_node::coordinator::{
@@ -126,6 +126,8 @@ pub struct Options {
     pub domains: Vec<String>,
     /// Run a mock CT log and schedule `ct_tiles` full tiles of it.
     pub ct_log: Option<Arc<MockLog>>,
+    /// Instead, run a mock classic RFC 6962 log (`ct_grow` extends it with demo entries).
+    pub ct_classic_log: Option<Arc<MockRfc6962Log>>,
     pub ct_tiles: u64,
     pub ct_tiles_per_task: u32,
     pub ct_replication: usize,
@@ -169,6 +171,7 @@ impl Default for Options {
             abandon_after: Duration::from_secs(60),
             domains: domains(),
             ct_log: None,
+            ct_classic_log: None,
             ct_tiles: 0,
             ct_tiles_per_task: 2,
             ct_replication: 2,
@@ -248,7 +251,7 @@ impl Harness {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         // The mock log signs its checkpoint with its (public) demonstration key; the pinned
         // entry carries that key and the log's origin, so verification is real.
-        let ct_info = o.ct_log.as_ref().map(|log| {
+        let static_info = o.ct_log.as_ref().map(|log| {
             let shared = Arc::new(std::sync::RwLock::new((**log).clone()));
             let (url, _h) =
                 cybermesh_ct::mock::serve_shared(Arc::clone(&shared), "127.0.0.1:0").unwrap();
@@ -282,6 +285,28 @@ impl Harness {
             }
             log.log_info("mock-log", &url)
         });
+        let classic_info = o.ct_classic_log.as_ref().map(|log| {
+            let shared = Arc::new(std::sync::RwLock::new((**log).clone()));
+            let (url, _h) =
+                cybermesh_ct::mock::serve_rfc6962_shared(Arc::clone(&shared), "127.0.0.1:0")
+                    .unwrap();
+            if let Some((delay, tiles)) = o.ct_grow {
+                let follow_state = o
+                    .ct_follow
+                    .is_some()
+                    .then(|| dir.path().join("coordinator").join("ct-follow.json"));
+                std::thread::spawn(move || {
+                    if let Some(state) = follow_state {
+                        wait_for_first_checkpoint(&state);
+                    }
+                    std::thread::sleep(delay);
+                    let more = cybermesh_ct::mock::demo_entries(tiles);
+                    shared.write().unwrap().extend(&more).unwrap();
+                });
+            }
+            log.log_info("mock-log", &url)
+        });
+        let ct_info = classic_info.or(static_info);
         let verifier_ct_info = match &o.ct_verifier_view {
             Some(view) => {
                 let (url, _h) = cybermesh_ct::mock::serve(Arc::clone(view), "127.0.0.1:0").unwrap();
