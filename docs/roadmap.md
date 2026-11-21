@@ -47,16 +47,16 @@ It is compatible with v0.3.0.
 
 It is compatible with v0.3.x.
 
-## v0.3.3 (this release): organisations witness CT logs
+## v0.3.3: organisations witness CT logs
 - **CT log witnessing.** Verifiers cosign log checkpoints (C2SP `cosignature/v1`) and compare their views. A log that shows different organisations different trees is proven with a proof anyone can check offline, and is no longer relied on ([ct-monitoring.md](ct-monitoring.md) §3, threat model T28).
 - **Brand list from CT data.** `cybermesh evidence suggest-owned-domains` finds brand owners' own domains. The shipped list adds 13 of them: 73.5 % fewer warn-level names on the evaluation's dev window, with no detection lost.
 
 It is compatible with v0.3.x.
 
-## v0.3.4 (in progress): consequences for misbehaviour
-- **Penalty-only peer scoring** (merged). A provably invalid message counts against its author, never against relays. About three within ten minutes graylist the author, and nothing an honest node can produce is charged (threat model T29).
-- **The coordinator acts on faults proven by other verifiers** (in progress). An independent verifier that proves a worker misbehaved publishes a fault proof with the signed task and the worker's own signed results. The coordinator re-checks it before quarantining the worker: offline for equivocation and mismatched results, by its own recomputation or CT re-scan otherwise. Unconfirmed claims change nothing.
-- **Ownership** (merged). CyberMesh is copyright VaultBytes Innovations Ltd (`NOTICE`); the licence remains Apache-2.0.
+## v0.3.4 (this release): consequences for misbehaviour
+- **Penalty-only peer scoring.** A provably invalid message counts against its author, never against relays. About three within ten minutes graylist the author, and nothing an honest node can produce is charged (threat model T29).
+- **The coordinator acts on faults proven by other verifiers.** An independent verifier that proves a worker misbehaved publishes a fault proof with the signed task and the worker's own signed results. The coordinator re-checks it before quarantining the worker: offline for equivocation and mismatched results, by its own recomputation or CT re-scan otherwise. Unconfirmed claims change nothing. Two results from one worker are equivocation only if they assert different things.
+- **Ownership.** CyberMesh is copyright VaultBytes Innovations Ltd (`NOTICE`); the licence remains Apache-2.0.
 
 ## Evaluation milestone: CT detection results (from 2026-11-28)
 The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on 2026-11-28. Then the test window (days 3–7) is scored for both engines, as shipped and with the frozen revision 1, following the method fixed in advance. The results are published in [ct-evaluation.md](ct-evaluation.md) §8.1, failures included.

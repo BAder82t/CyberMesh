@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.4 (2026-11-21, research pre-release)
+
+Compatible with v0.3.x. Verifiers publish fault proofs on a new `faults` gossip topic that only the coordinator subscribes to; older nodes ignore it. This release narrows what `Reject` means (provable misbehaviour only) and what equivocation means (two different answers), so nodes on different versions may disagree on edge cases. **Not production-ready; no external audit.**
 
 ### Added
 - **The coordinator acts on faults that independent verifiers prove.** An independent verifier can catch a worker the coordinator missed, because its CT spot checks use its own secret seed.
