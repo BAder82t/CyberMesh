@@ -286,6 +286,8 @@ async fn verifiers_witness_a_growing_log_and_agree_on_one_view() {
     o.ct_follow = Some((Duration::from_millis(500), 4));
     o.ct_grow = Some((Duration::from_secs(3), 2));
     o.ct_witness = Some(Duration::from_millis(300));
+    // Long enough for the verifier's redial to reach the coordinator directly.
+    o.verifier_idle_exit = Duration::from_secs(15);
     let h = Harness::start(o);
     let (_net, report, _, verifiers, dir) = h.finish_all(Duration::from_secs(150)).await;
     let c = report
@@ -325,6 +327,9 @@ async fn a_log_showing_organisations_different_trees_is_proven_and_not_followed(
     o.ct_follow = Some((Duration::from_millis(500), 4));
     o.ct_grow = Some((Duration::from_secs(30), 2));
     o.ct_witness = Some(Duration::from_millis(300));
+    // The verifier cannot recompute these tasks (another view) and would otherwise go idle
+    // before its redial reaches the coordinator directly, on a slow machine.
+    o.verifier_idle_exit = Duration::from_secs(15);
     let h = Harness::start(o);
     let (_net, report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
     let c = report.ct_witness.as_ref().unwrap();
