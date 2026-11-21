@@ -18,8 +18,8 @@ use cybermesh_protocol::ct::{CtScanResult, CtScanTask, TileScanResult, verify_ct
 use cybermesh_protocol::replay::ReplayCache;
 use cybermesh_protocol::validate::{peek_payload_type, verify_task};
 use cybermesh_protocol::{
-    Clock, Heartbeat, Limits, OperatorId, PROTOCOL_VERSION, ProtocolError, ResourceUsage,
-    TaskAnnouncement, TaskKind, TaskResult, TrustManifest, WorkerState, payload_type,
+    Clock, Heartbeat, Limits, OperatorId, PROTOCOL_VERSION, ResourceUsage, TaskAnnouncement,
+    TaskKind, TaskResult, TrustManifest, WorkerState, payload_type,
 };
 use serde::Serialize;
 use tokio::sync::watch;
@@ -257,10 +257,7 @@ impl Worker {
             Ok(v) => v,
             Err(e) => {
                 self.status.messages_rejected += 1;
-                let acc = match e {
-                    ProtocolError::Expired | ProtocolError::NotYetValid => Acceptance::Ignore,
-                    _ => Acceptance::Reject,
-                };
+                let acc = crate::blame(e.proves_misbehaviour());
                 debug!(error = %e, "rejected task message");
                 net.report(m, acc).await;
                 return;
@@ -299,10 +296,7 @@ impl Worker {
             Ok(v) => v,
             Err(e) => {
                 self.status.messages_rejected += 1;
-                let acc = match e {
-                    ProtocolError::Expired | ProtocolError::NotYetValid => Acceptance::Ignore,
-                    _ => Acceptance::Reject,
-                };
+                let acc = crate::blame(e.proves_misbehaviour());
                 debug!(error = %e, "rejected CT task message");
                 net.report(m, acc).await;
                 return;

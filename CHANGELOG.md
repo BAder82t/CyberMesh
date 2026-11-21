@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Penalty-only peer scoring.** A message the application `Reject`s now counts against its **author**, never against the peers that relayed it.
+  - One invalid message is tolerated, so a false positive costs an honest node nothing.
+  - About two within ten minutes take the author out of the mesh and stop gossip with it.
+  - About three graylist it: everything it authors is dropped, whichever peer relays it, until its count decays (it halves every 10 minutes).
+  - Nothing can be earned, so good behaviour cannot be banked against attacks.
+  - Reports include `net_penalised_peers`.
+
+  See [docs/protocol.md](docs/protocol.md) §8 and threat model T29.
+
+### Changed
+- **`Reject` now means proof of misbehaviour, and only that.** It is reserved for what no software version, manifest timing or clock can explain:
+  - a signature by an enrolled key that does not verify (now reported as a bad signature, not as an unknown signer);
+  - a payload claiming an identity other than its signer;
+  - another network;
+  - results from unassigned or faulted workers;
+  - proven faults;
+  - records naming an enrolled verifier that did not sign them.
+
+  Now `Ignore`d:
+  - expired or future-dated messages;
+  - signers, roles, assignees or operators a lagging manifest does not have yet (new `ProtocolError::ManifestMismatch`);
+  - bytes this version cannot decode, or limits it does not allow;
+  - results that are late, for another attempt or task payload, or computed with another engine or evidence;
+  - unusable witness cosignatures;
+  - messages from authors outside the receiver's allowlist.
+
+  `ProtocolError::proves_misbehaviour` decides. `SubmitOutcome::Rejected` carries a `Rejection { reason, misbehaviour }`, and rejected results are still listed in verification records as before.
+
 ## v0.3.3 (2026-11-21, research pre-release)
 
 Compatible with v0.3.x. The wire protocol is unchanged, apart from a new `checkpoints` gossip topic that only nodes witnessing CT logs subscribe to; others ignore it. The demo evidence bundle changes (brand list and hosting platforms), so nodes that share tasks need the same bundle. **Not production-ready; no external audit.**

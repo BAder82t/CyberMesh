@@ -156,6 +156,9 @@ pub struct CoordinatorReport {
     pub net_bytes_out: u64,
     pub net_dropped_rate_limited: u64,
     pub net_dropped_queue_full: u64,
+    /// Connected peers with a negative score at exit: they sent this node provably invalid
+    /// messages (network peer scoring).
+    pub net_penalised_peers: u64,
     /// CPU time of this process (ms), and what it received from CT logs (bytes after
     /// decompression, requests), for cost comparisons.
     pub cpu_ms: u64,
@@ -1014,7 +1017,7 @@ impl Coordinator {
             Err(e) => {
                 self.report.results_rejected += 1;
                 warn!(error = %e, "rejected result message");
-                net.report(m, Acceptance::Reject).await;
+                net.report(m, crate::blame(e.proves_misbehaviour())).await;
                 return;
             }
         };
@@ -1089,7 +1092,7 @@ impl Coordinator {
             SubmitOutcome::Rejected(r) => {
                 self.report.results_rejected += 1;
                 warn!(reason = %r, "result rejected");
-                net.report(m, Acceptance::Reject).await;
+                net.report(m, crate::blame(r.misbehaviour)).await;
             }
             SubmitOutcome::Fault(k) => {
                 self.report.results_rejected += 1;
@@ -1323,7 +1326,7 @@ impl Coordinator {
             }
             Err(e) => {
                 debug!(error = %e, "rejected heartbeat");
-                net.report(m, Acceptance::Reject).await;
+                net.report(m, crate::blame(e.proves_misbehaviour())).await;
             }
         }
     }
@@ -1679,6 +1682,7 @@ pub async fn run_coordinator(
     c.report.net_bytes_out = snap.bytes_out;
     c.report.net_dropped_rate_limited = snap.dropped_rate_limited;
     c.report.net_dropped_queue_full = snap.dropped_queue_full;
+    c.report.net_penalised_peers = snap.penalised_peers;
     c.report.cpu_ms = crate::governor::process_cpu_ms();
     (c.report.ct_http_bytes, c.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
     c.report.ct_witness = c.witness.as_ref().map(|w| w.stats.clone());

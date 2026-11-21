@@ -39,7 +39,7 @@ use cybermesh_network::{Acceptance, NetworkHandle};
 use cybermesh_protocol::ct::{
     CT_CHECKPOINT, CheckpointObservation, verify_checkpoint_observation, witness_key_name,
 };
-use cybermesh_protocol::{Limits, PROTOCOL_VERSION, ProtocolError, Role, TrustManifest};
+use cybermesh_protocol::{Limits, PROTOCOL_VERSION, Role, TrustManifest};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
@@ -694,19 +694,12 @@ impl Witness {
     pub fn on_message(&mut self, bytes: &[u8], manifest: &TrustManifest, now: u64) -> Acceptance {
         let v = match verify_checkpoint_observation(bytes, manifest, now, &self.limits) {
             Ok(v) => v,
-            // Clocks, or a signer this node's manifest does not know yet (it may lag).
-            Err(
-                ProtocolError::Expired
-                | ProtocolError::NotYetValid
-                | ProtocolError::NotAuthorized(_),
-            ) => {
-                self.stats.refused += 1;
-                return Acceptance::Ignore;
-            }
+            // Clocks, or a signer this node's manifest does not know yet (it may lag), are
+            // ignored; only proof of misbehaviour counts against the sender.
             Err(e) => {
                 self.stats.refused += 1;
                 debug!(error = %e, "refused checkpoint observation");
-                return Acceptance::Reject;
+                return crate::blame(e.proves_misbehaviour());
             }
         };
         if v.signer == self.id {
@@ -729,7 +722,8 @@ impl Witness {
         let Some(pk) = manifest.key_with_role(&o.witness, Role::Verifier) else {
             return Acceptance::Ignore;
         };
-        // The cosignature is the sender's own statement: a bad one is its fault.
+        // Without its cosignature the observation is unusable; but the cosigner name format is
+        // a protocol detail a newer release could change, so it is not proof of misbehaviour.
         if verify_cosignature(
             &o.checkpoint,
             &witness_key_name(&self.network_id, &o.witness),
@@ -738,7 +732,7 @@ impl Witness {
         .is_err()
         {
             self.stats.refused += 1;
-            return Acceptance::Reject;
+            return Acceptance::Ignore;
         }
         let signed = cp.signed_at_ms / 1000;
         if signed > now.saturating_add(MAX_CHECKPOINT_SKEW_SECS)
@@ -1056,7 +1050,8 @@ mod tests {
             ),
             Acceptance::Accept
         );
-        // Cosigned by another key, or under another name: the sender's fault.
+        // Cosigned by another key, or under another name: unusable, refused, but not proof
+        // of misbehaviour (a newer release could name cosigners differently).
         let wrong = cosign(&note, &name_b, &n.workers[0].key, now_secs()).unwrap();
         assert_eq!(
             send(
@@ -1064,13 +1059,22 @@ mod tests {
                 &obs(wrong, kb.key_id(), "mock-log", now_secs()),
                 kb
             ),
-            Acceptance::Reject
+            Acceptance::Ignore
         );
         let wrong = cosign(&note, "cybermesh/other/x", kb, now_secs()).unwrap();
         assert_eq!(
             send(
                 &mut wa,
                 &obs(wrong, kb.key_id(), "mock-log", now_secs()),
+                kb
+            ),
+            Acceptance::Ignore
+        );
+        // Claiming to be another verifier: proof of misbehaviour.
+        assert_eq!(
+            send(
+                &mut wa,
+                &obs(good.clone(), n.verifier.key_id(), "mock-log", now_secs()),
                 kb
             ),
             Acceptance::Reject

@@ -52,7 +52,7 @@ A spoofed answer for a peer's name can only make that connection fail: the addre
 
 | A participant who is... | ...can | ...cannot |
 |---|---|---|
-| any enrolled peer, including a compromised one | see your node's IP address and how it participates; send messages, which are rejected unless correctly signed and within limits; use up its rate allowance | make your node run code, fetch arbitrary URLs, read files outside its state directory, or exceed its resource limits |
+| any enrolled peer, including a compromised one | see your node's IP address and how it participates; send messages, which are rejected unless correctly signed and within limits; use up its rate allowance. A peer that sends provably invalid messages is graylisted: your node then ignores everything it sends for a while (`net_penalised_peers` in the reports) | make your node run code, fetch arbitrary URLs, read files outside its state directory, or exceed its resource limits |
 | the coordinator (the task issuer), if compromised | send your worker tasks to analyse: lists of domain names, or tile ranges of a pinned CT log; see your results | change your local evidence or trust root, make your node contact the domains, or forge another organisation's results or releases (threat model T4) |
 | another verifier | see your verifier's records, which are public by design; send it cosigned CT log checkpoints, which it compares with its own view (a few hash-tile downloads per peer and minute) | make your verifier sign anything it did not recompute itself, or make it believe a log misbehaved: a split view is proven only by two checkpoints the log itself signed |
 
