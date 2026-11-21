@@ -40,10 +40,16 @@ The wire protocol is unchanged, but the `ct-logs` evidence format is not compati
 
 It is compatible with v0.3.0.
 
-## v0.3.2 (this release): ready for a pilot
+## v0.3.2: ready for a pilot
 - **Pilot kit.** An invitation for organisations ([pilot.md](pilot.md)), a page for their security teams on what a node exposes them to ([node-risk.md](node-risk.md)), and a hardened systemd unit for independent verifiers. The operator guide now installs from a verified release.
 - **Host names in peer addresses** (`/dns4/...`). The peer id in the address is authenticated, so a spoofed DNS answer can only make a connection fail.
 - **CT evaluation.** Revision 1 is frozen before the test window. The dev-window results are published ([ct-evaluation.md](ct-evaluation.md) §5.1, §8.1).
+
+It is compatible with v0.3.x.
+
+## v0.3.3 (this release): organisations witness CT logs
+- **CT log witnessing.** Verifiers cosign log checkpoints (C2SP `cosignature/v1`) and compare their views. A log that shows different organisations different trees is proven with a proof anyone can check offline, and is no longer relied on ([ct-monitoring.md](ct-monitoring.md) §3, threat model T28).
+- **Brand list from CT data.** `cybermesh evidence suggest-owned-domains` finds brand owners' own domains. The shipped list adds 13 of them: 73.5 % fewer warn-level names on the evaluation's dev window, with no detection lost.
 
 It is compatible with v0.3.x.
 

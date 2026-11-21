@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.3 (2026-11-21, research pre-release)
+
+Compatible with v0.3.x. The wire protocol is unchanged, apart from a new `checkpoints` gossip topic that only nodes witnessing CT logs subscribe to; others ignore it. The demo evidence bundle changes (brand list and hosting platforms), so nodes that share tasks need the same bundle. **Not production-ready; no external audit.**
 
 ### Added
 - **CT log witnessing: split views are caught between organisations.** A log could show different organisations different trees, each consistent on its own; one organisation cannot see that alone.
