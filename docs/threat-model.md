@@ -1,6 +1,6 @@
 # Threat model
 
-Scope: CyberMesh v0.3.2 as implemented in this repository. The method is asset- and
+Scope: CyberMesh v0.3.3 as implemented in this repository. The method is asset- and
 adversary-driven and STRIDE-informed. For each threat this document gives the mitigation,
 the test that exercises it, and the residual risk. "Test" names refer to files in this
 repository.
