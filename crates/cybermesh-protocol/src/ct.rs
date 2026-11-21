@@ -248,8 +248,8 @@ pub fn verify_ct_task(
             return Err(ProtocolError::Invalid("duplicate assignee".into()));
         }
         if manifest.key_with_role(a, Role::Worker).is_none() {
-            return Err(ProtocolError::Invalid(
-                "assignee is not an enrolled worker".into(),
+            return Err(ProtocolError::ManifestMismatch(
+                "assignee is not an enrolled worker",
             ));
         }
         if let Some(op) = manifest.operator_of(a) {
@@ -275,8 +275,11 @@ pub fn verify_ct_result(
         crate::validate::verify_signed(bytes, CT_RESULT, Role::Worker, manifest, limits)?;
     let r = &v.message;
     check_header(r.v, &r.network_id, manifest)?;
-    if v.signer != r.worker || manifest.operator_of(&r.worker) != Some(&r.operator) {
+    if v.signer != r.worker {
         return Err(ProtocolError::SignerMismatch);
+    }
+    if manifest.operator_of(&r.worker) != Some(&r.operator) {
+        return Err(ProtocolError::ManifestMismatch("worker's operator"));
     }
     if !is_hex_id(&r.task_id) || !is_hex_id(&r.nonce) {
         return Err(ProtocolError::Invalid(

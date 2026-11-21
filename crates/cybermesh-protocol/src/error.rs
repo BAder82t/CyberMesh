@@ -14,6 +14,10 @@ pub enum ProtocolError {
     NotAuthorized(&'static str),
     #[error("signer does not match the identity claimed in the payload")]
     SignerMismatch,
+    /// The payload disagrees with this node's manifest (an unenrolled assignee, another
+    /// operator), which may simply be older than the sender's.
+    #[error("not consistent with this node's manifest: {0}")]
+    ManifestMismatch(&'static str),
     #[error("message expired")]
     Expired,
     #[error("message issued in the future beyond allowed clock skew")]
@@ -37,6 +41,25 @@ impl ProtocolError {
         Self::Invalid(msg.into())
     }
 
+    /// Whether the message proves misbehaviour by its signer, and so may count against it
+    /// (network peer scoring). Only failures that no software version, manifest timing or
+    /// clock can explain: a signature by an enrolled key that does not verify, a payload
+    /// claiming an identity other than its signer, a message for another network.
+    ///
+    /// Everything else may come from an honest node: a payload this version cannot decode
+    /// or a limit it does not allow (a newer release adds fields or raises limits), a signer,
+    /// role, assignee or operator this node's manifest does not have yet, clocks, replays,
+    /// quotas.
+    #[must_use]
+    pub fn proves_misbehaviour(&self) -> bool {
+        matches!(
+            self,
+            Self::Crypto(CryptoError::BadSignature)
+                | Self::SignerMismatch
+                | Self::WrongNetwork { .. }
+        )
+    }
+
     /// Short, stable label for metrics and logs.
     #[must_use]
     pub fn label(&self) -> &'static str {
@@ -52,6 +75,7 @@ impl ProtocolError {
             Self::WrongNetwork { .. } => "wrong-network",
             Self::NotAuthorized(_) => "unauthorised",
             Self::SignerMismatch => "signer-mismatch",
+            Self::ManifestMismatch(_) => "manifest-mismatch",
             Self::Expired => "expired",
             Self::NotYetValid => "future",
             Self::TtlTooLong => "ttl",
@@ -60,6 +84,43 @@ impl ProtocolError {
             Self::ReplayCacheFull => "replay-cache-full",
             Self::RateLimited => "rate-limited",
             Self::Rollback { .. } => "rollback",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_what_an_honest_node_cannot_send_proves_misbehaviour() {
+        // Clocks, manifest timing, another release (new fields, other limits), local state.
+        for honest in [
+            ProtocolError::Expired,
+            ProtocolError::NotYetValid,
+            ProtocolError::NotAuthorized("worker"),
+            ProtocolError::ManifestMismatch("assignee is not an enrolled worker"),
+            ProtocolError::UnsupportedVersion(2),
+            ProtocolError::Crypto(CryptoError::NonCanonical),
+            ProtocolError::Crypto(CryptoError::TooLarge { size: 2, limit: 1 }),
+            ProtocolError::TtlTooLong,
+            ProtocolError::Invalid("too many domains".into()),
+            ProtocolError::Replay,
+            ProtocolError::ReplayCacheFull,
+            ProtocolError::RateLimited,
+            ProtocolError::Rollback { got: 1, min: 2 },
+        ] {
+            assert!(!honest.proves_misbehaviour(), "{honest:?}");
+        }
+        for forged in [
+            ProtocolError::Crypto(CryptoError::BadSignature),
+            ProtocolError::SignerMismatch,
+            ProtocolError::WrongNetwork {
+                expected: "a".into(),
+                actual: "b".into(),
+            },
+        ] {
+            assert!(forged.proves_misbehaviour(), "{forged:?}");
         }
     }
 }

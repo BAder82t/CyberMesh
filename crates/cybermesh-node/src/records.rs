@@ -338,6 +338,9 @@ impl RecordStore {
             Err(ProtocolError::Crypto(CryptoError::InsufficientSignatures { .. })) => {
                 return Received::Ignored("no signature from a verifier known here".into());
             }
+            // Only proof of misbehaviour counts against the sender (peer scoring): a version
+            // this node cannot decode, or a manifest older than the sender's, does not.
+            Err(e) if !e.proves_misbehaviour() => return Received::Ignored(e.to_string()),
             Err(e) => return Received::Rejected(e.to_string()),
         };
         if self.raw_seen.len() >= 4 * MAX_STORED_RECORDS {
@@ -357,7 +360,7 @@ impl RecordStore {
             return Received::Duplicate;
         }
         let Some(stored) = normalized(bytes, &rec, manifest, self.max_bytes) else {
-            return Received::Rejected("record verifier's signature not found".into());
+            return Received::Ignored("record verifier's signature not found".into());
         };
         if !self.has_room(&rec, stored.len()) {
             return Received::Ignored("record store quota reached".into());
@@ -624,7 +627,8 @@ mod tests {
             0
         );
 
-        // Own echo; misattribution and garbage are rejected (provable); clocks are ignored.
+        // Own echo; misattribution is rejected (provable); bytes this version cannot decode
+        // (a newer format looks the same) and clocks are ignored.
         let own = record(&f, "a.example.com", &f.me, &f.net.verifier, NOW);
         assert_eq!(store.accept(&own, &f.net.manifest, NOW), Received::Own);
         let relabelled = record(&f, "b.example.com", &f.b, &f.net.verifier, NOW);
@@ -634,7 +638,7 @@ mod tests {
         ));
         assert!(matches!(
             store.accept(b"not a record", &f.net.manifest, NOW),
-            Received::Rejected(_)
+            Received::Ignored(_)
         ));
         let future = record(&f, "c.example.com", &f.b, &f.b_key, NOW + 3600);
         assert!(matches!(

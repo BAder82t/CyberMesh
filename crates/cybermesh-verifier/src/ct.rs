@@ -189,7 +189,13 @@ impl CtTaskVerifier {
         self.task_digest
     }
 
-    fn reject(&mut self, worker: Option<KeyId>, digest: Digest, reason: &str) -> SubmitOutcome {
+    fn reject(
+        &mut self,
+        worker: Option<KeyId>,
+        digest: Digest,
+        reason: &str,
+        misbehaviour: bool,
+    ) -> SubmitOutcome {
         if self.rejected.len() < MAX_REJECTED {
             self.rejected.push(RejectedResult {
                 worker,
@@ -199,7 +205,10 @@ impl CtTaskVerifier {
         } else {
             self.rejected_overflow += 1;
         }
-        SubmitOutcome::Rejected(reason.to_owned())
+        SubmitOutcome::Rejected(crate::task::Rejection {
+            reason: reason.to_owned(),
+            misbehaviour,
+        })
     }
 
     fn fault(
@@ -225,7 +234,10 @@ impl CtTaskVerifier {
         let raw = Digest::of(bytes);
         let v = match verify_ct_result(bytes, manifest, now, &self.limits) {
             Ok(v) => v,
-            Err(e) => return self.reject(None, raw, &format!("invalid result: {e}")),
+            Err(e) => {
+                let blame = e.proves_misbehaviour();
+                return self.reject(None, raw, &format!("invalid result: {e}"), blame);
+            }
         };
         let r = v.message;
         let digest = v.payload_digest;
@@ -234,10 +246,20 @@ impl CtTaskVerifier {
             || r.attempt != self.task.attempt
             || r.task_digest != self.task_digest
         {
-            return self.reject(Some(worker), digest, "result answers a different task");
+            return self.reject(
+                Some(worker),
+                digest,
+                "result answers a different task",
+                false,
+            );
         }
         if !self.task.assignees.contains(&worker) {
-            return self.reject(Some(worker), digest, "worker was not assigned this task");
+            return self.reject(
+                Some(worker),
+                digest,
+                "worker was not assigned this task",
+                true,
+            );
         }
         if now
             > self
@@ -245,10 +267,20 @@ impl CtTaskVerifier {
                 .expires_at
                 .saturating_add(self.policy.result_grace_secs)
         {
-            return self.reject(Some(worker), digest, "result arrived after the deadline");
+            return self.reject(
+                Some(worker),
+                digest,
+                "result arrived after the deadline",
+                false,
+            );
         }
         if self.faulted.contains(&worker) {
-            return self.reject(Some(worker), digest, "worker already faulted on this task");
+            return self.reject(
+                Some(worker),
+                digest,
+                "worker already faulted on this task",
+                true,
+            );
         }
         if let Some(prev) = self.held.get(&worker) {
             if prev.result_digest == digest {
@@ -273,6 +305,7 @@ impl CtTaskVerifier {
                 Some(worker),
                 digest,
                 "result used a different engine, evidence or log",
+                false,
             );
         }
         let tiles: Vec<u64> = r.tiles.iter().map(|t| t.tile_index).collect();
@@ -287,7 +320,8 @@ impl CtTaskVerifier {
         }
         let tiles_digest = match r.tiles_digest() {
             Ok(d) => d,
-            Err(e) => return self.reject(Some(worker), digest, &e.to_string()),
+            // Computing the digest failed: a format this version may not know.
+            Err(e) => return self.reject(Some(worker), digest, &e.to_string(), false),
         };
         self.held.insert(
             worker,

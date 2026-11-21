@@ -34,4 +34,4 @@ pub use record::{
     VerificationRecord, VerifierId, verify_record_envelope,
 };
 pub use reputation::{ReputationBook, WorkerStanding};
-pub use task::{SubmitOutcome, TaskVerifier};
+pub use task::{Rejection, SubmitOutcome, TaskVerifier};

@@ -8,6 +8,9 @@
 //! * **Dissemination**: gossipsub with signed messages (`ValidationMode::Strict`),
 //!   content-addressed message ids and **manual validation**: nothing is forwarded until the
 //!   application has verified the CyberMesh signature, freshness and replay status.
+//! * **Peer scoring**: only provable misbehaviour (messages the application `Reject`s) costs a
+//!   peer, and only the message's author; about three invalid messages in ten minutes
+//!   graylist it ([`peer_scoring`]).
 //! * **Abuse resistance**: per-peer token buckets (cost grows with message size), bounded
 //!   inbound and command queues (drop with a counter rather than buffer without limit), an
 //!   outbound bandwidth budget, and author checks against the allowlist.
@@ -21,8 +24,10 @@ mod stats;
 
 pub use libp2p::{Multiaddr, PeerId};
 pub use node::{
-    Acceptance, InboundMessage, NetConfig, NetError, NetEvent, NetworkHandle, keypair_from_seed,
-    peer_id_of, spawn,
+    Acceptance, GOSSIP_THRESHOLD, GRAYLIST_THRESHOLD, INVALID_MESSAGE_HALF_LIFE,
+    INVALID_MESSAGE_WEIGHT, InboundMessage, NetConfig, NetError, NetEvent, NetworkHandle,
+    PUBLISH_THRESHOLD, SCORE_GRAYLISTED, SCORE_WARNED, author_score, keypair_from_seed, peer_id_of,
+    peer_scoring, spawn,
 };
 pub use stats::NetStats;
 

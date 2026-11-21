@@ -263,14 +263,14 @@ fn results_bind_worker_identity_and_operator() {
         verify_result(&bytes, &n.manifest, NOW, &limits).unwrap_err(),
         ProtocolError::SignerMismatch
     );
-    // Worker claims a different operator (Sybil-style inflation of diversity).
+    // Worker claims a different operator (Sybil-style inflation of diversity): refused. Not
+    // proof of misbehaviour, since a manifest that moved the key would look the same.
     let mut r2 = r.clone();
     r2.operator = OperatorId::new("org-c").unwrap();
     let bytes = sign_bytes(payload_type::RESULT, &r2, &n.workers[2].key);
-    assert_eq!(
-        verify_result(&bytes, &n.manifest, NOW, &limits).unwrap_err(),
-        ProtocolError::SignerMismatch
-    );
+    let e = verify_result(&bytes, &n.manifest, NOW, &limits).unwrap_err();
+    assert!(matches!(e, ProtocolError::ManifestMismatch(_)), "{e:?}");
+    assert!(!e.proves_misbehaviour());
     // Issuer key cannot sign results.
     let bytes = sign_bytes(payload_type::RESULT, &r, &n.issuer);
     assert!(verify_result(&bytes, &n.manifest, NOW, &limits).is_err());
@@ -443,4 +443,52 @@ fn checkpoint_observations_come_from_verifiers_naming_themselves() {
     // A signature over another message kind does not pass as an observation.
     let as_heartbeat = sign_bytes(payload_type::HEARTBEAT, &obs, &n.verifier);
     assert!(verify_checkpoint_observation(&as_heartbeat, &n.manifest, NOW, &limits).is_err());
+}
+
+#[test]
+fn only_what_no_version_or_manifest_explains_proves_misbehaviour() {
+    let n = net();
+    let limits = Limits::default();
+    let t = n.task(&["a.example"], &[0, 2, 3], engine(), pins(), NOW);
+    let good = sign_bytes(payload_type::TASK, &t, &n.issuer);
+    // A broken signature by the enrolled issuer is a forgery ...
+    let mut env: Envelope = serde_json::from_slice(&good).unwrap();
+    env.signatures[0].sig = env.signatures[0].sig.replacen('A', "B", 1);
+    let e = verify_task(&env.to_vec().unwrap(), &n.manifest, NOW, &limits).unwrap_err();
+    assert_eq!(
+        e,
+        ProtocolError::Crypto(cybermesh_crypto::CryptoError::BadSignature)
+    );
+    assert!(e.proves_misbehaviour());
+    // ... a key this manifest does not know may be enrolled in a newer one.
+    let stranger = sign_bytes(payload_type::TASK, &t, &test_key("newly-enrolled"));
+    let e = verify_task(&stranger, &n.manifest, NOW, &limits).unwrap_err();
+    assert!(matches!(e, ProtocolError::NotAuthorized(_)), "{e:?}");
+    assert!(!e.proves_misbehaviour());
+    // A field this version does not know (a newer release) is refused, not blamed.
+    let mut v = serde_json::to_value(&t).unwrap();
+    v.as_object_mut()
+        .unwrap()
+        .insert("added_in_a_later_release".into(), serde_json::json!(1));
+    let payload = serde_json::to_vec(&v).unwrap();
+    let newer = Envelope::sign(payload_type::TASK, &payload, &n.issuer)
+        .to_vec()
+        .unwrap();
+    let e = verify_task(&newer, &n.manifest, NOW, &limits).unwrap_err();
+    assert!(!e.proves_misbehaviour(), "{e:?}");
+    // So is an assignee a lagging manifest does not have yet.
+    let mut later = t.clone();
+    later
+        .assignees
+        .push(test_key("worker-enrolled-later").key_id());
+    later.assignees.sort();
+    let e = verify_task(
+        &sign_bytes(payload_type::TASK, &later, &n.issuer),
+        &n.manifest,
+        NOW,
+        &limits,
+    )
+    .unwrap_err();
+    assert!(matches!(e, ProtocolError::ManifestMismatch(_)), "{e:?}");
+    assert!(!e.proves_misbehaviour());
 }

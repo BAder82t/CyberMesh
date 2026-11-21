@@ -61,7 +61,7 @@ It is compatible with v0.3.x.
   - Exchange checkpoint cosignatures with external witness networks (C2SP `tlog-witness`), and consider ML-DSA-44 cosignatures. Witnessing between CyberMesh verifiers is done: they cosign checkpoints, compare their views and prove split views ([ct-monitoring.md](ct-monitoring.md) §3).
   - RFC 6962 logs.
   - Brand infrastructure lists confirmed by the brand owners, needed before CT warnings can be enabled widely. `cybermesh evidence suggest-owned-domains` already proposes candidates from CT data.
-- **Network.** Enable gossipsub peer scoring (invalid-message penalties), and Kademlia discovery for more than 20 nodes. (Host names in peer addresses are done.)
+- **Network.** Kademlia discovery for more than 20 nodes. (Host names in peer addresses and penalty-only gossipsub peer scoring are done.)
 - **Witnessed transparency log.** Organisations co-sign log checkpoints using the C2SP `tlog-checkpoint` and `tlog-cosignature` formats. Consistency is checked before co-signing.
 - **Build integrity.** Reproducible release binaries (checked by building every target twice), SLSA Build Level 2 provenance attestations and a published verification procedure are in place: see [build-integrity.md](build-integrity.md). Still to do: SLSA Build Level 3 (an isolated reusable workflow), Apple notarisation, Windows binaries.
 - **Test OpenTimestamps compatibility** against the reference `ots` client and the public calendars, which is a manual and opt-in step.

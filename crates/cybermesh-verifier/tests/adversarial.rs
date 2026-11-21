@@ -474,3 +474,49 @@ fn revoked_worker_results_are_rejected() {
         SubmitOutcome::Rejected(_)
     ));
 }
+
+#[test]
+fn rejections_say_whether_they_prove_misbehaviour() {
+    let f = fixture(&[0, 2, 3]);
+    let mut v = f.verifier();
+    let blame = |o: SubmitOutcome| match o {
+        SubmitOutcome::Rejected(r) => r.misbehaviour,
+        other => panic!("expected a rejection, got {other:?}"),
+    };
+    // Proof of misbehaviour: a forged signature, impersonation, an unassigned worker.
+    let mut env: cybermesh_crypto::Envelope =
+        serde_json::from_slice(&f.sign(2, &f.honest(2))).unwrap();
+    env.signatures[0].sig = env.signatures[0].sig.replacen('A', "B", 1);
+    assert!(blame(v.submit(
+        &env.to_vec().unwrap(),
+        &f.net.manifest,
+        NOW + 3
+    )));
+    let bytes = sign_bytes(payload_type::RESULT, &f.honest(2), &f.net.workers[3].key);
+    assert!(blame(v.submit(&bytes, &f.net.manifest, NOW + 3)));
+    assert!(blame(v.submit(
+        &f.sign(4, &f.honest(4)),
+        &f.net.manifest,
+        NOW + 3
+    )));
+    // What an honest worker can send: late, for an older task payload, or before this
+    // node's manifest knows its signer.
+    assert!(!blame(v.submit(
+        &f.sign(3, &f.honest(3)),
+        &f.net.manifest,
+        f.task.expires_at + 3600
+    )));
+    let mut old = f.honest(2);
+    old.task_digest = Digest::of(b"older task");
+    assert!(!blame(v.submit(&f.sign(2, &old), &f.net.manifest, NOW + 3)));
+    let bytes = sign_bytes(payload_type::RESULT, &f.honest(2), &test_key("newcomer"));
+    assert!(!blame(v.submit(&bytes, &f.net.manifest, NOW + 3)));
+    // Another engine version (an upgrade under way) is not misbehaviour either.
+    let mut skew = f.honest(0);
+    skew.engine.version = "0.0.1".into();
+    assert!(!blame(v.submit(
+        &f.sign(0, &skew),
+        &f.net.manifest,
+        NOW + 3
+    )));
+}

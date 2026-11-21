@@ -67,8 +67,18 @@ pub(crate) fn verify_signed<T: Serialize + DeserializeOwned>(
     let v = env
         .verify(ptype, 1, |id| manifest.key_with_role(id, role))
         .map_err(|e| match e {
+            // The one signature does not verify. By a key enrolled with this role it is a
+            // forgery; by any other key, the signer may be enrolled in a manifest this node
+            // does not have yet.
             cybermesh_crypto::CryptoError::InsufficientSignatures { .. } => {
-                ProtocolError::NotAuthorized(role.as_str())
+                let known = env.signatures.first().is_some_and(|s| {
+                    KeyId::parse(&s.keyid).is_ok_and(|k| manifest.key_with_role(&k, role).is_some())
+                });
+                if known {
+                    ProtocolError::Crypto(cybermesh_crypto::CryptoError::BadSignature)
+                } else {
+                    ProtocolError::NotAuthorized(role.as_str())
+                }
             }
             other => ProtocolError::Crypto(other),
         })?;
@@ -221,7 +231,9 @@ pub fn verify_task(
             return Err(ProtocolError::invalid("duplicate assignee"));
         }
         if manifest.key_with_role(a, Role::Worker).is_none() {
-            return Err(ProtocolError::invalid("assignee is not an enrolled worker"));
+            return Err(ProtocolError::ManifestMismatch(
+                "assignee is not an enrolled worker",
+            ));
         }
         if let Some(op) = manifest.operator_of(a) {
             operators.insert(op.clone());
@@ -252,7 +264,7 @@ pub fn verify_result(
         return Err(ProtocolError::SignerMismatch);
     }
     if manifest.operator_of(&r.worker) != Some(&r.operator) {
-        return Err(ProtocolError::SignerMismatch);
+        return Err(ProtocolError::ManifestMismatch("worker's operator"));
     }
     if !is_hex_id(&r.task_id) || !is_hex_id(&r.nonce) {
         return Err(ProtocolError::invalid(
@@ -301,8 +313,11 @@ pub fn verify_heartbeat(
     )?;
     let h = &v.message;
     check_header(h.v, &h.network_id, manifest)?;
-    if v.signer != h.worker || manifest.operator_of(&h.worker) != Some(&h.operator) {
+    if v.signer != h.worker {
         return Err(ProtocolError::SignerMismatch);
+    }
+    if manifest.operator_of(&h.worker) != Some(&h.operator) {
+        return Err(ProtocolError::ManifestMismatch("worker's operator"));
     }
     if !is_hex_id(&h.nonce) {
         return Err(ProtocolError::invalid("nonce must be 32 hex chars"));

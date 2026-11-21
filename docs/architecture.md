@@ -177,11 +177,19 @@ An organisation other than the coordinator's runs `cybermesh verifier run`.
 - **Dissemination.** Gossipsub with strict signing and **manual validation**: a message is forwarded only after the application has verified it.
 - **Message ids.** A message id is `H(author ‖ data)`, so a relay cannot pre-claim an honest message's id.
 - **Rate limits.** Token buckets are kept per *author*, and a message costs 1 plus its size in KiB.
+- **Peer scoring.** Only provable misbehaviour costs a peer, and only the message's author, never a relay.
+  - **What counts.** Provable misbehaviour is a message the application `Reject`s: a signature by an enrolled key that does not verify, a payload claiming someone else's identity, another network, or a proven fault.
+  - **Penalties.** Counted over about ten minutes (the count halves every 10 minutes):
+    - one invalid message is tolerated;
+    - two take the author out of the mesh and stop gossip with it;
+    - three graylist it: everything it authors is dropped, whichever peer relays it.
+  - **Nothing to earn.** An attacker cannot bank good behaviour.
+  - **Never charged.** Nothing an honest node can produce: clock skew, a lagging manifest, a newer release's format or limits, late or superseded work.
 - **Bounded queues.** Queues are bounded, and drops are counted.
 - **Outbound budget.** Outbound bandwidth has a budget.
 - **Reconnection.** The node redials bootstrap peers after a partition. Workers keep results in a bounded outbox until the task deadline.
 
-*Trade-off.* Discovery is a static bootstrap list, which is enough for a 10–20 node permissioned pilot. Kademlia, mDNS and gossipsub peer scoring are listed in the roadmap.
+*Trade-off.* Discovery is a static bootstrap list, which is enough for a 10–20 node permissioned pilot. Kademlia and mDNS are listed in the roadmap.
 
 ### 3.8 Worker runtime and resource governor (`cybermesh-node`)
 

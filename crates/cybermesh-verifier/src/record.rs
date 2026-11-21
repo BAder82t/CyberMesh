@@ -149,13 +149,23 @@ pub fn verify_record_envelope(
             actual: rec.network_id,
         });
     }
-    if !v.signers.contains(&rec.verifier.key)
-        || manifest.operator_of(&rec.verifier.key) != Some(&rec.verifier.operator)
+    // A record naming a verifier enrolled here that did not sign it is misattributed. A
+    // verifier or operator this manifest does not have may be enrolled in a newer one.
+    if manifest
+        .key_with_role(&rec.verifier.key, Role::Verifier)
+        .is_none()
     {
-        return Err(ProtocolError::Invalid(format!(
-            "record claims verifier {} ({}), which did not sign it or belongs to another operator",
-            rec.verifier.key, rec.verifier.operator
-        )));
+        return Err(ProtocolError::ManifestMismatch(
+            "record names a verifier not enrolled here",
+        ));
+    }
+    if !v.signers.contains(&rec.verifier.key) {
+        return Err(ProtocolError::SignerMismatch);
+    }
+    if manifest.operator_of(&rec.verifier.key) != Some(&rec.verifier.operator) {
+        return Err(ProtocolError::ManifestMismatch(
+            "record verifier's operator",
+        ));
     }
     Ok((Digest::of(&v.payload), rec))
 }
