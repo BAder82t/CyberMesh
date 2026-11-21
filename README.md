@@ -2,7 +2,17 @@
 
 *Developed by [VaultBytes Innovations Ltd](https://vaultbytes.com).*
 
-**A community-powered cyber-defence network. Organisations donate a small slice of spare computing capacity to analyse public security signals together and check each other's findings. The result is signed protection for ordinary internet users that does not depend on a single commercial provider.**
+**A decentralised computing and resilience network powered by connected devices.**
+
+CyberMesh aims to transform computers, smartphones, servers, and edge devices into a secure distributed infrastructure that shares available computing resources, supports independently verified cybersecurity services, and enables compatible applications to continue operating during centralised infrastructure failures.
+
+The long-term vision is an open-source continuity layer for businesses, hospitals, airlines, public services, and individuals.
+
+**Current implementation:** CyberMesh v0.3.4 is a research MVP focused on decentralised cybersecurity computation, Certificate Transparency monitoring, independent verification, and cryptographically signed threat intelligence.
+
+**Future development:** Cross-platform mesh execution, distributed application hosting, offline-first state synchronisation, and automatic failover for supported applications.
+
+The goal is to build infrastructure that remains useful when individual servers, cloud providers, or network connections fail.
 
 Today, protection against phishing and malicious websites mostly comes from a few commercial
 services that everyone has to trust. CyberMesh explores an alternative: an open network that
