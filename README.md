@@ -52,31 +52,56 @@ the [roadmap](docs/roadmap.md).
 
 ## Architecture at a glance
 
+### Implemented in v0.3.5
+
 ```mermaid
 flowchart LR
-  subgraph OrgB[Organisation B]
-    WB1[Worker]:::w
-    WB2[Worker]:::w
-  end
-  subgraph OrgC[Organisation C]
-    WC[Worker]:::w
-  end
+  GOV["Governance: k-of-n organisations<br/>signed trust manifest: members, roles, revocations"]
+  CT[("Public CT logs<br/>static and RFC 6962")]
   subgraph OrgA[Organisation A]
-    C[Coordinator<br/>issuer + verifier]
-    WA[Worker]:::w
+    C["Coordinator<br/>task issuer + verifier"]
+    WA[Worker]
     RA[Release signer A]
   end
-  RB[Release signer B]
-  VB[Independent verifier B]
-  C -- signed tasks (gossipsub) --> WA & WB1 & WB2 & WC
-  WA & WB1 & WB2 & WC -- signed results --> C & VB
-  C -- signed verification records --> RA & RB
-  VB -- own signed records --> RA & RB
-  RA & RB -- co-signed release --> CDN[(Static hosting)]
-  CDN -- release.json --> EXT[Browser extension<br/>offline verification]
-  RA -. digest .-> LOG[(Merkle log)] -. checkpoint .-> ANCHOR[(Local chain / OpenTimestamps)]
-  classDef w fill:#eef,stroke:#88a
+  subgraph OrgB[Organisation B]
+    WB[Workers]
+    VB[Independent verifier B]
+    RB[Release signer B]
+  end
+  subgraph OrgC[Organisation C]
+    WC[Worker]
+  end
+  GOV -. "signed manifest, pinned by every node" .-> OrgA & OrgB & OrgC
+  C -- "signed tasks (gossipsub)" --> WA & WB & WC
+  WA & WB & WC -- "signed results" --> C & VB
+  CT -- "tiles, proven against signed checkpoints" --> WA & WB & WC
+  CT -- "checkpoints; sampled tiles re-scanned" --> C & VB
+  C <-. "cosigned checkpoints: split-view proofs" .-> VB
+  VB -. "fault proofs" .-> C
+  C -- "signed verification records" --> RA & RB
+  VB -- "own signed records" --> RA & RB
+  RA & RB -- "co-signed release" --> HOST[(Static hosting)]
+  HOST -- "release.json" --> EXT["Browser extension and CLI<br/>offline verification"]
+  RA -. digest .-> LOG[(Merkle log)] -. checkpoint .-> ANCHOR[(Optional timestamp anchor)]
 ```
+
+Governance signs who may take part and in which role. Each organisation runs its own workers, verifier and release signer, so no single organisation decides what is published. Workers analyse domains and certificate-log tiles, and verifiers recompute rather than trust them. Verifiers that witness a CT log also compare views, so a log that shows organisations different trees is caught and proven. Faults proven by one verifier are re-checked by the coordinator before it acts. Consumers verify releases offline.
+
+### Planned: a continuity exploration (not implemented)
+
+```mermaid
+flowchart LR
+  TRUST["CyberMesh trust layer (exists today)<br/>signed membership and manifests, peer-to-peer networking, resource governor"]
+  subgraph SPIKE["Feasibility spike: five managed devices on a LAN (planned)"]
+    APP["Offline-capable order and task app<br/>durable local queues"]
+    D["Devices that keep working and later reconcile"]
+  end
+  SERVER[("Central server")]
+  TRUST -. "enrols devices, signs workloads" .-> SPIKE
+  SERVER -. "fails: work continues locally" .-> SPIKE
+```
+
+Concept only, and kept as a separate track from CyberMesh releases. After the CT evaluation, a two-week spike will test whether a small stateful workflow survives the loss of its central server without losing or duplicating operations. Failover and state replication move into the architecture above only if it succeeds. Raspberry Pi, browsers and phones would come in later phases, with roles that depend on each device. See the [roadmap](docs/roadmap.md).
 
 Details: [docs/architecture.md](docs/architecture.md) · protocol: [docs/protocol.md](docs/protocol.md) · threat model: [docs/threat-model.md](docs/threat-model.md) · privacy: [docs/privacy.md](docs/privacy.md) · anchoring: [docs/blockchain.md](docs/blockchain.md) · verifying binaries: [docs/build-integrity.md](docs/build-integrity.md)
 
