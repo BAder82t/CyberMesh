@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **The 17 usable classic CT logs are listed** in `datasets/ct-logs/public-rfc6962-ct-logs.json` (DigiCert, Cloudflare, Sectigo, TrustAsia; keys from Google's CT log list v98.2). Checked against the live logs on 2026-11-21: all 17 signed tree heads verify through `cybermesh ct checkpoint`, and two newest tiles of each scan with 0 unparsed certificates and proven roots for 16 of them. Sectigo Tiger2026h2 serves its newest ~1,000 entries late, so tiles that close to its head are unavailable until it does. A test checks that every listed log is valid evidence with a usable key.
 - **Nodes and the CLI use classic RFC 6962 logs.** A `ct-logs` evidence entry with `"api": "rfc6962"` names a classic log by its API prefix. Workers scan its tiles, verifiers and the coordinator prove tile roots with audit paths, the coordinator follows it, and verifiers witness it, as for static logs. Evidence without `api` (static logs) and its pins are unchanged. Tested end to end over libp2p: scanning, an independent verifier catching a lying worker against the log, and following and witnessing a growing log. See [docs/ct-monitoring.md](docs/ct-monitoring.md) §8.
 - **The CT library reads classic RFC 6962 logs.** DigiCert, Cloudflare and Sectigo run classic logs (17 usable on 2026-11-21, against 63 static ones). The new `rfc6962` module presents such a log like a static one:
   - the signed tree head becomes a checkpoint that the existing verifier checks unchanged;

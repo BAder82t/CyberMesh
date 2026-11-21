@@ -315,7 +315,10 @@ impl TileSource for Rfc6962Source {
             let wanted = WIDTH - out.len();
             let got = self.api.get_entries(start, first + WIDTH as u64 - 1)?;
             if got.is_empty() {
-                return Err(CtError::Malformed("the log returned no entries".into()));
+                // Some logs publish a tree head before they serve its newest entries.
+                return Err(CtError::NotFound(
+                    "the log returned no entries (not served yet?)".into(),
+                ));
             }
             if got.len() > wanted {
                 return Err(CtError::Malformed(
