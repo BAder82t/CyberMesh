@@ -51,7 +51,9 @@ pub struct Verified<T> {
     pub envelope: Envelope,
 }
 
-pub(crate) fn verify_signed<T: Serialize + DeserializeOwned>(
+/// Verifies a single-signature network message of payload type `ptype` signed by a member
+/// with `role`, and decodes its canonical payload. Message-specific checks are the caller's.
+pub fn verify_signed<T: Serialize + DeserializeOwned>(
     bytes: &[u8],
     ptype: &str,
     role: Role,

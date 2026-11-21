@@ -520,3 +520,24 @@ fn rejections_say_whether_they_prove_misbehaviour() {
         NOW + 3
     )));
 }
+
+#[test]
+fn the_same_answer_signed_again_is_a_duplicate_not_equivocation() {
+    // A worker that re-runs a task after a restart signs its answer again with a new nonce.
+    let f = fixture(&[0, 2, 3]);
+    let mut v = f.verifier();
+    let first = f.honest(2);
+    let mut again = f.honest(2);
+    again.nonce = "abababababababababababababababab".into();
+    again.completed_at += 30;
+    assert_eq!(
+        v.submit(&f.sign(2, &first), &f.net.manifest, NOW + 3),
+        SubmitOutcome::Accepted
+    );
+    assert_eq!(
+        v.submit(&f.sign(2, &again), &f.net.manifest, NOW + 3),
+        SubmitOutcome::Duplicate
+    );
+    let rec = v.finalize(Some(&f.engine), NOW + 5);
+    assert!(rec.faults.is_empty(), "{:?}", rec.faults);
+}

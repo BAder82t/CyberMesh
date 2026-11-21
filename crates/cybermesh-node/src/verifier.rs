@@ -129,6 +129,10 @@ pub struct VerifierReport {
     pub cpu_ms: u64,
     pub ct_http_bytes: u64,
     pub ct_http_requests: u64,
+    /// Proofs of faults this verifier found, published on the `faults` topic for the
+    /// coordinator to confirm; and faults it could not prove (results not kept, too large).
+    pub fault_proofs_published: u64,
+    pub fault_proofs_skipped: u64,
     /// CT log witnessing (`[ct_witness]`), including proven split views.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ct_witness: Option<crate::ct_witness::WitnessStats>,
@@ -186,6 +190,8 @@ type TaskKey = (String, u32, Digest);
 struct Pending {
     verifier: AnyVerifier,
     deadline: Instant,
+    /// The signed task and results, for proofs of the faults found.
+    evidence: crate::fault_proofs::Evidence,
 }
 
 /// A result held until its task arrives.
@@ -199,6 +205,7 @@ struct Early {
 struct CtFinalized {
     record: Option<VerificationRecord>,
     missing: Vec<KeyId>,
+    evidence: crate::fault_proofs::Evidence,
 }
 
 struct Verifier {
@@ -226,6 +233,7 @@ struct Verifier {
     records_out: crate::records::RecordPublisher,
     witness: Option<crate::ct_witness::Witness>,
     witness_tx: tokio::sync::mpsc::UnboundedSender<crate::ct_witness::JobOutcome>,
+    fault_out: crate::fault_proofs::ProofOutbox,
 }
 
 impl Verifier {
@@ -330,6 +338,7 @@ impl Verifier {
             Pending {
                 verifier,
                 deadline: Instant::now() + timeout,
+                evidence: crate::fault_proofs::Evidence::new(m.data.clone()),
             },
         );
         debug!(task = %key.0, attempt = key.1, "following task");
@@ -364,6 +373,10 @@ impl Verifier {
         let p = self.pending.get_mut(key)?;
         let forget = p.verifier.expires_at().saturating_add(3600);
         let outcome = p.verifier.submit(bytes, &self.s.manifest, now);
+        // Accepted results may later prove an incorrect result; faulting ones prove theirs.
+        if matches!(outcome, SubmitOutcome::Accepted | SubmitOutcome::Fault(_)) {
+            p.evidence.keep(payload_digest, bytes);
+        }
         match &outcome {
             SubmitOutcome::Accepted => {
                 self.report.results_accepted += 1;
@@ -457,6 +470,27 @@ impl Verifier {
         }
     }
 
+    /// Publishes proofs of the faults this verifier found, so the coordinator can confirm
+    /// them and stop assigning work to the worker.
+    fn queue_fault_proofs(
+        &mut self,
+        faults: &[cybermesh_verifier::FaultRecord],
+        evidence: &crate::fault_proofs::Evidence,
+    ) {
+        if faults.is_empty() {
+            return;
+        }
+        let (proofs, skipped) = evidence.proofs(
+            faults,
+            &self.s.manifest.network_id,
+            &self.s.key,
+            self.s.clock.now(),
+            self.limits.max_envelope_bytes,
+        );
+        self.report.fault_proofs_skipped += skipped as u64;
+        self.fault_out.queue(proofs);
+    }
+
     fn remember_settled(&mut self, key: TaskKey, forget_after: u64) {
         if self.settled.len() >= MAX_SETTLED {
             let now = self.s.clock.now();
@@ -468,16 +502,21 @@ impl Verifier {
     }
 
     fn settle(&mut self, key: &TaskKey) {
-        let Some(p) = self.pending.remove(key) else {
+        let Some(Pending {
+            verifier, evidence, ..
+        }) = self.pending.remove(key)
+        else {
             return;
         };
         let now = self.s.clock.now();
-        let missing = p.verifier.missing();
-        self.remember_settled(key.clone(), p.verifier.expires_at().saturating_add(3600));
-        match p.verifier {
+        let missing = verifier.missing();
+        self.remember_settled(key.clone(), verifier.expires_at().saturating_add(3600));
+        match verifier {
             AnyVerifier::Domain(v) => {
                 let record = v.finalize(Some(&self.s.engine), now);
+                let faults = record.faults.clone();
                 self.apply_record(record, &missing);
+                self.queue_fault_proofs(&faults, &evidence);
             }
             AnyVerifier::Ct(v) => {
                 self.ct_finalizing += 1;
@@ -506,7 +545,11 @@ impl Verifier {
                     })
                     .await
                     .ok();
-                    let _ = tx.send(CtFinalized { record, missing });
+                    let _ = tx.send(CtFinalized {
+                        record,
+                        missing,
+                        evidence,
+                    });
                 });
             }
         }
@@ -694,6 +737,7 @@ pub async fn run_verifier(
     let mut v = Verifier {
         witness,
         witness_tx,
+        fault_out: crate::fault_proofs::ProofOutbox::default(),
         records_in,
         records_out,
         report: VerifierReport {
@@ -755,7 +799,11 @@ pub async fn run_verifier(
             Some(done) = ct_rx.recv() => {
                 v.ct_finalizing = v.ct_finalizing.saturating_sub(1);
                 match done.record {
-                    Some(r) => v.apply_record(r, &done.missing),
+                    Some(r) => {
+                        let faults = r.faults.clone();
+                        v.apply_record(r, &done.missing);
+                        v.queue_fault_proofs(&faults, &done.evidence);
+                    }
                     None => warn!("CT verification failed internally; task dropped"),
                 }
             }
@@ -794,6 +842,9 @@ pub async fn run_verifier(
                     crate::records::REPUBLISH_EVERY,
                     crate::records::REPUBLISH_WINDOW_SECS,
                 );
+                // Fault proofs first: the coordinator should receive a proof before the
+                // records that let it finish.
+                v.fault_out.flush(&net, &v.topics.faults).await;
                 v.records_out.flush(&net, &v.topics.records).await;
                 if let Some(w) = &mut v.witness {
                     let now = v.s.clock.now();
@@ -844,6 +895,8 @@ pub async fn run_verifier(
     v.report.cpu_ms = crate::governor::process_cpu_ms();
     (v.report.ct_http_bytes, v.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
     v.report.ct_witness = v.witness.as_ref().map(|w| w.stats.clone());
+    v.report.fault_proofs_published = v.fault_out.published;
+    v.report.fault_proofs_skipped += v.fault_out.dropped;
     let _ = files::write_json(&v.s.state_dir.join("verifier-report.json"), &v.report);
     net.shutdown().await;
     Ok(v.report)
@@ -914,6 +967,7 @@ mod tests {
             records_out: crate::records::RecordPublisher::new(256 * 1024),
             witness: None,
             witness_tx: tokio::sync::mpsc::unbounded_channel().0,
+            fault_out: crate::fault_proofs::ProofOutbox::default(),
         }
     }
 

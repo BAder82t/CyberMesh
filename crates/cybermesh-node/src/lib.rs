@@ -11,6 +11,8 @@
 //!   and results, settles every task with its own engine, evidence and key, and signs its
 //!   own records; releases need records from `min_verifiers` distinct verifier operators.
 //! * [`records`]: distribution of signed verification records between verifiers.
+//! * [`fault_proofs`]: independent verifiers publish self-contained proofs of the faults they
+//!   find; the coordinator re-checks each before quarantining the worker.
 //! * [`ct_witness`]: verifiers witness CT log checkpoints and compare their views, so a log
 //!   that shows organisations different trees is caught and proven.
 //! * [`governor`]: CPU, memory, load and working-hour policy for workers.
@@ -21,6 +23,7 @@ pub mod config;
 pub mod coordinator;
 pub mod ct_follow;
 pub mod ct_witness;
+pub mod fault_proofs;
 pub mod files;
 pub mod governor;
 pub mod records;

@@ -367,3 +367,62 @@ async fn a_split_view_proven_before_a_restart_keeps_following_halted() {
     assert_eq!(report.ct_next_tile, 0, "{report:?}");
     assert_eq!(report.ct_tiles_verified, 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_coordinator_quarantines_workers_another_verifier_proves_lied() {
+    // Every worker hides the lookalikes it finds, identically, so they agree and the
+    // coordinator (no spot checks) accepts their result. The independent verifier's own spot
+    // checks catch them; it publishes fault proofs, and the coordinator re-scans the log
+    // itself before quarantining them.
+    let mut o = options(None);
+    o.operators = vec![("org-a", 1), ("org-b", 1), ("org-c", 1)];
+    o.adversaries = vec![
+        (0, "omit-matches"),
+        (1, "omit-matches"),
+        (2, "omit-matches"),
+    ];
+    o.independent_verifiers = 1;
+    o.min_verifiers = 2;
+    o.ct_policy = cybermesh_verifier::ct::CtPolicy {
+        spot_check_tiles: 0,
+        ..cybermesh_verifier::ct::CtPolicy::default()
+    };
+    o.verifier_ct_policy = Some(cybermesh_verifier::ct::CtPolicy {
+        spot_check_tiles: 4,
+        ..cybermesh_verifier::ct::CtPolicy::default()
+    });
+    o.verifier_idle_exit = Duration::from_secs(15);
+    let h = Harness::start(o);
+    let (_net, report, _, verifiers, dir) = h.finish_all(Duration::from_secs(150)).await;
+    let v = &verifiers[0];
+    assert!(v.faults >= 2, "the verifier caught the liars: {v:?}");
+    assert!(v.fault_proofs_published >= 2, "{v:?}");
+    assert!(
+        report.peer_faults_confirmed >= 2,
+        "confirmed {} refuted {} unconfirmed {} received {} dropped {}",
+        report.peer_faults_confirmed,
+        report.peer_faults_refuted,
+        report.peer_faults_unconfirmed,
+        report.peer_fault_proofs_received,
+        report.peer_fault_proofs_dropped
+    );
+    assert_eq!(report.peer_faults_refuted, 0);
+    // The workers are quarantined at the coordinator, with the proofs kept as evidence.
+    let book: cybermesh_verifier::ReputationBook = serde_json::from_slice(
+        &std::fs::read(dir.path().join("coordinator/reputation.json")).unwrap(),
+    )
+    .unwrap();
+    let quarantined = book.workers.values().filter(|w| w.quarantined).count();
+    assert!(quarantined >= 2, "{book:?}");
+    let proofs = std::fs::read_dir(dir.path().join("coordinator/faults"))
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("peer-")
+        })
+        .count();
+    assert!(proofs >= 2);
+}
