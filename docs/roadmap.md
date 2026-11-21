@@ -53,9 +53,16 @@ It is compatible with v0.3.x.
 
 It is compatible with v0.3.x.
 
+## v0.3.4 (in progress): consequences for misbehaviour
+- **Penalty-only peer scoring** (merged). A provably invalid message counts against its author, never against relays. About three within ten minutes graylist the author, and nothing an honest node can produce is charged (threat model T29).
+- **The coordinator acts on faults proven by other verifiers** (in progress). An independent verifier that proves a worker misbehaved publishes a fault proof with the signed task and the worker's own signed results. The coordinator re-checks it before quarantining the worker: offline for equivocation and mismatched results, by its own recomputation or CT re-scan otherwise. Unconfirmed claims change nothing.
+- **Ownership** (merged). CyberMesh is copyright VaultBytes Innovations Ltd (`NOTICE`); the licence remains Apache-2.0.
+
+## Evaluation milestone: CT detection results (from 2026-11-28)
+The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on 2026-11-28. Then the test window (days 3–7) is scored for both engines, as shipped and with the frozen revision 1, following the method fixed in advance. The results are published in [ct-evaluation.md](ct-evaluation.md) §8.1, failures included.
+
 ## Next: harden the pilot
 - **Verifiers.**
-  - Let the coordinator act on faults proven by other verifiers.
   - Prove late equivocation at independent verifiers.
 - **CT.**
   - Exchange checkpoint cosignatures with external witness networks (C2SP `tlog-witness`), and consider ML-DSA-44 cosignatures. Witnessing between CyberMesh verifiers is done: they cosign checkpoints, compare their views and prove split views ([ct-monitoring.md](ct-monitoring.md) §3).
@@ -80,6 +87,20 @@ The evaluation shows that lexical analysis runs at about 37,000–52,000 domains
   - *Public data only*, no contact with suspicious hosts, and it is bandwidth- and CPU-heavy enough that distribution helps.
   - Verification cannot recompute everything cheaply, so it uses **sampled re-execution** by a second independent operator plus Merkle commitments over the scanned range (the CT tree head proves range coverage).
 - **Multi-vantage DNS observation**, as an approved, rate-limited, resolver-only signal. It is useful for detecting fast-flux and geo-targeted resolution, but needs a careful safety review first.
+
+## Exploration: a continuity runtime (separate track)
+A separate idea, kept apart from CyberMesh releases: organisation-managed devices keep essential business workflows running when a central server or cloud is unavailable. CyberMesh's trust layer would carry over:
+- governance-signed membership and revocation;
+- authenticated, allowlisted peer-to-peer networking;
+- threshold-signed manifests as signed workloads;
+- the resource governor.
+
+Replicated application state and reconciliation are the hard part.
+
+After the CT evaluation, a two-week feasibility spike will test the central question: can a small stateful workflow survive the loss of its central server on ordinary managed devices, without losing or duplicating operations?
+- **Setup.** Five devices on a LAN, an offline-capable order and task application, durable local queues, and CyberMesh membership and manifests for device enrolment and signed workloads.
+- **Measures.** Recovery time, operations lost or duplicated (none allowed), reconciliation correctness and resource use.
+- **Order.** Low-risk workflows (retail, warehouses) before regulated ones.
 
 ## v0.4 and later
 - **Detection.** Add a learned lexical model shipped as pinned evidence, deterministic integer inference, and trained only on licensed data.
