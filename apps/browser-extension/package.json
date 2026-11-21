@@ -3,6 +3,7 @@
   "version": "0.3.3",
   "private": true,
   "description": "Chromium extension that verifies signed CyberMesh threat-intelligence releases offline and warns before visiting listed hosts.",
+  "author": "VaultBytes Innovations Ltd",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {

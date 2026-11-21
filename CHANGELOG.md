@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **Ownership.** CyberMesh is copyright 2026 VaultBytes Innovations Ltd. A `NOTICE` file states this, as do the README, the crates' `authors` field and the browser extension package. The licence remains Apache-2.0.
+
 ### Added
 - **Penalty-only peer scoring.** A message the application `Reject`s now counts against its **author**, never against the peers that relayed it.
   - One invalid message is tolerated, so a false positive costs an honest node nothing.
