@@ -81,6 +81,21 @@ pub fn domains() -> Vec<String> {
     prepare_domains(&text).0
 }
 
+/// Waits (at most 120 s) until the coordinator has saved an accepted checkpoint.
+fn wait_for_first_checkpoint(state: &std::path::Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
+        let accepted = std::fs::read(state)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .is_some_and(|v| !v["head"].is_null());
+        if accepted {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -121,7 +136,9 @@ pub struct Options {
     pub min_verifiers: u8,
     /// Follow the CT log: `(poll interval, until_tile)`.
     pub ct_follow: Option<(Duration, u64)>,
-    /// Grow the mock CT log after `delay` by `tiles` full tiles of demo entries.
+    /// Grow the mock CT log by `tiles` full tiles of demo entries, `delay` after the
+    /// coordinator has accepted its first checkpoint (with follow mode; otherwise after
+    /// `delay`). Waiting for that checkpoint keeps tests independent of machine load.
     pub ct_grow: Option<(Duration, usize)>,
     /// Instead of growing, replace the log with a different (forked) tree of that size.
     pub ct_fork: bool,
@@ -236,7 +253,14 @@ impl Harness {
                 // The log grows while the network runs, as a real log does (or, with
                 // `ct_fork`, is replaced by a different tree: rewritten history).
                 let fork = o.ct_fork;
+                let follow_state = o
+                    .ct_follow
+                    .is_some()
+                    .then(|| dir.path().join("coordinator").join("ct-follow.json"));
                 std::thread::spawn(move || {
+                    if let Some(state) = follow_state {
+                        wait_for_first_checkpoint(&state);
+                    }
                     std::thread::sleep(delay);
                     let mut log = shared.write().unwrap();
                     if fork {
