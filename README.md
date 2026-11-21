@@ -1,5 +1,7 @@
 # CyberMesh
 
+*Developed by [VaultBytes Innovations Ltd](https://vaultbytes.com).*
+
 **A community-powered cyber-defence network. Organisations donate a small slice of spare computing capacity to analyse public security signals together and check each other's findings. The result is signed protection for ordinary internet users that does not depend on a single commercial provider.**
 
 Today, protection against phishing and malicious websites mostly comes from a few commercial
@@ -124,5 +126,7 @@ summarised there too. No external audit has been performed.
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](LICENSE). Demo data licences are listed in
+Copyright © 2026 VaultBytes Innovations Ltd.
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Demo data licences are listed in
 [datasets/demo/evidence/NOTICE.md](datasets/demo/evidence/NOTICE.md).

@@ -20,7 +20,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/BAder82t/CyberMesh"
-authors = ["CyberMesh contributors"]
+authors = ["VaultBytes Innovations Ltd"]
 
 [workspace.dependencies]
 cybermesh-crypto = { path = "crates/cybermesh-crypto", version = "0.3.3" }
