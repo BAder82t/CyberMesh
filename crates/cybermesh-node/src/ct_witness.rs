@@ -517,30 +517,22 @@ impl Witness {
             if st.busy || st.stale_head.is_some() {
                 continue;
             }
-            if now >= st.next_poll {
-                st.next_poll = now + self.poll;
-                st.busy = true;
-                jobs.push(Job {
-                    log_id: log_id.clone(),
-                    info: st.info.clone(),
-                    head: st.head.clone(),
-                    compare: Vec::new(),
-                });
-                continue;
-            }
-            let Some(head) = &st.head else { continue };
-            if st.split {
-                continue;
-            }
+            // Due comparisons go first: a poll can be due every time the job slot frees up
+            // (a slow log), and would otherwise starve them. They cannot starve polls in
+            // turn, since each peer is compared at most once per `CHECK_EVERY`.
             let mut compare = Vec::new();
-            for (w, o) in &mut st.pending {
-                if compare.len() >= MAX_PER_JOB {
-                    break;
-                }
-                if o.cp.size <= head.cp.size && o.last_try.is_none_or(|t| now >= t + CHECK_EVERY) {
-                    o.last_try = Some(now);
-                    o.attempts += 1;
-                    compare.push((w.clone(), o.clone()));
+            if let Some(head) = st.head.as_ref().filter(|_| !st.split) {
+                for (w, o) in &mut st.pending {
+                    if compare.len() >= MAX_PER_JOB {
+                        break;
+                    }
+                    if o.cp.size <= head.cp.size
+                        && o.last_try.is_none_or(|t| now >= t + CHECK_EVERY)
+                    {
+                        o.last_try = Some(now);
+                        o.attempts += 1;
+                        compare.push((w.clone(), o.clone()));
+                    }
                 }
             }
             if !compare.is_empty() {
@@ -548,8 +540,17 @@ impl Witness {
                 jobs.push(Job {
                     log_id: log_id.clone(),
                     info: st.info.clone(),
-                    head: Some(head.clone()),
+                    head: st.head.clone(),
                     compare,
+                });
+            } else if now >= st.next_poll {
+                st.next_poll = now + self.poll;
+                st.busy = true;
+                jobs.push(Job {
+                    log_id: log_id.clone(),
+                    info: st.info.clone(),
+                    head: st.head.clone(),
+                    compare: Vec::new(),
                 });
             }
         }
@@ -1208,6 +1209,42 @@ mod tests {
         assert_eq!(
             w4.on_message(&bytes, &n.manifest, now_secs()),
             Acceptance::Ignore
+        );
+    }
+
+    #[test]
+    fn due_comparisons_are_never_starved_by_polls() {
+        // Polls are due again every time the log's job slot frees up (a poll that takes
+        // longer than the tick on a loaded machine). A pending comparison must still run.
+        let n = TestNetwork::new(&[("org-a", 1), ("org-b", 1)], now_secs());
+        let log = MockLog::build("mock.example/log", &demo_entries(1)).unwrap();
+        let d = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut wa = Witness::new(&setup(&log), &n.verifier, &n.network_id, d.0.path()).unwrap();
+        let kb = &n.other_verifiers[0].0;
+        let mut wb = Witness::new(&setup(&log), kb, &n.network_id, d.1.path()).unwrap();
+        let t0 = Instant::now();
+        step(&mut wa, &log, t0);
+        step(&mut wb, &log, t0);
+        let ob = publish(&mut wb, t0);
+        assert_eq!(
+            wa.on_message(&ob, &n.manifest, now_secs()),
+            Acceptance::Accept
+        );
+        // A poll is due as well: the comparison goes first ...
+        let at = t0 + Duration::from_secs(61);
+        let jobs = wa.jobs_due(at);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].compare.len(), 1, "the comparison runs first");
+        for job in jobs {
+            let o = run_job(job, &log, now_secs());
+            wa.on_outcome(o, now_secs());
+        }
+        assert_eq!(wa.stats.consistent, 1);
+        // ... and the poll right after it.
+        let jobs = wa.jobs_due(at);
+        assert!(
+            jobs.len() == 1 && jobs[0].compare.is_empty(),
+            "then the poll"
         );
     }
 

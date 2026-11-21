@@ -319,13 +319,20 @@ async fn a_log_showing_organisations_different_trees_is_proven_and_not_followed(
         MockLog::build("ct.example/test", &demo_entries(2)).unwrap(),
     ));
     o.ct_tiles = 2;
-    // Following would wait for tile 4, which never comes: the proven split view ends it.
+    // Following waits for tile 4: the proven split view ends it first. The coordinator's
+    // view only grows to tile 4 after 30 s, so a split view that is not proven fails the
+    // assertions below, with the witnesses' counters, rather than timing out.
     o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_grow = Some((Duration::from_secs(30), 2));
     o.ct_witness = Some(Duration::from_millis(300));
     let h = Harness::start(o);
     let (_net, report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
-    assert!(report.ct_follow_halted, "{report:?}");
     let c = report.ct_witness.as_ref().unwrap();
+    let v = verifiers[0].ct_witness.as_ref().unwrap();
+    assert!(
+        report.ct_follow_halted,
+        "coordinator {c:?}; verifier {v:?}; {report:?}"
+    );
     assert_eq!(c.split_views, 1, "{c:?}");
     let ev: cybermesh_node::ct_witness::SplitViewEvidence =
         serde_json::from_slice(&std::fs::read(&c.proofs[0]).unwrap()).unwrap();
@@ -333,9 +340,10 @@ async fn a_log_showing_organisations_different_trees_is_proven_and_not_followed(
     // The proof stands on its own: the log's key is all that is needed to check it.
     let key = cybermesh_ct::LogKey::from_info(&info).unwrap();
     let (l, s) = ev.proof.verify(&key).unwrap();
-    assert_eq!((l.size, s.size), (512, 512));
-    assert_ne!(l.root, s.root);
-    let v = verifiers[0].ct_witness.as_ref().unwrap();
+    // Usually two roots for size 512; on a slow machine the coordinator's view may have
+    // grown first, and the proof then shows its first 512 entries have another root.
+    assert_eq!(s.size, 512, "{ev:?}");
+    assert!(l.size == 512 || l.size == 1024, "{ev:?}");
     assert_eq!(v.split_views, 1, "{v:?}");
 }
 
