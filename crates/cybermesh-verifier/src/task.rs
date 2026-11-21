@@ -20,8 +20,25 @@ pub enum SubmitOutcome {
     Accepted,
     /// Byte-identical re-delivery of an already accepted result.
     Duplicate,
-    Rejected(String),
+    Rejected(Rejection),
     Fault(FaultKind),
+}
+
+/// Why a result was not accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    pub reason: String,
+    /// The result proves misbehaviour by its sender (forged, malformed, from a worker not
+    /// assigned or already faulted). False when an honest worker could have sent it: late,
+    /// for another attempt or task payload, with another engine or evidence (an upgrade
+    /// under way), or not yet verifiable here (clocks, a lagging manifest).
+    pub misbehaviour: bool,
+}
+
+impl std::fmt::Display for Rejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +103,13 @@ impl TaskVerifier {
         self.task_digest
     }
 
-    fn reject(&mut self, worker: Option<KeyId>, digest: Digest, reason: &str) -> SubmitOutcome {
+    fn reject(
+        &mut self,
+        worker: Option<KeyId>,
+        digest: Digest,
+        reason: &str,
+        misbehaviour: bool,
+    ) -> SubmitOutcome {
         if self.rejected.len() < MAX_REJECTED {
             self.rejected.push(RejectedResult {
                 worker,
@@ -96,7 +119,10 @@ impl TaskVerifier {
         } else {
             self.rejected_overflow += 1;
         }
-        SubmitOutcome::Rejected(reason.to_owned())
+        SubmitOutcome::Rejected(Rejection {
+            reason: reason.to_owned(),
+            misbehaviour,
+        })
     }
 
     fn fault(
@@ -122,7 +148,10 @@ impl TaskVerifier {
         let raw_digest = Digest::of(bytes);
         let v = match verify_result(bytes, manifest, now, &self.limits) {
             Ok(v) => v,
-            Err(e) => return self.reject(None, raw_digest, &format!("invalid result: {e}")),
+            Err(e) => {
+                let blame = e.proves_misbehaviour();
+                return self.reject(None, raw_digest, &format!("invalid result: {e}"), blame);
+            }
         };
         let r = v.message;
         let digest = v.payload_digest;
@@ -132,6 +161,7 @@ impl TaskVerifier {
                 Some(worker),
                 digest,
                 "result is for a different task or attempt",
+                false,
             );
         }
         if r.task_digest != self.task_digest {
@@ -139,10 +169,16 @@ impl TaskVerifier {
                 Some(worker),
                 digest,
                 "result answers a different task payload",
+                false,
             );
         }
         if !self.task.assignees.contains(&worker) {
-            return self.reject(Some(worker), digest, "worker was not assigned this task");
+            return self.reject(
+                Some(worker),
+                digest,
+                "worker was not assigned this task",
+                true,
+            );
         }
         if now
             > self
@@ -150,10 +186,20 @@ impl TaskVerifier {
                 .expires_at
                 .saturating_add(self.policy.result_grace_secs)
         {
-            return self.reject(Some(worker), digest, "result arrived after the deadline");
+            return self.reject(
+                Some(worker),
+                digest,
+                "result arrived after the deadline",
+                false,
+            );
         }
         if self.faulted.contains(&worker) {
-            return self.reject(Some(worker), digest, "worker already faulted on this task");
+            return self.reject(
+                Some(worker),
+                digest,
+                "worker already faulted on this task",
+                true,
+            );
         }
         if let Some(prev) = self.held.get(&worker) {
             if prev.result_digest == digest {
@@ -175,6 +221,7 @@ impl TaskVerifier {
                 Some(worker),
                 digest,
                 "result used a different engine or evidence than the task pins",
+                false,
             );
         }
         let domains: Vec<&str> = r.assessments.iter().map(|a| a.domain.as_str()).collect();
@@ -189,7 +236,8 @@ impl TaskVerifier {
         }
         let assessments_digest = match r.assessments_digest() {
             Ok(d) => d,
-            Err(e) => return self.reject(Some(worker), digest, &e.to_string()),
+            // Computing the digest failed: a format this version may not know.
+            Err(e) => return self.reject(Some(worker), digest, &e.to_string(), false),
         };
         self.held.insert(
             worker,

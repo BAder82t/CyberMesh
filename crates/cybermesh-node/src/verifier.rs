@@ -121,6 +121,9 @@ pub struct VerifierReport {
     pub net_bytes_out: u64,
     pub net_dropped_rate_limited: u64,
     pub net_dropped_queue_full: u64,
+    /// Connected peers with a negative score at exit: they sent this node provably invalid
+    /// messages (network peer scoring).
+    pub net_penalised_peers: u64,
     /// CPU time of this process (ms), and what it received from CT logs (bytes after
     /// decompression, requests), for cost comparisons.
     pub cpu_ms: u64,
@@ -291,11 +294,7 @@ impl Verifier {
             Err(e) => {
                 self.report.tasks_rejected += 1;
                 debug!(error = %e, "rejected task message");
-                let acc = match e {
-                    ProtocolError::Expired | ProtocolError::NotYetValid => Acceptance::Ignore,
-                    _ => Acceptance::Reject,
-                };
-                net.report(m, acc).await;
+                net.report(m, crate::blame(e.proves_misbehaviour())).await;
                 return;
             }
         };
@@ -392,7 +391,7 @@ impl Verifier {
             Err(e) => {
                 self.report.results_rejected += 1;
                 debug!(error = %e, "rejected result message");
-                net.report(m, Acceptance::Reject).await;
+                net.report(m, crate::blame(e.proves_misbehaviour())).await;
                 return;
             }
         };
@@ -417,7 +416,8 @@ impl Verifier {
         let acc = match outcome {
             SubmitOutcome::Accepted => Acceptance::Accept,
             SubmitOutcome::Duplicate => Acceptance::Ignore,
-            SubmitOutcome::Rejected(_) | SubmitOutcome::Fault(_) => Acceptance::Reject,
+            SubmitOutcome::Rejected(r) => crate::blame(r.misbehaviour),
+            SubmitOutcome::Fault(_) => Acceptance::Reject,
         };
         net.report(m, acc).await;
         self.settle_if_complete(&key);
@@ -840,6 +840,7 @@ pub async fn run_verifier(
     v.report.net_bytes_out = snap.bytes_out;
     v.report.net_dropped_rate_limited = snap.dropped_rate_limited;
     v.report.net_dropped_queue_full = snap.dropped_queue_full;
+    v.report.net_penalised_peers = snap.penalised_peers;
     v.report.cpu_ms = crate::governor::process_cpu_ms();
     (v.report.ct_http_bytes, v.report.ct_http_requests) = cybermesh_ct::http::transfer_totals();
     v.report.ct_witness = v.witness.as_ref().map(|w| w.stats.clone());

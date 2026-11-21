@@ -30,6 +30,17 @@ pub mod worker;
 #[cfg(feature = "adversary-sim")]
 pub mod adversary;
 
+/// The network verdict for a refused message: `Reject`, which peer scoring counts against
+/// the sender, only for proof of misbehaviour; otherwise `Ignore` (clocks, a lagging manifest,
+/// version skew, late or superseded work).
+pub(crate) fn blame(misbehaviour: bool) -> cybermesh_network::Acceptance {
+    if misbehaviour {
+        cybermesh_network::Acceptance::Reject
+    } else {
+        cybermesh_network::Acceptance::Ignore
+    }
+}
+
 /// Errors from node runtimes.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {

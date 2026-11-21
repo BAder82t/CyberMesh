@@ -171,7 +171,7 @@ An independent internal review covered continuous tailing. It found no flaw in t
 - **Manifest state on restart.** Fixed in v0.2.0: nodes persist the highest manifest sequence and digest they accepted, and the governance root can set a `min_sequence` floor for nodes without state.
 - **Extension trust root.** The extension's trust root is bundled, so a revoked release key is removed only by shipping an extension update.
 - **Synchronous analysis.** `assess_task` runs on the worker's async loop. It costs about 1 ms per 32-domain task.
-- **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced.
+- **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced. *Update: penalty-only peer scoring has since been enabled, for provable misbehaviour by a message's author (threat model T29).*
 - **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It is a compile-time proc-macro reached through libp2p.
 - **Quorum enforced by builders only.** Browsers never see records, so they cannot check `min_verifiers`. Co-signers must rebuild rather than sign a payload someone else built.
 - **Verifier quorum is opt-in.** Independent verifiers and the manifest's `min_verifiers` exist since v0.2.0. With `min_verifiers = 1`, the default for compatibility, a single verifier is still trusted as in v0.1. Networks should set 2 or more and run at least one more verifier than that.

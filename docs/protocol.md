@@ -262,6 +262,32 @@ ThreatRelease {
 - **Building from received records.** `release build` re-verifies every file against the build-time manifest, which is authoritative. Files that do not verify are skipped and named (`--strict` makes them fatal). Skipping can only remove support, never add an entry.
 - **Gossip settings.** Messages are signed (`ValidationMode::Strict`) and validated manually. The message id is `SHA-256(author peer id ‖ 0x00 ‖ data)`, and messages are at most 256 KiB.
 - **Admission and limits.** Only allow-listed peers (manifest members) may connect. A token bucket applies per author, and each message costs `1 + size/1024`, capped at the burst size.
+- **Validation verdicts.** `Reject` means proof of misbehaviour, and is reserved for what no software version, manifest timing or clock can explain:
+  - a signature by an enrolled key that does not verify;
+  - a payload claiming an identity other than its signer;
+  - a message for another network;
+  - a result from a worker not assigned the task, or already faulted on it;
+  - a proven fault (equivocation, a wrong input digest, the wrong domains or tiles);
+  - a record naming an enrolled verifier that did not sign it.
+
+  Anything an honest node can produce is `Ignore`d:
+  - messages that are expired or dated ahead (clocks);
+  - a signer, role, assignee or operator the receiver's manifest does not have yet (`NotAuthorized`, `ManifestMismatch`);
+  - bytes this version cannot decode, or limits it does not allow (a newer release adds fields or raises limits);
+  - a result that is late, for another attempt or task payload, or computed with another engine or evidence;
+  - a witness cosignature that does not verify;
+  - replays and quotas.
+
+  Messages from authors not in the receiver's allowlist are also `Ignore`d.
+- **Peer scoring.** Penalty-only (`cybermesh_network::peer_scoring`).
+  - **Author penalties.** A `Reject`ed message counts against its **author**, never against the peers that relayed it: gossipsub itself is told `Ignore`, since it would charge every peer that delivered a copy. The count halves every 10 minutes and sets the author's score, which gossipsub receives as its application score:
+    - below 1.5, the score is 0, so one invalid message is tolerated;
+    - from 1.5, it is −40: out of the mesh and no gossip, but publishing still reaches the peer;
+    - from 2.5, it is −100: graylisted. Gossipsub ignores everything the peer sends, including what it relays for others, and this node drops every message it authored before validation, whichever peer relays it.
+  - **Gossipsub's own checks.** A broken gossipsub message signature costs the delivering peer `10 × n²`. Protocol misbehaviour (re-grafting during backoff, broken gossip promises) costs as in gossipsub, beyond a tolerance of 6.
+  - **Thresholds.** −10 (gossip), −50 (publish) and −80 (graylist).
+  - **Not scored.** Time in the mesh, message deliveries, IP colocation and slowness.
+  - **Persistence.** Gossipsub scores outlive a reconnection by an hour, and author counts are kept regardless of connections.
 - **Mesh parameters.** These are set for small networks: `mesh_n = 4`, `mesh_n_low = 2`, `mesh_n_high = 8`, with flood publishing.
 
 ## 9. Test vectors
