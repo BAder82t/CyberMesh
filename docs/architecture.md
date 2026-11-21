@@ -67,7 +67,7 @@ sequenceDiagram
 
 ### 3.3 Analysis engine (`cybermesh-analysis`)
 
-`DomainRiskAssessment` is the only task kind. It uses only the domain string and locally pinned evidence snapshots:
+`DomainRiskAssessment` is the original task kind; `ct-shard-scan` is the second (§3.3a). It uses only the domain string and locally pinned evidence snapshots:
 
 - **Evidence.** The engine uses reference blocklists, a popularity list, a brand table and a hosting-platform list. Each source is pinned by `H(id, kind, file digest)`.
 - **Signals.** Each signal is an explainable `Finding` with integer points:
@@ -84,7 +84,7 @@ sequenceDiagram
 
 `ct-shard-scan` is a second task kind, fully described in [ct-monitoring.md](ct-monitoring.md).
 
-- **Work.** Workers that opt in download full data tiles of public static CT logs from pinned monitoring URLs. They extract certificate names and report per-tile Merkle roots, a digest of every extracted name, and brand-lookalike matches.
+- **Work.** Workers that opt in download full data tiles of public CT logs from pinned monitoring URLs (static logs, or classic RFC 6962 logs, whose entries are fetched with `get-entries` and proven with audit paths). They extract certificate names and report per-tile Merkle roots, a digest of every extracted name, and brand-lookalike matches.
 - **Verification.** The verifier checks the log's checkpoint signature against the pinned key, proves each tile's root against that signed checkpoint, compares the workers' roots with it, and re-scans tiles chosen from a secret seed. It re-scans everything on disagreement, and when publishing is enabled it confirms every tile that would publish a finding.
 - **Output.** Results feed an investigation report. Browser warnings from CT evidence are opt-in and capped at `warn`.
 
