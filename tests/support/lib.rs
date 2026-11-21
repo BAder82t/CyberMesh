@@ -150,6 +150,8 @@ pub struct Options {
     pub ct_verifier_view: Option<Arc<MockLog>>,
     /// The coordinator's `ct-witness.json` before it starts (a restart).
     pub ct_witness_state: Option<&'static str>,
+    /// Independent verifiers' CT policy (default: the coordinator's, `ct_policy`).
+    pub verifier_ct_policy: Option<CtPolicy>,
     /// Independent verifiers exit after this long without work. Until their redial reaches
     /// the coordinator they see it only through workers, which do not carry the `records`
     /// and `checkpoints` topics.
@@ -180,6 +182,7 @@ impl Default for Options {
             ct_verifier_view: None,
             ct_witness_state: None,
             verifier_idle_exit: Duration::from_secs(3),
+            verifier_ct_policy: None,
         }
     }
 }
@@ -366,7 +369,10 @@ impl Harness {
                 // coordinator does (they settle early once every assignee has answered).
                 result_timeout: o.result_timeout * 2,
                 policy: Policy::default(),
-                ct_policy: o.ct_policy.clone(),
+                ct_policy: o
+                    .verifier_ct_policy
+                    .clone()
+                    .unwrap_or_else(|| o.ct_policy.clone()),
                 // A different secret seed from the coordinator's.
                 ct_seed: [9u8; 32],
                 clock: Arc::new(SystemClock),

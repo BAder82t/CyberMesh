@@ -24,6 +24,7 @@ use cybermesh_protocol::{
     WorkerState, payload_type,
 };
 use cybermesh_verifier::ct::{CtOracle, CtPolicy, CtTaskVerifier};
+use cybermesh_verifier::fault_proof::{Check, FaultProof, check_fault_proof, verify_fault_proof};
 use cybermesh_verifier::{
     Policy, ReputationBook, SubmitOutcome, TaskStatus, TaskVerifier, VerificationRecord, VerifierId,
 };
@@ -103,6 +104,83 @@ pub struct CtFollowSetup {
     pub max_tiles_per_poll: u64,
     /// Stop following once every tile below this one is settled (bounded runs, demos).
     pub until_tile: Option<u64>,
+}
+
+/// A fault proof checked off the event loop.
+struct FaultChecked {
+    reporter: KeyId,
+    key: crate::fault_proofs::ProofKey,
+    bytes: Vec<u8>,
+    check: Check,
+}
+
+/// A fault proof waiting for its check.
+struct QueuedProof {
+    proof: FaultProof,
+    bytes: Vec<u8>,
+}
+
+/// The pinned log a CT task names, read from its (not yet verified) payload to choose log
+/// access; the check verifies the task itself.
+fn ct_log_of(task: &str, engine: &Engine, limits: &Limits) -> Option<CtLogInfo> {
+    if peek_payload_type(task.as_bytes(), limits).as_deref() != Some(payload_type::CT_TASK) {
+        return None;
+    }
+    let env = Envelope::parse(task.as_bytes(), limits.max_envelope_bytes).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&env.payload_bytes().ok()?).ok()?;
+    let id = v.get("log_id")?.as_str()?;
+    engine
+        .evidence()
+        .ct_logs
+        .iter()
+        .find(|l| l.log_id == id)
+        .cloned()
+}
+
+/// Checks a fault proof with this coordinator's own engine and, for CT, its own log access,
+/// authenticated as for settling tasks (blocking, within
+/// [`crate::fault_proofs::CHECK_BUDGET`]). A log proven to show a split view (`split_logs`)
+/// cannot be relied on to say what the worker saw, so such a proof stays unconfirmed.
+fn check_fault_proof_here(
+    p: &FaultProof,
+    manifest: &TrustManifest,
+    engine: &Engine,
+    split_logs: &BTreeSet<String>,
+    now: u64,
+) -> Check {
+    let limits = Limits::default();
+    let log = ct_log_of(&p.task, engine, &limits);
+    if let Some(l) = log.as_ref().filter(|l| split_logs.contains(&l.log_id)) {
+        return Check::Unconfirmed(format!("log {} was proven to show a split view", l.log_id));
+    }
+    let deadline = Instant::now() + crate::fault_proofs::CHECK_BUDGET;
+    let src = log
+        .as_ref()
+        .and_then(|l| HttpTileSource::new(l, Duration::from_secs(30)).ok());
+    let auth = match (&src, &log) {
+        (Some(s), Some(l)) => fetch_verified_checkpoint(s, l)
+            .and_then(|cp| {
+                cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+                Ok(cp)
+            })
+            .ok()
+            .map(|cp| cybermesh_ct::proof::TileAuthenticator::new(s, cp)),
+        _ => None,
+    };
+    let oracle = auth.as_ref().map(|a| LogOracle {
+        auth: a,
+        engine,
+        contradicted: std::sync::Mutex::new(BTreeSet::new()),
+        deadline: Some(deadline),
+    });
+    check_fault_proof(
+        p,
+        manifest,
+        Some(engine),
+        oracle.as_ref().map(|o| o as &dyn CtOracle),
+        &limits,
+        now,
+    )
 }
 
 /// The followed log, if a split view of it has been proven.
@@ -190,6 +268,13 @@ pub struct CoordinatorReport {
     /// Follow mode: following stopped after repeated inconsistent checkpoints, or because the
     /// log was proven to show a split view.
     pub ct_follow_halted: bool,
+    /// Fault proofs from independent verifiers: checked, confirmed here (the worker is then
+    /// quarantined), refuted, undecidable here, and dropped (too many checks at once).
+    pub peer_fault_proofs_received: u64,
+    pub peer_faults_confirmed: u64,
+    pub peer_faults_refuted: u64,
+    pub peer_faults_unconfirmed: u64,
+    pub peer_fault_proofs_dropped: u64,
     /// CT log witnessing, including proven split views.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ct_witness: Option<crate::ct_witness::WitnessStats>,
@@ -201,6 +286,9 @@ pub struct CoordinatorReport {
 /// Fields shared by both result kinds, extracted for routing.
 pub(crate) struct ResultMeta {
     pub(crate) payload_digest: Digest,
+    /// Digest of what the result asserts (assessments, or tile results), without its nonce
+    /// and timing: the same answer signed twice has the same claims.
+    pub(crate) claims: Option<Digest>,
     pub(crate) task_id: String,
     pub(crate) attempt: u32,
     pub(crate) task_digest: Digest,
@@ -219,6 +307,7 @@ pub(crate) fn parse_result(
     if peek_payload_type(data, limits).as_deref() == Some(payload_type::CT_RESULT) {
         verify_ct_result(data, manifest, now, limits).map(|v| ResultMeta {
             payload_digest: v.payload_digest,
+            claims: v.message.tiles_digest().ok(),
             task_id: v.message.task_id,
             attempt: v.message.attempt,
             task_digest: v.message.task_digest,
@@ -228,6 +317,7 @@ pub(crate) fn parse_result(
     } else {
         verify_result(data, manifest, now, limits).map(|v| ResultMeta {
             payload_digest: v.payload_digest,
+            claims: v.message.assessments_digest().ok(),
             task_id: v.message.task_id,
             attempt: v.message.attempt,
             task_digest: v.message.task_digest,
@@ -444,10 +534,21 @@ struct LogOracle<'a> {
     engine: &'a Engine,
     /// Tiles whose hash tiles contradicted the signed checkpoint.
     contradicted: std::sync::Mutex<BTreeSet<u64>>,
+    /// Past this, nothing more is fetched (answers are then unavailable).
+    deadline: Option<Instant>,
+}
+
+impl LogOracle<'_> {
+    fn out_of_time(&self) -> bool {
+        self.deadline.is_some_and(|d| Instant::now() >= d)
+    }
 }
 
 impl CtOracle for LogOracle<'_> {
     fn tile_root(&self, log: &str, tile: u64) -> Option<Digest> {
+        if self.out_of_time() {
+            return None;
+        }
         match self.auth.tile_root(tile) {
             Ok(r) => Some(Digest(r)),
             // Only a hash mismatch is a contradiction; a wrong-length body (an error page from a
@@ -463,6 +564,9 @@ impl CtOracle for LogOracle<'_> {
         }
     }
     fn rescan(&self, _log: &str, tile: u64) -> Option<cybermesh_protocol::ct::TileScanResult> {
+        if self.out_of_time() {
+            return None;
+        }
         let data = self.auth.source().data_tile(tile).ok()?;
         scan_tile(&data, tile, self.engine).ok()
     }
@@ -511,6 +615,7 @@ pub(crate) fn finalize_ct(
         auth: a,
         engine,
         contradicted: std::sync::Mutex::new(BTreeSet::new()),
+        deadline: None,
     });
     v.finalize(
         Some(engine),
@@ -585,7 +690,8 @@ struct SettledTask {
     forget_after: u64,
     task_digest: Digest,
     attempt: u32,
-    accepted: BTreeMap<KeyId, Digest>,
+    /// Per worker: its accepted result's digest, and the digest of what it asserted.
+    accepted: BTreeMap<KeyId, (Digest, Digest)>,
 }
 
 /// Late-equivocation faults kept in the report (further ones are only counted).
@@ -620,6 +726,9 @@ struct Coordinator {
     ct_poll_tx: tokio::sync::mpsc::UnboundedSender<PollOutcome>,
     witness: Option<crate::ct_witness::Witness>,
     witness_tx: tokio::sync::mpsc::UnboundedSender<crate::ct_witness::JobOutcome>,
+    fault_intake: crate::fault_proofs::ProofIntake<QueuedProof>,
+    /// Finished proof checks. Unbounded, but at most MAX_CHECKS_IN_FLIGHT are outstanding.
+    fault_tx: tokio::sync::mpsc::UnboundedSender<FaultChecked>,
 }
 
 impl Coordinator {
@@ -1001,7 +1110,7 @@ impl Coordinator {
                     accepted: record
                         .accepted
                         .iter()
-                        .map(|a| (a.worker.clone(), a.result_digest))
+                        .map(|a| (a.worker.clone(), (a.result_digest, a.assessments_digest)))
                         .collect(),
                 },
             );
@@ -1028,11 +1137,11 @@ impl Coordinator {
         }
         let task_id = v.task_id.clone();
         let Some(inf) = self.inflight.get_mut(&task_id) else {
-            // Late result for a settled task: a different signed result from a worker whose
-            // result was already accepted is provable equivocation.
-            // Only a second result for the *same* task payload and attempt proves
-            // equivocation; a result answering a different payload (e.g. another issuer
-            // re-using the task id) proves nothing about this worker.
+            // Late result for a settled task: a signed result asserting something else, from a
+            // worker whose result was already accepted, is provable equivocation (the same
+            // answer signed again is not). Only a second result for the *same* task payload
+            // and attempt proves it; a result answering a different payload (e.g. another
+            // issuer re-using the task id) proves nothing about this worker.
             let prior = self
                 .settled
                 .get(&task_id)
@@ -1042,8 +1151,9 @@ impl Coordinator {
             let _ = self
                 .replay
                 .check_and_insert(v.payload_digest, now.saturating_add(3600), now);
-            if let Some(prior) = prior
+            if let Some((prior, prior_claims)) = prior
                 && prior != v.payload_digest
+                && v.claims.is_some_and(|c| c != prior_claims)
                 && !self.reputation.is_quarantined(&v.worker)
             {
                 let fault = cybermesh_verifier::FaultRecord {
@@ -1139,6 +1249,125 @@ impl Coordinator {
             }
         };
         net.report(m, acc).await;
+    }
+
+    /// A fault proof from an independent verifier: checked here before anything is done.
+    async fn on_fault(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
+        use crate::fault_proofs::Admit;
+        let now = self.s.clock.now();
+        let v = match verify_fault_proof(&m.data, &self.s.manifest, now, &self.limits) {
+            Ok(v) => v,
+            Err(e) => {
+                debug!(error = %e, "refused fault proof");
+                net.report(m, crate::blame(e.proves_misbehaviour())).await;
+                return;
+            }
+        };
+        if v.signer == self.verifier_id.key {
+            net.report(m, Acceptance::Ignore).await;
+            return;
+        }
+        let p = v.message;
+        if self.reputation.is_quarantined(&p.fault.worker) {
+            net.report(m, Acceptance::Accept).await;
+            return;
+        }
+        let reporter = p.reporter.clone();
+        let fault = p.fault.clone();
+        let queued = QueuedProof {
+            proof: p,
+            bytes: m.data.clone(),
+        };
+        match self
+            .fault_intake
+            .offer(&reporter, &fault, queued, Instant::now())
+        {
+            Admit::Queued => {
+                net.report(m, Acceptance::Accept).await;
+                self.report.peer_fault_proofs_received += 1;
+                self.start_fault_checks();
+            }
+            Admit::Seen => net.report(m, Acceptance::Ignore).await,
+            Admit::Full => {
+                self.report.peer_fault_proofs_dropped += 1;
+                net.report(m, Acceptance::Ignore).await;
+            }
+        }
+    }
+
+    /// Starts queued proof checks while check slots are free.
+    fn start_fault_checks(&mut self) {
+        while let Some((reporter, key, q)) = self.fault_intake.next_check() {
+            let manifest = self.s.manifest.clone();
+            let engine = Arc::clone(&self.engine_arc);
+            let split = self
+                .witness
+                .as_ref()
+                .map(crate::ct_witness::Witness::split_logs)
+                .unwrap_or_default();
+            let now = self.s.clock.now();
+            let tx = self.fault_tx.clone();
+            tokio::spawn(async move {
+                let QueuedProof { proof, bytes } = q;
+                let check = tokio::task::spawn_blocking(move || {
+                    check_fault_proof_here(&proof, &manifest, &engine, &split, now)
+                })
+                .await
+                .unwrap_or_else(|_| Check::Unconfirmed("the check failed internally".into()));
+                let _ = tx.send(FaultChecked {
+                    reporter,
+                    key,
+                    bytes,
+                    check,
+                });
+            });
+        }
+    }
+
+    /// Acts on a checked fault proof: a confirmed fault quarantines the worker.
+    fn on_fault_checked(&mut self, done: FaultChecked) {
+        let decided = !matches!(done.check, Check::Unconfirmed(_));
+        self.fault_intake.done(&done.key, decided, Instant::now());
+        self.start_fault_checks();
+        match done.check {
+            Check::Confirmed(fault) => {
+                self.report.peer_faults_confirmed += 1;
+                if self.reputation.is_quarantined(&fault.worker) {
+                    return;
+                }
+                warn!(worker = %fault.worker.short(), operator = %fault.operator, kind = ?fault.kind, reporter = %done.reporter.short(),
+                    "fault proven by another verifier and confirmed here; worker quarantined");
+                self.reputation.record_fault(
+                    &fault,
+                    &format!(
+                        "proven by verifier {} and confirmed by this coordinator",
+                        done.reporter.short()
+                    ),
+                );
+                self.persist_reputation();
+                self.report.faults += 1;
+                let tag = fault
+                    .evidence
+                    .first()
+                    .map_or_else(|| "none".to_owned(), |d| d.hex()[..12].to_owned());
+                let path = self
+                    .s
+                    .state_dir
+                    .join("faults")
+                    .join(format!("peer-{}-{tag}.json", fault.worker.short()));
+                if let Err(e) = files::write_atomic(&path, &done.bytes) {
+                    warn!(error = %e, "failed to keep the fault proof");
+                }
+            }
+            Check::Refuted(reason) => {
+                self.report.peer_faults_refuted += 1;
+                info!(reporter = %done.reporter.short(), %reason, "fault proof refuted by this coordinator's own check");
+            }
+            Check::Unconfirmed(reason) => {
+                self.report.peer_faults_unconfirmed += 1;
+                debug!(reporter = %done.reporter.short(), %reason, "fault proof not confirmed here");
+            }
+        }
     }
 
     async fn on_checkpoint(&mut self, net: &NetworkHandle, m: &cybermesh_network::InboundMessage) {
@@ -1356,6 +1585,7 @@ pub async fn run_coordinator(
             topics.results.clone(),
             topics.presence.clone(),
             topics.records.clone(),
+            topics.faults.clone(),
         ]
         .into_iter()
         .chain(setup.witness.is_some().then(|| topics.checkpoints.clone()))
@@ -1483,9 +1713,12 @@ pub async fn run_coordinator(
     }
     let (witness_tx, mut witness_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::ct_witness::JobOutcome>();
+    let (fault_tx, mut fault_rx) = tokio::sync::mpsc::unbounded_channel::<FaultChecked>();
     let mut c = Coordinator {
         witness,
         witness_tx,
+        fault_intake: crate::fault_proofs::ProofIntake::default(),
+        fault_tx,
         follower,
         ct_polling: false,
         ct_inconsistent_streak: 0,
@@ -1538,6 +1771,8 @@ pub async fn run_coordinator(
                         c.on_heartbeat(&net, &m).await;
                     } else if m.topic == c.topics.checkpoints {
                         c.on_checkpoint(&net, &m).await;
+                    } else if m.topic == c.topics.faults {
+                        c.on_fault(&net, &m).await;
                     } else {
                         net.report(&m, Acceptance::Ignore).await;
                     }
@@ -1549,6 +1784,7 @@ pub async fn run_coordinator(
             Some(done) = ct_finalized_rx.recv() => c.on_ct_finalized(done),
             Some(outcome) = ct_poll_rx.recv() => c.on_ct_poll(outcome),
             Some(o) = witness_rx.recv() => c.on_witness(o),
+            Some(done) = fault_rx.recv() => c.on_fault_checked(done),
             _ = follow_tick.tick(), if c.follower.is_some() && !c.ct_polling && !c.report.ct_follow_halted => c.start_ct_poll(),
             _ = manifest_tick.tick() => {
                 c.records_in.prune(c.s.clock.now());
@@ -1642,6 +1878,7 @@ pub async fn run_coordinator(
                     && c.pending.is_empty()
                     && c.inflight.is_empty()
                     && c.ct_finalizing == 0
+                    && c.fault_intake.is_idle()
                     && (c.report.ct_follow_halted
                         || c.follower.as_ref().is_none_or(crate::ct_follow::Follower::done))
                     // Wait for own records to go out only if peers need them for a quorum
@@ -1689,4 +1926,55 @@ pub async fn run_coordinator(
     let _ = files::write_json(&c.s.state_dir.join("coordinator-report.json"), &c.report);
     net.shutdown().await;
     Ok(c.report)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use cybermesh_analysis::EvidenceBundle;
+    use cybermesh_protocol::testkit::{TestNetwork, sign_bytes, test_key};
+    use cybermesh_verifier::{FaultKind, FaultRecord};
+
+    use super::*;
+
+    #[test]
+    fn a_proof_about_a_log_proven_split_is_not_confirmed() {
+        let net = TestNetwork::new(&[("org-a", 1), ("org-b", 1)], 1_800_000_000);
+        let log = CtLogInfo {
+            log_id: "split-log".into(),
+            description: String::new(),
+            monitoring_url: "http://127.0.0.1:9/".into(),
+            origin: "127.0.0.1/log".into(),
+            public_key: "not used: the check stops before any log access".into(),
+        };
+        let engine = Engine::new(EvidenceBundle {
+            ct_logs: vec![log],
+            ..EvidenceBundle::default()
+        });
+        let task = sign_bytes(
+            payload_type::CT_TASK,
+            &serde_json::json!({ "log_id": "split-log" }),
+            &test_key("issuer"),
+        );
+        let p = FaultProof {
+            v: cybermesh_protocol::PROTOCOL_VERSION,
+            network_id: "net".into(),
+            reporter: test_key("reporter").key_id(),
+            reported_at: 1_800_000_000,
+            fault: FaultRecord {
+                worker: test_key("worker").key_id(),
+                operator: cybermesh_protocol::OperatorId::new("org-b").unwrap(),
+                kind: FaultKind::IncorrectResult,
+                evidence: vec![Digest::of(b"result")],
+            },
+            task: String::from_utf8(task).unwrap(),
+            results: vec![],
+        };
+        let split = BTreeSet::from(["split-log".to_owned()]);
+        let check = check_fault_proof_here(&p, &net.manifest, &engine, &split, 1_800_000_000);
+        assert!(
+            matches!(&check, Check::Unconfirmed(r) if r.contains("split view")),
+            "{check:?}"
+        );
+    }
 }

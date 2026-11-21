@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-### Changed
-- **Ownership.** CyberMesh is copyright 2026 VaultBytes Innovations Ltd. A `NOTICE` file states this, as do the README, the crates' `authors` field and the browser extension package. The licence remains Apache-2.0.
-
 ### Added
+- **The coordinator acts on faults that independent verifiers prove.** An independent verifier can catch a worker the coordinator missed, because its CT spot checks use its own secret seed.
+  - The verifier now publishes a fault proof on a new `faults` gossip topic. The proof carries the issuer-signed task and the worker's own signed results.
+  - The coordinator re-checks each proof before quarantining the worker: from the signatures for equivocation and mismatched results, by its own recomputation for domain tasks, and by re-scanning log-proven tiles for CT tasks.
+  - A false or undecidable claim changes nothing. Neither does a CT claim about a log proven to show a split view.
+  - Checks are bounded: two at a time, 120 s of log access each, and eight queued per reporter, with reporters taking turns.
+  - Reports gain the proof counters, and confirmed proofs are kept in `state_dir/faults/`.
+  - See [docs/protocol.md](docs/protocol.md) §8 and threat model T30.
 - **Penalty-only peer scoring.** A message the application `Reject`s now counts against its **author**, never against the peers that relayed it.
   - One invalid message is tolerated, so a false positive costs an honest node nothing.
   - About two within ten minutes take the author out of the mesh and stop gossip with it.
@@ -16,6 +20,7 @@
   See [docs/protocol.md](docs/protocol.md) §8 and threat model T29.
 
 ### Changed
+- **Ownership.** CyberMesh is copyright 2026 VaultBytes Innovations Ltd. A `NOTICE` file states this, as do the README, the crates' `authors` field and the browser extension package. The licence remains Apache-2.0.
 - **`Reject` now means proof of misbehaviour, and only that.** It is reserved for what no software version, manifest timing or clock can explain:
   - a signature by an enrolled key that does not verify (now reported as a bad signature, not as an unknown signer);
   - a payload claiming an identity other than its signer;
@@ -33,6 +38,7 @@
   - messages from authors outside the receiver's allowlist.
 
   `ProtocolError::proves_misbehaviour` decides. `SubmitOutcome::Rejected` carries a `Rejection { reason, misbehaviour }`, and rejected results are still listed in verification records as before.
+- **Equivocation means two different answers.** Two signed results from one worker for one task are equivocation only if they assert different things (their `assessments_digest`, or `tiles_digest` for CT, differ). The same answer signed again, for example by a worker re-running a task after a restart, is now a duplicate. This applies within a task and after settlement.
 
 ## v0.3.3 (2026-11-21, research pre-release)
 

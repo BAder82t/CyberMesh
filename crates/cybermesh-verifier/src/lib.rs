@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ct;
+pub mod fault_proof;
 pub mod policy;
 pub mod record;
 pub mod reputation;

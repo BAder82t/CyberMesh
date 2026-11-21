@@ -283,7 +283,11 @@ impl CtTaskVerifier {
             );
         }
         if let Some(prev) = self.held.get(&worker) {
-            if prev.result_digest == digest {
+            // The same tile results signed again (re-run after a restart, new nonce) is not
+            // equivocation: only different claims are.
+            if prev.result_digest == digest
+                || r.tiles_digest().is_ok_and(|d| d == prev.tiles_digest)
+            {
                 return SubmitOutcome::Duplicate;
             }
             let ev = vec![prev.result_digest, digest];

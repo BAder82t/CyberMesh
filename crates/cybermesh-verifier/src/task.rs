@@ -202,7 +202,12 @@ impl TaskVerifier {
             );
         }
         if let Some(prev) = self.held.get(&worker) {
-            if prev.result_digest == digest {
+            // The same answer signed again (a worker that re-ran the task after a restart
+            // picks a new nonce) is not equivocation: only different claims are.
+            if prev.result_digest == digest
+                || r.assessments_digest()
+                    .is_ok_and(|d| d == prev.assessments_digest)
+            {
                 return SubmitOutcome::Duplicate;
             }
             let evidence = vec![prev.result_digest, digest];

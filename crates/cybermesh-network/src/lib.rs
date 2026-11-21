@@ -41,6 +41,8 @@ pub struct Topics {
     pub records: String,
     /// Cosigned CT log checkpoints, exchanged between verifiers that witness logs.
     pub checkpoints: String,
+    /// Fault proofs from independent verifiers, re-checked by the coordinator.
+    pub faults: String,
 }
 
 impl Topics {
@@ -52,6 +54,7 @@ impl Topics {
             presence: format!("/cybermesh/{network_id}/v1/presence"),
             records: format!("/cybermesh/{network_id}/v1/records"),
             checkpoints: format!("/cybermesh/{network_id}/v1/checkpoints"),
+            faults: format!("/cybermesh/{network_id}/v1/faults"),
         }
     }
 }

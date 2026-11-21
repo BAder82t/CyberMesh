@@ -47,4 +47,6 @@ pub mod payload_type {
     pub const CT_TASK: &str = crate::ct::CT_TASK;
     pub const CT_RESULT: &str = crate::ct::CT_RESULT;
     pub const CT_CHECKPOINT: &str = crate::ct::CT_CHECKPOINT;
+    /// A verifier's self-contained proof that a worker misbehaved.
+    pub const FAULT_PROOF: &str = "application/vnd.cybermesh.fault-proof+json;v=1";
 }

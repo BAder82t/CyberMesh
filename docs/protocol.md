@@ -58,6 +58,7 @@ The signed message is `PAE(type, body) = "DSSEv1" SP len(type) SP type SP len(bo
 | `application/vnd.cybermesh.appeal-decision+json;v=1` | `AppealDecision` | governance threshold |
 | `application/vnd.cybermesh.verification+json;v=1` | `VerificationRecord` | member with role `verifier` |
 | `application/vnd.cybermesh.ct-checkpoint+json;v=1` | `CheckpointObservation` | member with role `verifier` |
+| `application/vnd.cybermesh.fault-proof+json;v=1` | `FaultProof` | member with role `verifier` |
 | `application/vnd.cybermesh.release+json;v=1` | `ThreatRelease` | release-signer threshold of distinct operators |
 
 ## 2. Trust manifest
@@ -142,7 +143,7 @@ DomainAssessment { domain, risk_score_bp: 0..=10000, confidence_bp: 0..=10000,
 **Signed inconsistencies** are recorded as faults, not mere rejections:
 - a wrong `input_digest` (`wrong-input-digest`);
 - a domain list that differs from the task (`domain-set-mismatch`);
-- two different results from one worker for one task (`equivocation`), which is also detected after settlement;
+- two results from one worker for one task that assert different things (`equivocation`), which is also detected after settlement. The same answer signed again (a new nonce, say after a restart) is a duplicate, not equivocation: the `assessments_digest`, or the `tiles_digest` for CT, must differ;
 - assessments that differ from the verifier's recomputation (`incorrect-result`).
 
 `assessments_digest = H_tag("cybermesh/assessments/v1", canonical(assessments))` is the value compared across operators. Timestamps, nonces and usage are excluded from it.
@@ -249,7 +250,19 @@ ThreatRelease {
 
 ## 8. Transport
 
-- **Topics.** `/cybermesh/<network_id>/v1/{tasks,results,presence,records,checkpoints}` on gossipsub over libp2p TCP with Noise and Yamux. Workers subscribe to `tasks`. The coordinator subscribes to `results`, `presence` and `records`. Independent verifiers subscribe to `tasks`, `results` and `records`. Nodes that witness CT logs also subscribe to `checkpoints`: the coordinator for its followed log by default, and independent verifiers configured with `[ct_witness]`.
+- **Topics.** `/cybermesh/<network_id>/v1/{tasks,results,presence,records,checkpoints,faults}` on gossipsub over libp2p TCP with Noise and Yamux. Workers subscribe to `tasks`. The coordinator subscribes to `results`, `presence`, `records` and `faults`. Independent verifiers subscribe to `tasks`, `results` and `records`. Nodes that witness CT logs also subscribe to `checkpoints`: the coordinator for its followed log by default, and independent verifiers configured with `[ct_witness]`.
+- **Fault proofs.** A verification record names a fault only by the digests of the worker's results, which nobody else can check. So an independent verifier also publishes, on `faults`,
+  ```
+  FaultProof { v, network_id, reporter: KeyId, reported_at, fault: FaultRecord, task, results }
+  ```
+  signed by `reporter` (role `verifier`). `task` is the issuer-signed task envelope and `results` the worker's signed result envelope(s): two for equivocation, one otherwise. Proofs older than 7 days are refused.
+  - **Re-checked before any action.** The coordinator checks every proof against its own manifest (`check_fault_proof`):
+    - The task is checked as of its issue, and each result must be the accused worker's for that task attempt, matching the fault's evidence digests.
+    - Equivocation, a wrong input digest and a wrong domain or tile set follow from the signatures.
+    - An incorrect domain result is recomputed with the coordinator's own engine and evidence, which must be those the task pins.
+    - An incorrect CT result is re-scanned from the log with the coordinator's own access. Only tiles whose root its verified checkpoint proves are compared. A proof about a log the coordinator's witness has proven to show a split view is not confirmed: the coordinator cannot tell which view the worker scanned.
+  - **Outcomes.** A confirmed fault quarantines the worker, and the proof is kept in `state_dir/faults/peer-*.json`. A refuted or undecidable proof changes nothing.
+  - **Bounds.** A fault is identified by the worker, its kind and the results it names. At most 2 checks run at once, each within 120 s of log access. Each reporter has at most 8 proofs queued, and reporters take turns, so one verifier cannot crowd out the others. A decided fault (confirmed or refuted) is not checked again; an undecided one (the log was unavailable, say) can be checked again after 300 s.
 - **Record distribution.** Every verifier publishes each signed `VerificationRecord` envelope it writes on `records`. It also re-publishes those verified within the last hour every 15 minutes, which outlasts the 10-minute duplicate cache. On receipt, a verifier:
   - authenticates the record exactly as a release builder does (enrolled verifier signature, canonical record, network id, named verifier equals signer and its operator);
   - refuses its own echoes, records dated more than 300 s in the future, and records older than 30 days;
