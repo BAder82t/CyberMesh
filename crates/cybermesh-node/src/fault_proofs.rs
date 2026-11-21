@@ -12,7 +12,9 @@
 //! [`ProofIntake`] queues at most [`MAX_QUEUED_PER_REPORTER`] per reporting verifier and takes
 //! reporters in turn.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::hash::Hash;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cybermesh_crypto::{Digest, KeyId, SecretKey};
@@ -24,6 +26,8 @@ use tracing::{debug, warn};
 
 /// Signed results kept per followed task for fault proofs (bytes).
 pub const MAX_EVIDENCE_BYTES: usize = 2 << 20;
+/// Evidence kept for settled tasks, to prove a worker's later contradicting result (bytes).
+pub const MAX_LATE_BYTES: usize = 32 << 20;
 /// Proofs waiting to be published.
 const MAX_OUTBOX: usize = 256;
 /// A proof that could not be published (no peer subscribed yet) is retried for this long.
@@ -56,6 +60,12 @@ impl Evidence {
             task,
             results: BTreeMap::new(),
         }
+    }
+
+    /// Bytes held.
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.bytes
     }
 
     /// Keeps a signed result (by its payload digest), within [`MAX_EVIDENCE_BYTES`].
@@ -115,6 +125,115 @@ impl Evidence {
     }
 }
 
+/// A settled task's evidence and what each worker's accepted result asserted.
+#[derive(Debug)]
+struct SettledTask {
+    evidence: Arc<Evidence>,
+    /// Per worker: the accepted result's payload digest, and the digest of what it asserted.
+    accepted: BTreeMap<KeyId, (Digest, Digest)>,
+    /// Workers already proven to have contradicted themselves on this task.
+    proven: BTreeSet<KeyId>,
+    forget_after: u64,
+}
+
+/// Evidence of settled tasks, kept within [`MAX_LATE_BYTES`] (oldest dropped first), so a
+/// verifier can still prove a worker equivocated when a contradicting result arrives after
+/// the task settled.
+#[derive(Debug)]
+pub struct SettledEvidence<K> {
+    tasks: HashMap<K, SettledTask>,
+    order: VecDeque<K>,
+    bytes: usize,
+}
+
+impl<K> Default for SettledEvidence<K> {
+    fn default() -> Self {
+        Self {
+            tasks: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+}
+
+impl<K: Hash + Eq + Clone> SettledEvidence<K> {
+    /// Keeps a settled task's evidence. Nothing is kept for a task with no accepted result
+    /// (there is nothing to contradict) or with more evidence than the whole budget.
+    pub fn keep(
+        &mut self,
+        key: K,
+        evidence: Arc<Evidence>,
+        accepted: BTreeMap<KeyId, (Digest, Digest)>,
+        forget_after: u64,
+    ) {
+        let size = evidence.size();
+        if accepted.is_empty() || size > MAX_LATE_BYTES || self.tasks.contains_key(&key) {
+            return;
+        }
+        while self.bytes + size > MAX_LATE_BYTES {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(t) = self.tasks.remove(&old) {
+                self.bytes = self.bytes.saturating_sub(t.evidence.size());
+            }
+        }
+        self.bytes += size;
+        self.order.push_back(key.clone());
+        self.tasks.insert(
+            key,
+            SettledTask {
+                evidence,
+                accepted,
+                proven: BTreeSet::new(),
+                forget_after,
+            },
+        );
+    }
+
+    /// A late result by `worker` for a settled task, with payload digest `digest` and
+    /// asserting `claims`. If the worker's accepted result asserted something else, the
+    /// worker equivocated: returns that result's digest and the task's evidence, once per
+    /// worker and task. The same answer signed again, or a result for a task not kept,
+    /// proves nothing.
+    pub fn contradiction(
+        &mut self,
+        key: &K,
+        worker: &KeyId,
+        digest: Digest,
+        claims: Digest,
+    ) -> Option<(Digest, Arc<Evidence>)> {
+        let t = self.tasks.get_mut(key)?;
+        let (prior, prior_claims) = *t.accepted.get(worker)?;
+        if prior == digest || prior_claims == claims || !t.proven.insert(worker.clone()) {
+            return None;
+        }
+        Some((prior, Arc::clone(&t.evidence)))
+    }
+
+    /// Forgets tasks past their `forget_after` (unix seconds).
+    pub fn expire(&mut self, now: u64) {
+        let gone: Vec<K> = self
+            .tasks
+            .iter()
+            .filter(|(_, t)| t.forget_after <= now)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &gone {
+            if let Some(t) = self.tasks.remove(k) {
+                self.bytes = self.bytes.saturating_sub(t.evidence.size());
+            }
+        }
+        self.order.retain(|k| self.tasks.contains_key(k));
+    }
+
+    /// Bytes held.
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.bytes
+    }
+}
+
 /// Proofs waiting to be published, retried while no peer is subscribed yet.
 #[derive(Debug, Default)]
 pub struct ProofOutbox {
@@ -137,6 +256,13 @@ impl ProofOutbox {
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    /// The proofs waiting to be published.
+    #[cfg(test)]
+    #[must_use]
+    pub fn queued(&self) -> Vec<Vec<u8>> {
+        self.queue.iter().map(|(_, b)| b.clone()).collect()
     }
 
     /// Publishes what it can; keeps the rest for a while.
@@ -394,5 +520,88 @@ mod tests {
             Admit::Seen,
             "a decided fault is not checked again"
         );
+    }
+
+    #[test]
+    fn a_late_result_is_equivocation_only_if_it_asserts_something_else() {
+        let w = SecretKey::from_seed(&[1; 32]).key_id();
+        let other = SecretKey::from_seed(&[2; 32]).key_id();
+        let (r1, c1) = (Digest::of(b"result 1"), Digest::of(b"claims 1"));
+        let mut store = SettledEvidence::<u8>::default();
+        let mut ev = Evidence::new(b"{}".to_vec());
+        ev.keep(r1, b"result one");
+        store.keep(
+            1,
+            Arc::new(ev),
+            BTreeMap::from([(w.clone(), (r1, c1))]),
+            100,
+        );
+        // The same answer signed again (new nonce, same claims) proves nothing.
+        assert!(
+            store
+                .contradiction(&1, &w, Digest::of(b"result 2"), c1)
+                .is_none()
+        );
+        // The very same result proves nothing either.
+        assert!(store.contradiction(&1, &w, r1, Digest::of(b"c2")).is_none());
+        // A worker with no accepted result, or an unkept task, proves nothing.
+        assert!(
+            store
+                .contradiction(&1, &other, Digest::of(b"x"), Digest::of(b"y"))
+                .is_none()
+        );
+        assert!(
+            store
+                .contradiction(&2, &w, Digest::of(b"x"), Digest::of(b"y"))
+                .is_none()
+        );
+        // A different claim does, once.
+        let c2 = Digest::of(b"claims 2");
+        let (prior, evidence) = store
+            .contradiction(&1, &w, Digest::of(b"result 3"), c2)
+            .unwrap();
+        assert_eq!(prior, r1);
+        assert!(evidence.size() > 0);
+        assert!(
+            store
+                .contradiction(&1, &w, Digest::of(b"result 4"), c2)
+                .is_none(),
+            "proven once per worker and task"
+        );
+    }
+
+    #[test]
+    fn settled_evidence_is_bounded_and_expires() {
+        let w = SecretKey::from_seed(&[1; 32]).key_id();
+        let acc = || BTreeMap::from([(w.clone(), (Digest::of(b"r"), Digest::of(b"c")))]);
+        let mut store = SettledEvidence::<u32>::default();
+        // Nothing to contradict, or more than the whole budget: not kept.
+        store.keep(
+            0,
+            Arc::new(Evidence::new(vec![0; 10])),
+            BTreeMap::new(),
+            100,
+        );
+        store.keep(
+            1,
+            Arc::new(Evidence::new(vec![0; MAX_LATE_BYTES + 1])),
+            acc(),
+            100,
+        );
+        assert_eq!(store.size(), 0);
+        // The oldest go first when the budget is full.
+        let each = MAX_LATE_BYTES / 4 + 1;
+        for k in 10..16 {
+            store.keep(k, Arc::new(Evidence::new(vec![0; each])), acc(), 100);
+        }
+        assert!(store.size() <= MAX_LATE_BYTES);
+        let (r, c) = (Digest::of(b"other"), Digest::of(b"other claims"));
+        assert!(
+            store.contradiction(&10, &w, r, c).is_none(),
+            "oldest dropped"
+        );
+        assert!(store.contradiction(&15, &w, r, c).is_some(), "newest kept");
+        store.expire(100);
+        assert_eq!(store.size(), 0);
     }
 }

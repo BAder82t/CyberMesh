@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Independent verifiers prove late equivocation.** A verifier keeps the signed task and the accepted results of tasks it has settled (up to 32 MiB, oldest dropped first). If a worker whose result it accepted later sends a signed result that asserts something else, the verifier quarantines the worker locally and publishes a fault proof on `faults`, which the coordinator confirms from the signatures. The same answer signed again is not equivocation. Reports gain `late_faults`. See [docs/protocol.md](docs/protocol.md) §8 and threat model T30.
+
 ## v0.3.4 (2026-11-21, research pre-release)
 
 Compatible with v0.3.x. Verifiers publish fault proofs on a new `faults` gossip topic that only the coordinator subscribes to; older nodes ignore it. This release narrows what `Reject` means (provable misbehaviour only) and what equivocation means (two different answers), so nodes on different versions may disagree on edge cases. **Not production-ready; no external audit.**

@@ -35,7 +35,8 @@ use tracing::{debug, info, warn};
 use crate::NodeError;
 use crate::config::VerifierConfig;
 use crate::coordinator::{
-    AnyVerifier, MAX_CT_FINALIZING, finalize_ct, parse_result, persist_record, verifier_identity,
+    AnyVerifier, MAX_CT_FINALIZING, ResultMeta, finalize_ct, parse_result, persist_record,
+    verifier_identity,
 };
 use crate::files;
 use crate::worker::{allowed_peers, parse_addrs};
@@ -133,6 +134,8 @@ pub struct VerifierReport {
     /// coordinator to confirm; and faults it could not prove (results not kept, too large).
     pub fault_proofs_published: u64,
     pub fault_proofs_skipped: u64,
+    /// Workers proven to have equivocated on a task this verifier had already settled.
+    pub late_faults: Vec<cybermesh_verifier::FaultRecord>,
     /// CT log witnessing (`[ct_witness]`), including proven split views.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ct_witness: Option<crate::ct_witness::WitnessStats>,
@@ -192,6 +195,8 @@ struct Pending {
     deadline: Instant,
     /// The signed task and results, for proofs of the faults found.
     evidence: crate::fault_proofs::Evidence,
+    /// Per worker: its accepted result's digest, and the digest of what it asserted.
+    accepted: BTreeMap<KeyId, (Digest, Digest)>,
 }
 
 /// A result held until its task arrives.
@@ -199,13 +204,14 @@ struct Early {
     at: Instant,
     worker: KeyId,
     payload_digest: Digest,
+    claims: Option<Digest>,
     bytes: Vec<u8>,
 }
 
 struct CtFinalized {
     record: Option<VerificationRecord>,
     missing: Vec<KeyId>,
-    evidence: crate::fault_proofs::Evidence,
+    evidence: Arc<crate::fault_proofs::Evidence>,
 }
 
 struct Verifier {
@@ -217,6 +223,8 @@ struct Verifier {
     pending: BTreeMap<TaskKey, Pending>,
     /// Settled tasks -> forget after (unix seconds).
     settled: HashMap<TaskKey, u64>,
+    /// Evidence of settled tasks, to prove a worker's later contradicting result.
+    late: crate::fault_proofs::SettledEvidence<TaskKey>,
     early: HashMap<TaskKey, Vec<Early>>,
     early_count: usize,
     early_bytes: usize,
@@ -339,6 +347,7 @@ impl Verifier {
                 verifier,
                 deadline: Instant::now() + timeout,
                 evidence: crate::fault_proofs::Evidence::new(m.data.clone()),
+                accepted: BTreeMap::new(),
             },
         );
         debug!(task = %key.0, attempt = key.1, "following task");
@@ -346,7 +355,7 @@ impl Verifier {
         if let Some(early) = self.early.remove(&key) {
             for e in early {
                 self.release_early_budget(&e);
-                self.submit(&key, &e.bytes, e.payload_digest, now);
+                self.submit(&key, &e.bytes, (&e.worker, e.payload_digest, e.claims), now);
             }
         }
         self.settle_if_complete(&key);
@@ -363,13 +372,15 @@ impl Verifier {
         }
     }
 
+    /// `result` is the result's worker, payload digest, and the digest of what it asserts.
     fn submit(
         &mut self,
         key: &TaskKey,
         bytes: &[u8],
-        payload_digest: Digest,
+        result: (&KeyId, Digest, Option<Digest>),
         now: u64,
     ) -> Option<SubmitOutcome> {
+        let (worker, payload_digest, claims) = result;
         let p = self.pending.get_mut(key)?;
         let forget = p.verifier.expires_at().saturating_add(3600);
         let outcome = p.verifier.submit(bytes, &self.s.manifest, now);
@@ -379,6 +390,9 @@ impl Verifier {
         }
         match &outcome {
             SubmitOutcome::Accepted => {
+                if let Some(c) = claims {
+                    p.accepted.insert(worker.clone(), (payload_digest, c));
+                }
                 self.report.results_accepted += 1;
                 // Only accepted results enter the replay cache, so rejected junk cannot
                 // fill it and lock out new tasks.
@@ -413,16 +427,19 @@ impl Verifier {
             net.report(m, Acceptance::Ignore).await;
             return;
         }
-        let key = (meta.task_id, meta.attempt, meta.task_digest);
+        let key = (meta.task_id.clone(), meta.attempt, meta.task_digest);
         if self.settled.contains_key(&key) {
-            // Late: this verifier has already signed its record for the task.
+            // Late: this verifier has already signed its record for the task. It still
+            // proves a worker that now asserts something else than its accepted result.
             self.report.results_dropped += 1;
+            self.on_late_result(&key, &meta, &m.data);
             net.report(m, Acceptance::Ignore).await;
             return;
         }
         self.last_activity = Instant::now();
-        let Some(outcome) = self.submit(&key, &m.data, meta.payload_digest, now) else {
-            self.buffer_early(key, meta.worker, meta.payload_digest, &m.data);
+        let result = (&meta.worker, meta.payload_digest, meta.claims);
+        let Some(outcome) = self.submit(&key, &m.data, result, now) else {
+            self.buffer_early(key, meta.worker, meta.payload_digest, meta.claims, &m.data);
             net.report(m, Acceptance::Ignore).await;
             return;
         };
@@ -437,7 +454,14 @@ impl Verifier {
     }
 
     /// Holds an authenticated result whose task has not arrived yet, within budgets.
-    fn buffer_early(&mut self, key: TaskKey, worker: KeyId, payload_digest: Digest, bytes: &[u8]) {
+    fn buffer_early(
+        &mut self,
+        key: TaskKey,
+        worker: KeyId,
+        payload_digest: Digest,
+        claims: Option<Digest>,
+        bytes: &[u8],
+    ) {
         let per_worker = self.early_per_worker.get(&worker).copied().unwrap_or(0);
         if self.early_count >= MAX_EARLY_RESULTS
             || self.early_bytes.saturating_add(bytes.len()) > MAX_EARLY_BYTES
@@ -454,10 +478,45 @@ impl Verifier {
             at,
             worker,
             payload_digest,
+            claims,
             bytes: bytes.to_vec(),
         });
         self.early_order.push_back((at, key));
         self.report.results_buffered_early += 1;
+    }
+
+    /// A result for a task already settled here. If its worker's accepted result asserted
+    /// something else, the worker equivocated: the verifier quarantines it and publishes a
+    /// proof for the coordinator to confirm.
+    fn on_late_result(&mut self, key: &TaskKey, meta: &ResultMeta, bytes: &[u8]) {
+        let Some(claims) = meta.claims else { return };
+        let Some((prior, evidence)) =
+            self.late
+                .contradiction(key, &meta.worker, meta.payload_digest, claims)
+        else {
+            return;
+        };
+        let fault = cybermesh_verifier::FaultRecord {
+            worker: meta.worker.clone(),
+            operator: meta.operator.clone(),
+            kind: cybermesh_verifier::FaultKind::Equivocation,
+            evidence: vec![prior, meta.payload_digest],
+        };
+        warn!(worker = %fault.worker.short(), task = %key.0, "late equivocation proven; worker quarantined");
+        self.reputation
+            .record_fault(&fault, &format!("task {} (late result)", key.0));
+        self.persist_reputation();
+        self.report.faults += 1;
+        let mut ev = (*evidence).clone();
+        ev.keep(meta.payload_digest, bytes);
+        self.queue_fault_proofs(std::slice::from_ref(&fault), &ev);
+        let path = self.s.state_dir.join("faults").join(format!(
+            "{}-{}.json",
+            key.0,
+            fault.worker.short()
+        ));
+        let _ = files::write_json(&path, &fault);
+        self.report.late_faults.push(fault);
     }
 
     fn settle_if_complete(&mut self, key: &TaskKey) {
@@ -503,14 +562,21 @@ impl Verifier {
 
     fn settle(&mut self, key: &TaskKey) {
         let Some(Pending {
-            verifier, evidence, ..
+            verifier,
+            evidence,
+            accepted,
+            ..
         }) = self.pending.remove(key)
         else {
             return;
         };
         let now = self.s.clock.now();
         let missing = verifier.missing();
-        self.remember_settled(key.clone(), verifier.expires_at().saturating_add(3600));
+        let forget_after = verifier.expires_at().saturating_add(3600);
+        self.remember_settled(key.clone(), forget_after);
+        let evidence = Arc::new(evidence);
+        self.late
+            .keep(key.clone(), Arc::clone(&evidence), accepted, forget_after);
         match verifier {
             AnyVerifier::Domain(v) => {
                 let record = v.finalize(Some(&self.s.engine), now);
@@ -669,6 +735,7 @@ impl Verifier {
         if self.settled.len() > MAX_SETTLED / 2 {
             self.settled.retain(|_, f| *f > now);
         }
+        self.late.expire(now);
     }
 }
 
@@ -751,6 +818,7 @@ pub async fn run_verifier(
         limits: Limits::default(),
         pending: BTreeMap::new(),
         settled: HashMap::new(),
+        late: crate::fault_proofs::SettledEvidence::default(),
         early: HashMap::new(),
         early_count: 0,
         early_bytes: 0,
@@ -913,6 +981,10 @@ mod tests {
 
     fn verifier() -> Verifier {
         let net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], 1_800_000_000);
+        verifier_on(&net, Arc::new(SystemClock))
+    }
+
+    fn verifier_on(net: &TestNetwork, clock: Arc<dyn Clock>) -> Verifier {
         let (key, op) = &net.other_verifiers[0];
         let (ct_done, _rx) = tokio::sync::mpsc::unbounded_channel();
         Verifier {
@@ -927,7 +999,7 @@ mod tests {
                 policy: Policy::default(),
                 ct_policy: CtPolicy::default(),
                 ct_seed: [1; 32],
-                clock: Arc::new(SystemClock),
+                clock,
                 gossip_heartbeat: Duration::from_millis(100),
                 redial: Duration::from_secs(5),
                 manifest_source: None,
@@ -944,6 +1016,7 @@ mod tests {
             engine_arc: Arc::new(Engine::new(EvidenceBundle::default())),
             pending: BTreeMap::new(),
             settled: HashMap::new(),
+            late: crate::fault_proofs::SettledEvidence::default(),
             early: HashMap::new(),
             early_count: 0,
             early_bytes: 0,
@@ -982,14 +1055,14 @@ mod tests {
         let w2 = SecretKey::from_seed(&[2; 32]).key_id();
         // One worker cannot take more than its share, whatever task ids it invents.
         for i in 0..100 {
-            v.buffer_early(key(i), w1.clone(), Digest::of(&[1]), b"x");
+            v.buffer_early(key(i), w1.clone(), Digest::of(&[1]), None, b"x");
         }
         assert_eq!(v.early_count, MAX_EARLY_PER_WORKER);
         assert_eq!(v.report.results_dropped, 100 - MAX_EARLY_PER_WORKER as u64);
         // A byte budget bounds memory regardless of how many workers send.
         let big = vec![0u8; MAX_EARLY_BYTES / 2 + 1];
-        v.buffer_early(key(1000), w2.clone(), Digest::of(&[2]), &big);
-        v.buffer_early(key(1001), w2.clone(), Digest::of(&[3]), &big);
+        v.buffer_early(key(1000), w2.clone(), Digest::of(&[2]), None, &big);
+        v.buffer_early(key(1001), w2.clone(), Digest::of(&[3]), None, &big);
         assert!(v.early_bytes <= MAX_EARLY_BYTES);
         assert_eq!(v.early_per_worker.get(&w2), Some(&1));
         // Draining releases the budget.
@@ -999,5 +1072,109 @@ mod tests {
         }
         assert_eq!(v.early_per_worker.get(&w2), None);
         assert_eq!(v.early_count, MAX_EARLY_PER_WORKER);
+    }
+
+    #[test]
+    fn a_late_contradicting_result_is_proven_and_published_for_the_coordinator() {
+        use cybermesh_protocol::testkit::sign_bytes;
+        use cybermesh_protocol::{ManualClock, PROTOCOL_VERSION, ResourceUsage, TaskResult};
+        use cybermesh_verifier::fault_proof::{Check, check_fault_proof, verify_fault_proof};
+
+        const NOW: u64 = 1_800_000_000;
+        let net = TestNetwork::new(&[("org-a", 1), ("org-b", 1), ("org-c", 1)], NOW);
+        let dir = tempfile::tempdir().unwrap();
+        let clock = ManualClock::new(NOW + 10);
+        let mut v = verifier_on(&net, Arc::new(clock.clone()));
+        v.s.state_dir = dir.path().to_path_buf();
+        let task = net.task(
+            &["mailservice.example.com", "examplebank-login.example.net"],
+            &[0, 1, 2],
+            engine_spec(),
+            v.s.engine.evidence().pins.clone(),
+            NOW,
+        );
+        let task_bytes = sign_bytes(payload_type::TASK, &task, &net.issuer);
+        let (key, _, verifier) = v.parse_task(&task_bytes, NOW + 1).unwrap();
+        v.pending.insert(
+            key.clone(),
+            Pending {
+                verifier: verifier.unwrap(),
+                deadline: Instant::now(),
+                evidence: crate::fault_proofs::Evidence::new(task_bytes.clone()),
+                accepted: BTreeMap::new(),
+            },
+        );
+        let honest = v.s.engine.assess_task(&task).unwrap();
+        let result = |nonce: u8, tweak: bool| {
+            let mut r = TaskResult {
+                v: PROTOCOL_VERSION,
+                network_id: net.network_id.clone(),
+                task_id: task.task_id.clone(),
+                attempt: task.attempt,
+                task_digest: key.2,
+                input_digest: task.input_digest().unwrap(),
+                worker: net.worker_id(0),
+                operator: net.workers[0].operator.clone(),
+                engine: engine_spec(),
+                evidence: task.evidence.clone(),
+                assessments: honest.clone(),
+                completed_at: NOW + 2,
+                nonce: format!("{nonce:032x}"),
+                usage: ResourceUsage::default(),
+            };
+            if tweak {
+                r.assessments[0].risk_score_bp =
+                    r.assessments[0].risk_score_bp.wrapping_add(1) % 10_000;
+            }
+            let bytes = sign_bytes(payload_type::RESULT, &r, &net.workers[0].key);
+            let meta = parse_result(&bytes, &net.manifest, NOW + 10, &Limits::default()).unwrap();
+            (bytes, meta)
+        };
+        // The worker's answer is accepted, and the task settles.
+        let (bytes, meta) = result(1, false);
+        let outcome = v
+            .submit(
+                &key,
+                &bytes,
+                (&meta.worker, meta.payload_digest, meta.claims),
+                NOW + 10,
+            )
+            .unwrap();
+        assert!(matches!(outcome, SubmitOutcome::Accepted), "{outcome:?}");
+        v.settle(&key);
+        assert!(v.settled.contains_key(&key));
+        assert!(v.report.late_faults.is_empty() && v.fault_out.is_idle());
+        // The same answer signed again (a new nonce) proves nothing.
+        let (resent, m) = result(2, false);
+        v.on_late_result(&key, &m, &resent);
+        assert!(v.report.late_faults.is_empty() && v.fault_out.is_idle());
+        // A different answer proves equivocation: quarantine, and a proof to publish.
+        let (other, m) = result(3, true);
+        v.on_late_result(&key, &m, &other);
+        assert_eq!(v.report.late_faults.len(), 1);
+        let fault = v.report.late_faults[0].clone();
+        assert_eq!(fault.kind, cybermesh_verifier::FaultKind::Equivocation);
+        assert_eq!(fault.evidence, vec![meta.payload_digest, m.payload_digest]);
+        assert!(v.reputation.is_quarantined(&meta.worker));
+        // Once per worker and task.
+        let (again, m) = result(4, true);
+        v.on_late_result(&key, &m, &again);
+        assert_eq!(v.report.late_faults.len(), 1);
+        // The published proof is one the coordinator confirms from the signatures alone.
+        let queued = v.fault_out.queued();
+        assert_eq!(queued.len(), 1);
+        let proof = verify_fault_proof(&queued[0], &net.manifest, NOW + 11, &Limits::default())
+            .unwrap()
+            .message;
+        assert_eq!(proof.reporter, v.id.key);
+        let check = check_fault_proof(
+            &proof,
+            &net.manifest,
+            None,
+            None,
+            &Limits::default(),
+            NOW + 12,
+        );
+        assert!(matches!(check, Check::Confirmed(_)), "{check:?}");
     }
 }
