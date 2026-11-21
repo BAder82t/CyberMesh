@@ -62,8 +62,6 @@ It is compatible with v0.3.x.
 The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on 2026-11-28. Then the test window (days 3–7) is scored for both engines, as shipped and with the frozen revision 1, following the method fixed in advance. The results are published in [ct-evaluation.md](ct-evaluation.md) §8.1, failures included.
 
 ## Next: harden the pilot
-- **Verifiers.**
-  - Prove late equivocation at independent verifiers.
 - **CT.**
   - Exchange checkpoint cosignatures with external witness networks (C2SP `tlog-witness`), and consider ML-DSA-44 cosignatures. Witnessing between CyberMesh verifiers is done: they cosign checkpoints, compare their views and prove split views ([ct-monitoring.md](ct-monitoring.md) §3).
   - RFC 6962 logs.

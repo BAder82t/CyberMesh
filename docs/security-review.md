@@ -114,7 +114,7 @@ It found no CRITICAL issues, and it confirmed that:
 
 Kept as is:
 - **One bad record file aborts `release build`.** This is fail-closed on purpose: a signer should notice, not silently skip records.
-- **Independent verifiers do not prove late equivocation.** This is on the roadmap.
+- **Independent verifiers did not prove late equivocation.** They now do: a verifier keeps the evidence of settled tasks and publishes a fault proof when an accepted worker later contradicts itself (threat model T30).
 
 ## Fifth pass: record distribution over the network
 
