@@ -73,6 +73,8 @@ pub struct VerifierSetup {
     pub ct_seed: [u8; 32],
     pub clock: Arc<dyn Clock>,
     pub gossip_heartbeat: Duration,
+    /// How often unconnected bootstrap peers (the coordinator) are dialled again.
+    pub redial: Duration,
     pub manifest_source: Option<files::ManifestSource>,
     /// Exit after this long with nothing in flight, once at least one task was settled
     /// (tests and demos). `None`: run until stopped.
@@ -164,6 +166,7 @@ pub fn setup_from_config(
         ct_seed: random_bytes::<32>()?,
         clock,
         gossip_heartbeat: Duration::from_millis(700),
+        redial: Duration::from_secs(5),
         manifest_source: Some(files::ManifestSource {
             manifest: cfg.manifest.clone(),
             governance_root: cfg.governance_root.clone(),
@@ -647,6 +650,7 @@ pub async fn run_verifier(
         .chain(setup.witness.is_some().then(|| topics.checkpoints.clone()))
         .collect(),
         heartbeat: setup.gossip_heartbeat,
+        redial_interval: setup.redial,
         // Same per-author allowance as the coordinator: results arrive in bursts.
         per_peer_burst: 4096,
         per_peer_refill_per_sec: 256,
@@ -871,6 +875,7 @@ mod tests {
                 ct_seed: [1; 32],
                 clock: Arc::new(SystemClock),
                 gossip_heartbeat: Duration::from_millis(100),
+                redial: Duration::from_secs(5),
                 manifest_source: None,
                 idle_exit: None,
                 records_wait: Duration::from_secs(1),
