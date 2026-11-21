@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.5 (2026-11-21, research pre-release)
+
+Compatible with v0.3.x. Evidence without `api` (static CT logs) and its pins are unchanged, and verifiers publish late-equivocation proofs on the existing `faults` topic. Nodes that share tasks need the same evidence bundle, as before. **Not production-ready; no external audit.**
 
 ### Added
 - **The 17 usable classic CT logs are listed** in `datasets/ct-logs/public-rfc6962-ct-logs.json` (DigiCert, Cloudflare, Sectigo, TrustAsia; keys from Google's CT log list v98.2). Checked against the live logs on 2026-11-21: all 17 signed tree heads verify through `cybermesh ct checkpoint`, and two newest tiles of each scan with 0 unparsed certificates and proven roots for 16 of them. Sectigo Tiger2026h2 serves its newest ~1,000 entries late, so tiles that close to its head are unavailable until it does. A test checks that every listed log is valid evidence with a usable key.
@@ -11,8 +13,11 @@
   - a tile's root is proven against the signed root with one `get-proof-by-hash` audit path: its first eight hashes must rebuild the tile root from the entries received, so every entry and its position are bound;
   - consistency between checkpoints comes from `get-sth-consistency`, including the prefix root a split-view proof needs.
 
-  An in-memory mock classic log is included for tests. Nodes and the CLI do not use classic logs yet.
+  An in-memory mock classic log is included for tests.
 - **Independent verifiers prove late equivocation.** A verifier keeps the signed task and the accepted results of tasks it has settled (up to 32 MiB, oldest dropped first). If a worker whose result it accepted later sends a signed result that asserts something else, the verifier quarantines the worker locally and publishes a fault proof on `faults`, which the coordinator confirms from the signatures. The same answer signed again is not equivocation. Reports gain `late_faults`. See [docs/protocol.md](docs/protocol.md) §8 and threat model T30.
+
+### Changed
+- **README.** The opening describes CyberMesh as a decentralised computing and resilience network, with the current implementation (a research MVP for cybersecurity computation, CT monitoring, independent verification and signed threat intelligence) stated separately from future development.
 
 ## v0.3.4 (2026-11-21, research pre-release)
 

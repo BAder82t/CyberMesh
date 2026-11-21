@@ -53,10 +53,18 @@ It is compatible with v0.3.x.
 
 It is compatible with v0.3.x.
 
-## v0.3.4 (this release): consequences for misbehaviour
+## v0.3.4: consequences for misbehaviour
 - **Penalty-only peer scoring.** A provably invalid message counts against its author, never against relays. About three within ten minutes graylist the author, and nothing an honest node can produce is charged (threat model T29).
 - **The coordinator acts on faults proven by other verifiers.** An independent verifier that proves a worker misbehaved publishes a fault proof with the signed task and the worker's own signed results. The coordinator re-checks it before quarantining the worker: offline for equivocation and mismatched results, by its own recomputation or CT re-scan otherwise. Unconfirmed claims change nothing. Two results from one worker are equivocation only if they assert different things.
 - **Ownership.** CyberMesh is copyright VaultBytes Innovations Ltd (`NOTICE`); the licence remains Apache-2.0.
+
+
+## v0.3.5 (this release): classic CT logs, and verifiers that prove late equivocation
+- **Classic RFC 6962 CT logs.** Workers, verifiers, the coordinator (also following) and the CLI use them, selected by `api` in the `ct-logs` evidence. The 17 usable logs of DigiCert, Cloudflare, Sectigo and TrustAsia are listed in `datasets/ct-logs/public-rfc6962-ct-logs.json` and were checked against the live logs ([ct-monitoring.md](ct-monitoring.md) §8).
+- **Independent verifiers prove late equivocation.** A verifier keeps the evidence of settled tasks and publishes a fault proof when an accepted worker later contradicts itself (threat model T30).
+- **README.** The opening describes the resilience-network vision, with the current implementation stated separately.
+
+It is compatible with v0.3.x. Evidence without `api` and its pins are unchanged.
 
 ## Evaluation milestone: CT detection results (from 2026-11-28)
 The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on 2026-11-28. Then the test window (days 3–7) is scored for both engines, as shipped and with the frozen revision 1, following the method fixed in advance. The results are published in [ct-evaluation.md](ct-evaluation.md) §8.1, failures included.
