@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Nodes and the CLI use classic RFC 6962 logs.** A `ct-logs` evidence entry with `"api": "rfc6962"` names a classic log by its API prefix. Workers scan its tiles, verifiers and the coordinator prove tile roots with audit paths, the coordinator follows it, and verifiers witness it, as for static logs. Evidence without `api` (static logs) and its pins are unchanged. Tested end to end over libp2p: scanning, an independent verifier catching a lying worker against the log, and following and witnessing a growing log. See [docs/ct-monitoring.md](docs/ct-monitoring.md) §8.
 - **The CT library reads classic RFC 6962 logs.** DigiCert, Cloudflare and Sectigo run classic logs (17 usable on 2026-11-21, against 63 static ones). The new `rfc6962` module presents such a log like a static one:
   - the signed tree head becomes a checkpoint that the existing verifier checks unchanged;
   - 256 entries fetched with `get-entries` form a tile that is scanned as before;

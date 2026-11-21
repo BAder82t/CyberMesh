@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cybermesh_ct::mock::{MockLog, demo_entries};
+use cybermesh_ct::mock::{MockLog, MockRfc6962Log, demo_entries};
 use cybermesh_intelligence::{Action, BuildParams, build_release};
 use cybermesh_protocol::{Clock, SystemClock};
 use cybermesh_tests::{Harness, Options};
@@ -425,4 +425,93 @@ async fn the_coordinator_quarantines_workers_another_verifier_proves_lied() {
         })
         .count();
     assert!(proofs >= 2);
+}
+
+/// The same scenario as `options`, over a classic RFC 6962 log (`get-sth`, `get-entries`,
+/// audit paths) instead of a static CT log.
+fn classic_options(adversary: Option<&'static str>) -> Options {
+    Options {
+        ct_log: None,
+        ct_classic_log: Some(Arc::new(
+            MockRfc6962Log::build("ct.example/classic", &demo_entries(4)[..1024]).unwrap(),
+        )),
+        ..options(adversary)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ct_monitoring_over_a_classic_log() {
+    let h = Harness::start(classic_options(None));
+    let (net, report, statuses, _dir) = h.finish(Duration::from_secs(120)).await;
+    // Every tile root is proven against the signed tree head with an audit path.
+    assert_eq!(report.ct_tiles_verified, 4, "{report:?}");
+    assert_eq!(report.ct_entries_verified, 1024);
+    assert!(report.ct_matches > 0);
+    assert_eq!(report.faults, 0);
+    assert!(statuses.iter().map(|s| s.ct_bytes_fetched).sum::<u64>() > 0);
+    let rel = release(&report, &net.network_id);
+    assert_eq!(rel.lookup(LOOKALIKE).map(|e| e.action), Some(Action::Warn));
+    assert!(rel.lookup(TOKEN_ONLY).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_independent_verifier_checks_classic_ct_shards_against_the_log_itself() {
+    let h = Harness::start(Options {
+        independent_verifiers: 1,
+        ..classic_options(Some("omit-matches"))
+    });
+    let (_net, _report, _, verifiers, _dir) = h.finish_all(Duration::from_secs(150)).await;
+    let v = &verifiers[0];
+    let ct: Vec<_> = v
+        .records
+        .iter()
+        .filter_map(|(_, r)| r.ct.as_ref())
+        .collect();
+    assert!(!ct.is_empty(), "{v:?}");
+    // Its own log checks and spot checks, through the classic API.
+    assert!(
+        ct.iter()
+            .all(|c| c.tiles_checked_against_log == c.tile_count)
+    );
+    assert!(ct.iter().all(|c| !c.tiles_rescanned.is_empty()));
+    // The lying worker is caught against the log's own entries.
+    assert!(
+        v.records
+            .iter()
+            .flat_map(|(_, r)| r.faults.iter())
+            .any(|f| f.operator.as_str() == "org-m" && f.kind == FaultKind::IncorrectResult),
+        "{v:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn classic_logs_are_followed_and_witnessed_as_they_grow() {
+    // The coordinator and a verifier follow a classic log that grows, prove each new tree
+    // head extends the last with `get-sth-consistency`, cosign it and compare their views.
+    let mut o = classic_options(None);
+    o.independent_verifiers = 1;
+    o.ct_classic_log = Some(Arc::new(
+        MockRfc6962Log::build("ct.example/classic", &demo_entries(2)).unwrap(),
+    ));
+    o.ct_tiles = 2;
+    o.ct_follow = Some((Duration::from_millis(500), 4));
+    o.ct_grow = Some((Duration::from_secs(3), 2));
+    o.ct_witness = Some(Duration::from_millis(300));
+    o.verifier_idle_exit = Duration::from_secs(15);
+    let h = Harness::start(o);
+    let (_net, report, _, verifiers, dir) = h.finish_all(Duration::from_secs(150)).await;
+    let c = report
+        .ct_witness
+        .as_ref()
+        .expect("the coordinator witnesses");
+    let v = verifiers[0]
+        .ct_witness
+        .as_ref()
+        .expect("the verifier witnesses");
+    assert!(c.published >= 1 && v.published >= 1, "{c:?} {v:?}");
+    assert!(c.consistent >= 1 && v.consistent >= 1, "{c:?} {v:?}");
+    assert_eq!((c.split_views, v.split_views), (0, 0));
+    assert!(!report.ct_follow_halted);
+    assert_eq!(report.ct_tiles_verified, 4, "{report:?}");
+    assert!(dir.path().join("coordinator/ct-witness.json").exists());
 }

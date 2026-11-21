@@ -11,8 +11,8 @@ use cybermesh_crypto::{
     Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce, random_bytes,
 };
 use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, fetch_verified_checkpoint};
-use cybermesh_ct::http::HttpTileSource;
-use cybermesh_ct::scan_tile;
+use cybermesh_ct::http::open_log;
+use cybermesh_ct::scan_entries;
 use cybermesh_network::{
     Acceptance, NetConfig, NetEvent, NetworkHandle, Topics, keypair_from_seed,
 };
@@ -156,19 +156,19 @@ fn check_fault_proof_here(
     let deadline = Instant::now() + crate::fault_proofs::CHECK_BUDGET;
     let src = log
         .as_ref()
-        .and_then(|l| HttpTileSource::new(l, Duration::from_secs(30)).ok());
+        .and_then(|l| open_log(l, Duration::from_secs(30)).ok());
     let auth = match (&src, &log) {
-        (Some(s), Some(l)) => fetch_verified_checkpoint(s, l)
+        (Some(s), Some(l)) => fetch_verified_checkpoint(&**s, l)
             .and_then(|cp| {
                 cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
                 Ok(cp)
             })
             .ok()
-            .map(|cp| cybermesh_ct::proof::TileAuthenticator::new(s, cp)),
+            .map(|cp| cybermesh_ct::authenticator(&**s, cp)),
         _ => None,
     };
     let oracle = auth.as_ref().map(|a| LogOracle {
-        auth: a,
+        auth: &**a,
         engine,
         contradicted: std::sync::Mutex::new(BTreeSet::new()),
         deadline: Some(deadline),
@@ -530,7 +530,7 @@ impl AnyVerifier {
 /// Log access for CT verification: every tile root is proven against the log's checkpoint,
 /// whose signature was verified with the pinned key.
 struct LogOracle<'a> {
-    auth: &'a cybermesh_ct::proof::TileAuthenticator<'a>,
+    auth: &'a dyn cybermesh_ct::LogAuthenticator,
     engine: &'a Engine,
     /// Tiles whose hash tiles contradicted the signed checkpoint.
     contradicted: std::sync::Mutex<BTreeSet<u64>>,
@@ -567,8 +567,8 @@ impl CtOracle for LogOracle<'_> {
         if self.out_of_time() {
             return None;
         }
-        let data = self.auth.source().data_tile(tile).ok()?;
-        scan_tile(&data, tile, self.engine).ok()
+        let (entries, _) = self.auth.source().entries(tile).ok()?;
+        scan_entries(&entries, tile, self.engine).ok()
     }
     fn proof_failed(&self, _log: &str, tile: u64) -> bool {
         self.contradicted.lock().is_ok_and(|c| c.contains(&tile))
@@ -592,18 +592,18 @@ pub(crate) fn finalize_ct(
     now: u64,
     anchor: Option<&cybermesh_ct::Checkpoint>,
 ) -> VerificationRecord {
-    let src = log.and_then(|l| HttpTileSource::new(l, Duration::from_secs(30)).ok());
+    let src = log.and_then(|l| open_log(l, Duration::from_secs(30)).ok());
     // Without a checkpoint signed by the pinned key there is no trusted log access: the task
     // is then settled as without log access (disagreement disputed, nothing confirmed).
     let auth = match (&src, log) {
-        (Some(s), Some(l)) => match fetch_verified_checkpoint(s, l).and_then(|cp| {
+        (Some(s), Some(l)) => match fetch_verified_checkpoint(&**s, l).and_then(|cp| {
             cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
             if let Some(a) = anchor {
-                cybermesh_ct::proof::TileAuthenticator::new(s, cp.clone()).prove_extends(a)?;
+                cybermesh_ct::authenticator(&**s, cp.clone()).prove_extends(a)?;
             }
             Ok(cp)
         }) {
-            Ok(cp) => Some(cybermesh_ct::proof::TileAuthenticator::new(s, cp)),
+            Ok(cp) => Some(cybermesh_ct::authenticator(&**s, cp)),
             Err(e) => {
                 warn!(log = %l.log_id, error = %e, "CT checkpoint not verified; settling without log access");
                 None
@@ -612,7 +612,7 @@ pub(crate) fn finalize_ct(
         _ => None,
     };
     let oracle = auth.as_ref().map(|a| LogOracle {
-        auth: a,
+        auth: &**a,
         engine,
         contradicted: std::sync::Mutex::new(BTreeSet::new()),
         deadline: None,
@@ -1428,9 +1428,9 @@ impl Coordinator {
         // The outcome is always sent, even if the blocking poll panics, so polling resumes.
         tokio::spawn(async move {
             let outcome = tokio::task::spawn_blocking(move || {
-                let src = HttpTileSource::new(&log, Duration::from_secs(30))
+                let src = open_log(&log, Duration::from_secs(30))
                     .map_err(|e| PollOutcome::Failed(e.to_string()))?;
-                let cp = fetch_verified_checkpoint(&src, &log)
+                let cp = fetch_verified_checkpoint(&*src, &log)
                     .and_then(|cp| {
                         cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
                         Ok(cp)
@@ -1446,7 +1446,7 @@ impl Coordinator {
                     )));
                 }
                 if let Some(h) = head {
-                    cybermesh_ct::proof::TileAuthenticator::new(&src, cp.clone())
+                    cybermesh_ct::authenticator(&*src, cp.clone())
                         .prove_extends(&h)
                         .map_err(|e| match e {
                             cybermesh_ct::CtError::Unauthenticated(m) => {
@@ -1647,8 +1647,8 @@ pub async fn run_coordinator(
             None => {
                 let (log, count) = (ct.log.clone(), ct.tile_count);
                 tokio::task::spawn_blocking(move || {
-                    let src = HttpTileSource::new(&log, Duration::from_secs(30)).ok()?;
-                    let cp = match fetch_verified_checkpoint(&src, &log) {
+                    let src = open_log(&log, Duration::from_secs(30)).ok()?;
+                    let cp = match fetch_verified_checkpoint(&*src, &log) {
                         Ok(cp) => cp,
                         Err(e) => {
                             warn!(log = %log.log_id, error = %e, "CT checkpoint not verified");
@@ -1943,6 +1943,7 @@ mod tests {
         let log = CtLogInfo {
             log_id: "split-log".into(),
             description: String::new(),
+            api: cybermesh_analysis::CtLogApi::Static,
             monitoring_url: "http://127.0.0.1:9/".into(),
             origin: "127.0.0.1/log".into(),
             public_key: "not used: the check stops before any log access".into(),

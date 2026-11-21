@@ -78,14 +78,38 @@ pub enum SourceKind {
     CtLogs,
 }
 
-/// A CT log workers may scan (static CT API monitoring prefix).
+/// The API a CT log serves.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CtLogApi {
+    /// Static CT API (C2SP `static-ct-api`): tiles and checkpoints.
+    #[default]
+    Static,
+    /// Classic RFC 6962 API: `get-sth`, `get-entries`, `get-proof-by-hash` and
+    /// `get-sth-consistency`.
+    Rfc6962,
+}
+
+impl CtLogApi {
+    #[must_use]
+    pub fn is_static(&self) -> bool {
+        *self == Self::Static
+    }
+}
+
+/// A CT log workers may scan (static CT API monitoring prefix, or RFC 6962 API prefix).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CtLogInfo {
     pub log_id: String,
     pub description: String,
-    /// Static CT API monitoring prefix, e.g. `https://mon.example.org/2026h2/`. Must be HTTPS;
-    /// plain HTTP is accepted only for loopback hosts (tests and demonstrations).
+    /// The API the log serves. Omitted for static CT logs, so evidence written before classic
+    /// logs were supported (and its pins) is unchanged.
+    #[serde(default, skip_serializing_if = "CtLogApi::is_static")]
+    pub api: CtLogApi,
+    /// Static CT API monitoring prefix, e.g. `https://mon.example.org/2026h2/`; for an RFC 6962
+    /// log, its API prefix (the part before `ct/v1/`, e.g. `https://ct.example.org/logs/2026/`).
+    /// Must be HTTPS; plain HTTP is accepted only for loopback hosts (tests and demonstrations).
     pub monitoring_url: String,
     /// The log's checkpoint origin (its submission prefix without scheme or trailing slash,
     /// e.g. `log.example.org/2026h2`). The RFC 6962 checkpoint signature does not cover it,
@@ -536,6 +560,7 @@ mod tests {
         let log = |origin: &str, key: &str| CtLogInfo {
             log_id: "log-a".into(),
             description: String::new(),
+            api: CtLogApi::Static,
             monitoring_url: "https://mon.example.org/2026h2/".into(),
             origin: origin.into(),
             public_key: key.into(),
@@ -571,11 +596,32 @@ mod tests {
     }
 
     #[test]
+    fn the_api_of_a_ct_log_is_omitted_for_static_logs_so_pins_do_not_change() {
+        let static_json = r#"{"log_id":"log-a","description":"d","monitoring_url":"https://mon.example.org/2026/","origin":"log.example.org/2026","public_key":"k"}"#;
+        let log: CtLogInfo = serde_json::from_str(static_json).unwrap();
+        assert_eq!(log.api, CtLogApi::Static);
+        // Serialised as before: evidence written before classic logs, and its pin, is unchanged.
+        assert_eq!(serde_json::to_string(&log).unwrap(), static_json);
+        let classic = static_json.replace(r#""description""#, r#""api":"rfc6962","description""#);
+        let log: CtLogInfo = serde_json::from_str(&classic).unwrap();
+        assert_eq!(log.api, CtLogApi::Rfc6962);
+        assert!(
+            serde_json::to_string(&log)
+                .unwrap()
+                .contains(r#""api":"rfc6962""#)
+        );
+        // Anything else is refused, not read as a static log.
+        let other = static_json.replace(r#""description""#, r#""api":"static-ct","description""#);
+        assert!(serde_json::from_str::<CtLogInfo>(&other).is_err());
+    }
+
+    #[test]
     fn ct_log_url_policy() {
         let ok = |u: &str| {
             CtLogInfo {
                 log_id: "log-a".into(),
                 description: String::new(),
+                api: CtLogApi::Static,
                 monitoring_url: u.into(),
                 origin: "log.example.org/2026h2".into(),
                 public_key: TEST_KEY.into(),

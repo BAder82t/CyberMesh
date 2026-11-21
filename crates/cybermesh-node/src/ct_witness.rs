@@ -11,7 +11,7 @@
 //! - cosigns it (C2SP `cosignature/v1`, [`cybermesh_ct::witness`]) and publishes it on the
 //!   `checkpoints` topic, signed as a [`CheckpointObservation`];
 //! - compares every peer's observation with its own view, using hash tiles authenticated
-//!   against its own checkpoint ([`TileAuthenticator::consistency_with`]).
+//!   against its own checkpoint ([`cybermesh_ct::LogAuthenticator::consistency_with`]).
 //!
 //! When two checkpoints signed by the log cannot belong to one append-only log, the node
 //! writes a [`SplitViewProof`] that anyone can check offline (`cybermesh ct
@@ -32,7 +32,6 @@ use std::time::{Duration, Instant};
 use cybermesh_analysis::CtLogInfo;
 use cybermesh_crypto::{Envelope, KeyId, SecretKey, canonical};
 use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, MAX_CHECKPOINT_SKEW_SECS, check_fresh};
-use cybermesh_ct::proof::TileAuthenticator;
 use cybermesh_ct::witness::{SplitViewProof, cosign, verify_cosignature};
 use cybermesh_ct::{Checkpoint, CtError, LogKey, TileSource, verify_checkpoint};
 use cybermesh_network::{Acceptance, NetworkHandle};
@@ -224,7 +223,7 @@ fn poll(
     } else {
         ((&h.note, &h.cp), (&note, &cp), false)
     };
-    let c = TileAuthenticator::new(src, larger.1.clone()).consistency_with(smaller.1)?;
+    let c = cybermesh_ct::authenticator(src, larger.1.clone()).consistency_with(smaller.1)?;
     Ok(
         match SplitViewProof::new(key.origin(), larger.0, smaller.0, &c) {
             Some(p) => Polled::Split(p),
@@ -250,7 +249,7 @@ pub fn run_job(job: Job, src: &dyn TileSource, now: u64) -> JobOutcome {
                     }
                 }
                 Some(h) => {
-                    let auth = TileAuthenticator::new(src, h.cp.clone());
+                    let auth = cybermesh_ct::authenticator(src, h.cp.clone());
                     let started = std::time::Instant::now();
                     for (w, o) in job.compare {
                         if started.elapsed() > JOB_BUDGET {
@@ -286,8 +285,8 @@ pub fn run_job(job: Job, src: &dyn TileSource, now: u64) -> JobOutcome {
 /// Runs a job against the log over HTTPS (blocking).
 #[must_use]
 pub fn run_job_http(job: Job, now: u64) -> JobOutcome {
-    match cybermesh_ct::http::HttpTileSource::new(&job.info, HTTP_TIMEOUT) {
-        Ok(src) => run_job(job, &src, now),
+    match cybermesh_ct::http::open_log(&job.info, HTTP_TIMEOUT) {
+        Ok(src) => run_job(job, &*src, now),
         Err(e) => JobOutcome {
             log_id: job.log_id,
             result: if job.compare.is_empty() {

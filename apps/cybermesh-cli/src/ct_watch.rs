@@ -40,8 +40,7 @@ use clap::Args;
 use cybermesh_analysis::{CtLogInfo, Engine, EvidenceBundle, normalize_domain};
 use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, check_fresh, fetch_verified_checkpoint};
 use cybermesh_ct::names::certificate_dns_names;
-use cybermesh_ct::proof::TileAuthenticator;
-use cybermesh_ct::tile::{parse_data_tile, tile_root};
+use cybermesh_ct::tile::tile_root;
 use cybermesh_ct::{Checkpoint, CtError, EntryKind, TileSource, is_brand_signal};
 use cybermesh_protocol::{FindingCode, Verdict};
 use flate2::Compression;
@@ -294,6 +293,17 @@ impl TileSource for Counting<'_> {
         self.count(r.as_ref().map_or(0, String::len));
         r
     }
+
+    fn entries(&self, n: u64) -> Result<(Vec<cybermesh_ct::Entry>, usize), CtError> {
+        let r = self.inner.entries(n);
+        self.count(r.as_ref().map_or(0, |(_, size)| *size));
+        r
+    }
+
+    // Requests an RFC 6962 log's audit paths and consistency proofs answer are not counted.
+    fn api(&self) -> Option<&dyn cybermesh_ct::rfc6962::LogApi> {
+        self.inner.api()
+    }
 }
 
 /// An open name segment.
@@ -447,7 +457,7 @@ impl<'a> Watcher<'a> {
         };
         rec.checkpoint_size = cp.size;
         rec.checkpoint_signed_ms = cp.signed_at_ms;
-        let auth = TileAuthenticator::new(&src, cp.clone());
+        let auth = cybermesh_ct::authenticator(&src, cp.clone());
         if let Some(head) = self.state.as_ref().and_then(|s| s.head.as_ref()) {
             let older = head.checkpoint()?;
             if cp.size < older.size {
@@ -483,17 +493,14 @@ impl<'a> Watcher<'a> {
             .min(self.end_tile.unwrap_or(u64::MAX));
         while self.next < end && !stop.load(Ordering::Relaxed) {
             let n = self.next;
-            let bytes = match src.data_tile(n) {
-                Ok(b) => b,
-                Err(e) => {
-                    self.event("fetch_error", format!("data tile {n}: {e}"))?;
+            let entries = match src.entries(n) {
+                Ok((e, _)) => e,
+                Err(e @ (CtError::Malformed(_) | CtError::TooLarge)) => {
+                    self.event("tile_unparsed", format!("data tile {n}: {e}"))?;
                     break;
                 }
-            };
-            let entries = match parse_data_tile(&bytes, n) {
-                Ok(e) => e,
                 Err(e) => {
-                    self.event("tile_unparsed", format!("data tile {n}: {e}"))?;
+                    self.event("fetch_error", format!("data tile {n}: {e}"))?;
                     break;
                 }
             };
@@ -743,9 +750,9 @@ pub fn run(a: &WatchArgs) -> Result<()> {
             s.store(true, Ordering::Relaxed);
         });
     }
-    let sources: Vec<cybermesh_ct::http::HttpTileSource> = infos
+    let sources: Vec<Box<dyn TileSource>> = infos
         .iter()
-        .map(|i| cybermesh_ct::http::HttpTileSource::new(i, Duration::from_secs(30)))
+        .map(|i| cybermesh_ct::http::open_log(i, Duration::from_secs(30)))
         .collect::<Result<_, _>>()?;
     let poll = Duration::from_secs(a.poll_secs.max(1));
     let process = Jsonl::open(&a.out.join("process.jsonl"))?;
@@ -759,7 +766,7 @@ pub fn run(a: &WatchArgs) -> Result<()> {
             handles.push(scope.spawn(move || -> Result<()> {
                 let _guard = StopOnPanic(stop);
                 let id = info.log_id.clone();
-                let r = Watcher::new(info, src, engine, out, start, max)
+                let r = Watcher::new(info, &**src, engine, out, start, max)
                     .and_then(|w| w.with_end_tile(end).run(stop, poll));
                 if r.is_err() {
                     // A local failure stops every log so the run ends in a consistent state.

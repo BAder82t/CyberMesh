@@ -28,6 +28,17 @@ pub fn transfer_totals() -> (u64, u64) {
     )
 }
 
+/// Opens the log `log` pins, whichever API it serves.
+pub fn open_log(log: &CtLogInfo, timeout: Duration) -> Result<Box<dyn TileSource>, CtError> {
+    Ok(match log.api {
+        cybermesh_analysis::CtLogApi::Static => Box::new(HttpTileSource::new(log, timeout)?),
+        cybermesh_analysis::CtLogApi::Rfc6962 => Box::new(crate::rfc6962::Rfc6962Source::new(
+            Box::new(HttpLogApi::new(log, timeout)?),
+            log,
+        )?),
+    })
+}
+
 /// Static CT client for one log.
 #[derive(Debug, Clone)]
 pub struct HttpTileSource {
