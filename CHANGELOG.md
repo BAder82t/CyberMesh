@@ -19,7 +19,7 @@
 
 ### Changed
 - **Demo evidence** (sources dated 2026-11-20).
-  - `brands.json` adds 13 brand-owned domains that the command found in days 1–2 of the CT evaluation: six for Amazon (including `amazonaws.com.cn` and `amazon.dev`), three for Microsoft (including `microsoft-int.com`), two for Netflix, `jpmchase.net` for Chase and `cpdomaintest.in` for Adobe.
+  - `brands.json` adds 13 brand-owned domains that the command found in days 1–2 of the CT evaluation: six for Amazon (including `amazonaws.com.cn` and `amazon.dev`), three for Microsoft (including `microsoft-int.com`), two for Netflix, `jpmchase.net` for Chase and `cpdomaintest.in` for Adobe. Re-scored on those days, the list flags 73.5 % fewer names at warn level than v0.3.2's (87,700 instead of 330,621), with no detection lost ([docs/ct-monitoring.md](docs/ct-monitoring.md) §7).
   - `hosting-platforms.txt` adds `onmicrosoft.com`, `nip.io` and `sslip.io`, where names belong to customers.
   - The bundle's pins change, so nodes that share tasks need the same bundle. The running CT evaluation is unaffected: it is scored with the bundle it started with and with the frozen revision 1.
 
