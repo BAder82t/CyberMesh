@@ -133,6 +133,10 @@ pub struct Options {
     pub ct_verifier_view: Option<Arc<MockLog>>,
     /// The coordinator's `ct-witness.json` before it starts (a restart).
     pub ct_witness_state: Option<&'static str>,
+    /// Independent verifiers exit after this long without work. Until their redial reaches
+    /// the coordinator they see it only through workers, which do not carry the `records`
+    /// and `checkpoints` topics.
+    pub verifier_idle_exit: Duration,
 }
 
 impl Default for Options {
@@ -158,6 +162,7 @@ impl Default for Options {
             ct_witness: None,
             ct_verifier_view: None,
             ct_witness_state: None,
+            verifier_idle_exit: Duration::from_secs(3),
         }
     }
 }
@@ -342,8 +347,11 @@ impl Harness {
                 ct_seed: [9u8; 32],
                 clock: Arc::new(SystemClock),
                 gossip_heartbeat: Duration::from_millis(100),
+                // Verifiers start before the coordinator listens: redial it quickly, so they
+                // link to it directly (for `records` and `checkpoints`) on slow machines too.
+                redial: Duration::from_millis(500),
                 manifest_source: None,
-                idle_exit: Some(Duration::from_secs(3)),
+                idle_exit: Some(o.verifier_idle_exit),
                 records_wait: Duration::from_secs(20),
                 witness: witness_for(verifier_ct_info.as_ref()),
             };
