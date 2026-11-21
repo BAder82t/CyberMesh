@@ -63,10 +63,9 @@ pub struct MockLog {
     leaves: Vec<[u8; 32]>,
 }
 
-/// Signs a checkpoint body as a static CT log: an RFC 6962 `TreeHeadSignature` as a C2SP
-/// note signature by `log`'s key (the mock key).
-fn sign_checkpoint(origin: &str, size: u64, root: &[u8; 32]) -> Result<String, CtError> {
-    let b64 = base64::engine::general_purpose::STANDARD;
+/// Signs an RFC 6962 `TreeHeadSignature` with the mock key and returns the TLS
+/// `DigitallySigned` structure (hash algorithm, signature algorithm, length, DER signature).
+fn sign_tree_head(ts: u64, size: u64, root: &[u8; 32]) -> Result<Vec<u8>, CtError> {
     let rng = ring::rand::SystemRandom::new();
     let kp = ring::signature::EcdsaKeyPair::from_pkcs8(
         &ring::signature::ECDSA_P256_SHA256_ASN1_SIGNING,
@@ -74,16 +73,25 @@ fn sign_checkpoint(origin: &str, size: u64, root: &[u8; 32]) -> Result<String, C
         &rng,
     )
     .map_err(|e| CtError::Malformed(format!("mock key: {e}")))?;
-    let ts = mock_timestamp_ms();
     let der = kp
         .sign(&rng, &tree_head_input(ts, size, root))
         .map_err(|e| CtError::Malformed(format!("mock signature: {e}")))?;
+    let mut signed = vec![4, 3];
+    signed.extend_from_slice(&u16::try_from(der.as_ref().len()).unwrap_or(0).to_be_bytes());
+    signed.extend_from_slice(der.as_ref());
+    Ok(signed)
+}
+
+/// Signs a checkpoint body as a static CT log: an RFC 6962 `TreeHeadSignature` as a C2SP
+/// note signature by `log`'s key (the mock key).
+fn sign_checkpoint(origin: &str, size: u64, root: &[u8; 32]) -> Result<String, CtError> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let ts = mock_timestamp_ms();
+    let signed = sign_tree_head(ts, size, root)?;
     let key = LogKey::from_info(&mock_info("mock", "http://127.0.0.1/", origin))?;
     let mut blob = key.key_id().to_vec();
     blob.extend_from_slice(&ts.to_be_bytes());
-    blob.extend_from_slice(&[4, 3]);
-    blob.extend_from_slice(&u16::try_from(der.as_ref().len()).unwrap_or(0).to_be_bytes());
-    blob.extend_from_slice(der.as_ref());
+    blob.extend_from_slice(&signed);
     Ok(format!(
         "{origin}\n{size}\n{}\n\n\u{2014} {origin} {}\n",
         b64.encode(root),
@@ -293,4 +301,146 @@ pub fn demo_entries(tiles: usize) -> Vec<MockEntry> {
         });
     }
     out
+}
+
+/// An in-memory classic RFC 6962 log, signing with the same public demonstration key.
+///
+/// Entries are real X.509 certificates, as in [`MockLog`]. Any number of entries is allowed.
+/// `max_entries_per_call` caps what one `get-entries` call returns, as real logs do.
+#[derive(Debug, Clone)]
+pub struct MockRfc6962Log {
+    pub origin: String,
+    /// Most entries one `get-entries` call returns.
+    pub max_entries_per_call: usize,
+    leaf_inputs: Vec<Vec<u8>>,
+    leaves: Vec<[u8; 32]>,
+}
+
+impl MockRfc6962Log {
+    /// Builds a log with these entries.
+    pub fn build(origin: &str, entries: &[MockEntry]) -> Result<Self, CtError> {
+        let mut log = Self {
+            origin: origin.to_owned(),
+            max_entries_per_call: 64,
+            leaf_inputs: Vec::new(),
+            leaves: Vec::new(),
+        };
+        log.extend(entries)?;
+        Ok(log)
+    }
+
+    /// Appends entries: the tree grows, and earlier tree heads stay consistent with it.
+    pub fn extend(&mut self, entries: &[MockEntry]) -> Result<(), CtError> {
+        let key = KeyPair::generate().map_err(|e| CtError::Malformed(e.to_string()))?;
+        for e in entries {
+            let index = self.leaf_inputs.len() as u64;
+            let der = cert_der(&key, &e.names)?;
+            let mut leaf = vec![0u8, 0u8];
+            leaf.extend_from_slice(&(1_800_000_000_000 + index).to_be_bytes());
+            let body = if e.precert {
+                leaf.extend_from_slice(&1u16.to_be_bytes());
+                leaf.extend_from_slice(&[0x11u8; 32]);
+                tbs_of(&der)?
+            } else {
+                leaf.extend_from_slice(&0u16.to_be_bytes());
+                der
+            };
+            leaf.extend_from_slice(&u32::try_from(body.len()).unwrap_or(0).to_be_bytes()[1..]);
+            leaf.extend_from_slice(&body);
+            leaf.extend_from_slice(&0u16.to_be_bytes());
+            self.leaves.push(merkle::leaf_hash(&leaf));
+            self.leaf_inputs.push(leaf);
+        }
+        Ok(())
+    }
+
+    /// Number of entries.
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        self.leaves.len() as u64
+    }
+
+    /// The root of the first `n` entries.
+    #[must_use]
+    pub fn root_at(&self, n: u64) -> [u8; 32] {
+        merkle::root(&self.leaves[..usize::try_from(n).unwrap_or(0).min(self.leaves.len())])
+    }
+
+    /// A signed tree head for the first `n` entries (`n` at most the size), dated now.
+    pub fn sth_at(&self, n: u64) -> Result<crate::rfc6962::Sth, CtError> {
+        if n > self.size() {
+            return Err(CtError::NotFound("tree size".into()));
+        }
+        let (ts, root) = (mock_timestamp_ms(), self.root_at(n));
+        Ok(crate::rfc6962::Sth {
+            tree_size: n,
+            timestamp: ts,
+            root,
+            signature: sign_tree_head(ts, n, &root)?,
+        })
+    }
+
+    /// The `ct-logs` evidence entry for this log; `monitoring_url` is its API prefix.
+    #[must_use]
+    pub fn log_info(&self, log_id: &str, monitoring_url: &str) -> CtLogInfo {
+        mock_info(log_id, monitoring_url, &self.origin)
+    }
+
+    /// Serves `leaf_input` as entry `index` while the tree keeps the hash of the original
+    /// (a log serving tampered data).
+    pub fn replace_leaf_input(&mut self, index: usize, leaf_input: Vec<u8>) {
+        self.leaf_inputs[index] = leaf_input;
+    }
+
+    /// The `leaf_input` of entry `index`.
+    #[must_use]
+    pub fn leaf_input(&self, index: usize) -> &[u8] {
+        &self.leaf_inputs[index]
+    }
+}
+
+impl crate::rfc6962::LogApi for MockRfc6962Log {
+    fn get_sth(&self) -> Result<crate::rfc6962::Sth, CtError> {
+        self.sth_at(self.size())
+    }
+
+    fn get_entries(&self, start: u64, end: u64) -> Result<Vec<Vec<u8>>, CtError> {
+        if start > end || start >= self.size() {
+            return Err(CtError::NotFound("entries".into()));
+        }
+        let end = end.min(self.size() - 1);
+        let n = usize::try_from(end - start + 1)
+            .unwrap_or(usize::MAX)
+            .min(self.max_entries_per_call);
+        let s = usize::try_from(start).unwrap_or(usize::MAX);
+        Ok(self.leaf_inputs[s..s + n].to_vec())
+    }
+
+    fn get_proof_by_hash(
+        &self,
+        leaf_hash: &[u8; 32],
+        tree_size: u64,
+    ) -> Result<(u64, Vec<[u8; 32]>), CtError> {
+        let n = usize::try_from(tree_size).unwrap_or(usize::MAX);
+        let leaves = self
+            .leaves
+            .get(..n)
+            .ok_or_else(|| CtError::NotFound("tree size".into()))?;
+        let i = leaves
+            .iter()
+            .position(|h| h == leaf_hash)
+            .ok_or_else(|| CtError::NotFound("leaf hash".into()))?;
+        Ok((i as u64, merkle::inclusion_proof(i, leaves)))
+    }
+
+    fn get_sth_consistency(&self, first: u64, second: u64) -> Result<Vec<[u8; 32]>, CtError> {
+        let (m, n) = (
+            usize::try_from(first).unwrap_or(usize::MAX),
+            usize::try_from(second).unwrap_or(usize::MAX),
+        );
+        if m == 0 || m > n || n > self.leaves.len() {
+            return Err(CtError::NotFound("tree sizes".into()));
+        }
+        Ok(merkle::consistency_proof(m, &self.leaves[..n]))
+    }
 }

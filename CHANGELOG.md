@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **The CT library reads classic RFC 6962 logs.** DigiCert, Cloudflare and Sectigo run classic logs (17 usable on 2026-11-21, against 63 static ones). The new `rfc6962` module presents such a log like a static one:
+  - the signed tree head becomes a checkpoint that the existing verifier checks unchanged;
+  - 256 entries fetched with `get-entries` form a tile that is scanned as before;
+  - a tile's root is proven against the signed root with one `get-proof-by-hash` audit path: its first eight hashes must rebuild the tile root from the entries received, so every entry and its position are bound;
+  - consistency between checkpoints comes from `get-sth-consistency`, including the prefix root a split-view proof needs.
+
+  An in-memory mock classic log is included for tests. Nodes and the CLI do not use classic logs yet.
 - **Independent verifiers prove late equivocation.** A verifier keeps the signed task and the accepted results of tasks it has settled (up to 32 MiB, oldest dropped first). If a worker whose result it accepted later sends a signed result that asserts something else, the verifier quarantines the worker locally and publishes a fault proof on `faults`, which the coordinator confirms from the signatures. The same answer signed again is not equivocation. Reports gain `late_faults`. See [docs/protocol.md](docs/protocol.md) §8 and threat model T30.
 
 ## v0.3.4 (2026-11-21, research pre-release)

@@ -37,6 +37,53 @@ pub enum Consistency {
     },
 }
 
+/// Proves tile roots and checkpoint consistency against one verified checkpoint of a log,
+/// whichever API the log has ([`TileAuthenticator`] for static logs,
+/// [`Rfc6962Authenticator`](crate::rfc6962::Rfc6962Authenticator) for classic ones).
+pub trait LogAuthenticator {
+    /// The verified checkpoint everything is proven against.
+    fn checkpoint(&self) -> &Checkpoint;
+    /// The log's source (entries are proven through their tile roots).
+    fn source(&self) -> &dyn TileSource;
+    /// The Merkle root of full tile `tile`, proven to be in the signed tree.
+    fn tile_root(&self, tile: u64) -> Result<Hash, CtError>;
+    /// Proves that this checkpoint's tree extends `older`.
+    fn prove_extends(&self, older: &Checkpoint) -> Result<(), CtError>;
+    /// Compares `other`, a verified checkpoint of the same log no larger than this one, with
+    /// this tree: see [`TileAuthenticator::consistency_with`].
+    fn consistency_with(&self, other: &Checkpoint) -> Result<Consistency, CtError>;
+}
+
+/// The authenticator for `src`'s kind of log, against the verified `checkpoint`.
+#[must_use]
+pub fn authenticator<'a>(
+    src: &'a dyn TileSource,
+    checkpoint: Checkpoint,
+) -> Box<dyn LogAuthenticator + 'a> {
+    match crate::rfc6962::Rfc6962Authenticator::new(src, checkpoint.clone()) {
+        Some(a) => Box::new(a),
+        None => Box::new(TileAuthenticator::new(src, checkpoint)),
+    }
+}
+
+impl LogAuthenticator for TileAuthenticator<'_> {
+    fn checkpoint(&self) -> &Checkpoint {
+        TileAuthenticator::checkpoint(self)
+    }
+    fn source(&self) -> &dyn TileSource {
+        TileAuthenticator::source(self)
+    }
+    fn tile_root(&self, tile: u64) -> Result<Hash, CtError> {
+        TileAuthenticator::tile_root(self, tile)
+    }
+    fn prove_extends(&self, older: &Checkpoint) -> Result<(), CtError> {
+        TileAuthenticator::prove_extends(self, older)
+    }
+    fn consistency_with(&self, other: &Checkpoint) -> Result<Consistency, CtError> {
+        TileAuthenticator::consistency_with(self, other)
+    }
+}
+
 /// Proves data tile roots against one verified checkpoint.
 pub struct TileAuthenticator<'a> {
     src: &'a dyn TileSource,
@@ -310,7 +357,7 @@ pub fn authenticated_tile_root(
     checkpoint: &Checkpoint,
     tile: u64,
 ) -> Result<Hash, CtError> {
-    TileAuthenticator::new(src, checkpoint.clone()).tile_root(tile)
+    authenticator(src, checkpoint.clone()).tile_root(tile)
 }
 
 #[cfg(test)]
