@@ -101,6 +101,12 @@ After the CT evaluation, a two-week feasibility spike will test the central ques
 - **Setup.** Five devices on a LAN, an offline-capable order and task application, durable local queues, and CyberMesh membership and manifests for device enrolment and signed workloads.
 - **Measures.** Recovery time, operations lost or duplicated (none allowed), reconciliation correctness and resource use.
 - **Order.** Low-risk workflows (retail, warehouses) before regulated ones.
+- **Later phases: more kinds of device.** If the first phase works, a Raspberry Pi joins as an always-on edge node, then browsers and phones as light clients.
+  - Every compatible device can take part, but not every device does the same job. Roles follow each device's measured capability and trust, and only approved, stable nodes hold application state.
+  - Phones and browser tabs participate only while active: iOS and Android limit background work, and a tab is not a server.
+  - Browsers and phones would need WebRTC or WebSocket transports and native apps, a separate effort.
+
+  None of this changes the structure of the CyberMesh repository.
 
 ## v0.4 and later
 - **Detection.** Add a learned lexical model shipped as pinned evidence, deterministic integer inference, and trained only on licensed data.
