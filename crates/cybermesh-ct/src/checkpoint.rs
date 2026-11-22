@@ -218,6 +218,19 @@ pub fn verify_checkpoint(text: &str, key: &LogKey) -> Result<Checkpoint, CtError
 /// Largest accepted age of a verified checkpoint. Static CT logs publish new checkpoints every
 /// few seconds, so an old one means a stale cache or a replay.
 pub const MAX_CHECKPOINT_AGE_SECS: u64 = 3600;
+/// Largest accepted age of a verified tree head of a classic RFC 6962 log. Such a log only has
+/// to sign a head once per maximum merge delay (24 hours), and real ones do so far less often
+/// than static logs: Cloudflare Nimbus went more than an hour between heads.
+pub const MAX_CLASSIC_CHECKPOINT_AGE_SECS: u64 = 86_400;
+
+/// The largest accepted age of a verified checkpoint of `log`, by the API it serves.
+#[must_use]
+pub fn max_checkpoint_age_secs(log: &CtLogInfo) -> u64 {
+    match log.api {
+        cybermesh_analysis::CtLogApi::Static => MAX_CHECKPOINT_AGE_SECS,
+        cybermesh_analysis::CtLogApi::Rfc6962 => MAX_CLASSIC_CHECKPOINT_AGE_SECS,
+    }
+}
 /// Largest accepted clock skew for a checkpoint dated in the future.
 pub const MAX_CHECKPOINT_SKEW_SECS: u64 = 300;
 
@@ -345,5 +358,41 @@ mod tests {
         for bad in ["", "o\n012\nAAAA\n", "o\n12\nnot-base64\n", "o\nx\n\n"] {
             assert!(Checkpoint::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_classic_logs_tree_head_may_be_older_than_a_static_logs() {
+        let static_log = willow();
+        let mut classic = willow();
+        classic.api = cybermesh_analysis::CtLogApi::Rfc6962;
+        assert_eq!(
+            max_checkpoint_age_secs(&static_log),
+            MAX_CHECKPOINT_AGE_SECS
+        );
+        assert_eq!(
+            max_checkpoint_age_secs(&classic),
+            MAX_CLASSIC_CHECKPOINT_AGE_SECS
+        );
+        let now = 1_800_000_000;
+        let signed = |age_secs: u64| Checkpoint {
+            origin: "log.example/2026".into(),
+            size: 1,
+            root: [0; 32],
+            signed_at_ms: (now - age_secs) * 1000,
+        };
+        // Two hours old: stale for a static log, normal for a classic one (Nimbus waited over
+        // an hour between heads).
+        let two_hours = signed(2 * 3600);
+        assert!(check_fresh(&two_hours, now, max_checkpoint_age_secs(&static_log)).is_err());
+        assert!(check_fresh(&two_hours, now, max_checkpoint_age_secs(&classic)).is_ok());
+        // Still bounded: a head older than the maximum merge delay is refused, and so is one
+        // from the future.
+        let three_days = signed(3 * 86_400);
+        assert!(check_fresh(&three_days, now, max_checkpoint_age_secs(&classic)).is_err());
+        let future = Checkpoint {
+            signed_at_ms: (now + 2 * MAX_CHECKPOINT_SKEW_SECS) * 1000,
+            ..signed(0)
+        };
+        assert!(check_fresh(&future, now, max_checkpoint_age_secs(&classic)).is_err());
     }
 }

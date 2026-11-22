@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use cybermesh_analysis::CtLogInfo;
 use cybermesh_crypto::{Envelope, KeyId, SecretKey, canonical};
-use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, MAX_CHECKPOINT_SKEW_SECS, check_fresh};
+use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_SKEW_SECS, check_fresh, max_checkpoint_age_secs};
 use cybermesh_ct::witness::{SplitViewProof, cosign, verify_cosignature};
 use cybermesh_ct::{Checkpoint, CtError, LogKey, TileSource, verify_checkpoint};
 use cybermesh_network::{Acceptance, NetworkHandle};
@@ -211,10 +211,11 @@ fn poll(
     key: &LogKey,
     head: Option<&Head>,
     now: u64,
+    max_age_secs: u64,
 ) -> Result<Polled, CtError> {
     let note = src.checkpoint()?;
     let cp = verify_checkpoint(&note, key)?;
-    check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+    check_fresh(&cp, now, max_age_secs)?;
     let Some(h) = head else {
         return Ok(Polled::Advanced(Head { note, cp }));
     };
@@ -238,7 +239,10 @@ pub fn run_job(job: Job, src: &dyn TileSource, now: u64) -> JobOutcome {
     let result = match LogKey::from_info(&job.info) {
         Err(e) => Outcome::Polled(Err(e.to_string())),
         Ok(key) if job.compare.is_empty() => {
-            Outcome::Polled(poll(src, &key, job.head.as_ref(), now).map_err(|e| e.to_string()))
+            let max_age = max_checkpoint_age_secs(&job.info);
+            Outcome::Polled(
+                poll(src, &key, job.head.as_ref(), now, max_age).map_err(|e| e.to_string()),
+            )
         }
         Ok(key) => {
             let mut out = Vec::new();
