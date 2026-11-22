@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Changed
-- **The `paste` advisory ignore now names its exact exit.** `paste` (RUSTSEC-2024-0436, unmaintained, a compile-time macro in the Linux graph only) stays ignored. `netlink-packet-core` 0.9.0 no longer needs it, so it goes away with an `if-watch` release on the netlink 0.9 line (`if-watch` PR #55), taken with `cargo update -p if-watch`. `deny.toml` and the roadmap say so, with the check date.
+- **The `paste` advisory ignore now names its exact exit.** `paste` (RUSTSEC-2024-0436, unmaintained, a compile-time macro in the Linux graph only) stays ignored. `netlink-packet-core` 0.9.0 no longer needs it, so it goes away with an `if-watch` release on the netlink 0.9 line (`if-watch` PR #55), taken with `cargo update -p if-watch`. Tested on Linux x86_64: with `if-watch` patched to that PR, the workspace builds and the network tests pass. `deny.toml` and the roadmap say so, with the check date.
 
 ### Added
 - **macOS `launchd` daemons** for the worker and the verifier (`deploy/launchd/`), with install steps in the operator guide. They run as an unprivileged account at the lowest scheduling and disk priority, with private files, no core dumps and 1,024 open files, restarting after a crash but not after a clean exit. macOS has no cgroups, so there is no hard CPU or memory cap and no filesystem sandbox: the node's own governor keeps its budgets. Tested by loading the worker's plist as a user LaunchAgent (with the account and paths changed) and checking the priority, limits, umask, log, restart after `kill -9`, no restart after a clean exit, and `launchctl bootout`. **Not tested:** installing as a system daemon under a dedicated account, which needs administrator rights.
