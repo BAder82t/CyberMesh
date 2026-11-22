@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **OpenTimestamps compatibility checked against the reference client.** On 2026-11-22 `cybermesh anchor commit --adapter ots` stamped a checkpoint with the public calendars, and the reference `ots info` (opentimestamps-client 0.8.0) read the proof: its file hash equals the commitment and it shows the three pending attestations. In the other direction, a proof made by `ots stamp` is parsed and verified by CyberMesh. Both are kept as offline test vectors, and CyberMesh writes its own proof back byte for byte. Upgrading to a Bitcoin attestation was not checked. See [docs/blockchain.md](docs/blockchain.md) §2.2.
+
 ## v0.3.6 (2026-11-22, research pre-release)
 
 Compatible with v0.3.x. No evidence format change. Fixes two faults found by following two real classic CT logs, which matter to anyone who pins a classic log (none is pinned by default). **Not production-ready; no external audit.**
