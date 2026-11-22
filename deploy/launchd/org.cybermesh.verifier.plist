@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd daemon for an independent CyberMesh verifier (macOS). Install steps: docs/operator-guide.md section 2b, step 3.
+
+  What this enforces, and what it cannot. macOS has no cgroups, so there is no hard CPU or
+  memory cap here (the systemd unit's CPUQuota and MemoryMax). The worker's own governor
+  keeps its own CPU and memory budgets by measuring itself (the systemd unit allows a verifier 25 percent of a core and 512 MiB). launchd adds:
+    - lowest scheduling and disk priority (ProcessType Background, Nice 19, LowPriorityIO),
+    - an unprivileged account (UserName) with files created private to it (Umask 0077),
+    - no core dumps (a core file would contain key material), and a limit on open files,
+    - restart after a crash, but not after a clean exit.
+  There is no filesystem sandbox: the state directory is the only place the account can write,
+  because it owns nothing else.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.cybermesh.verifier</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/cybermesh</string>
+    <string>verifier</string>
+    <string>run</string>
+    <string>--config</string>
+    <string>/usr/local/etc/cybermesh/verifier.toml</string>
+  </array>
+
+  <key>UserName</key>
+  <string>_cybermesh</string>
+  <key>GroupName</key>
+  <string>_cybermesh</string>
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/lib/cybermesh-verifier</string>
+  <key>Umask</key>
+  <integer>63</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>LowPriorityBackgroundIO</key>
+  <true/>
+
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>1024</integer>
+    <key>Core</key>
+    <integer>0</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>1024</integer>
+    <key>Core</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/cybermesh/verifier.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/cybermesh/verifier.log</string>
+</dict>
+</plist>
