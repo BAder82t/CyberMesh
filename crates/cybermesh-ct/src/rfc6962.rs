@@ -167,6 +167,14 @@ pub trait LogApi: Send + Sync {
     /// `get-entries` for `start..=end`: the `leaf_input` of each entry returned. A log may
     /// return fewer entries than asked, never more.
     fn get_entries(&self, start: u64, end: u64) -> Result<Vec<Vec<u8>>, CtError>;
+    /// [`LogApi::get_entries`], with the size of what the log sent. Its answer also carries
+    /// each certificate's chain, which CyberMesh does not use but does download, so this is
+    /// several times the size of the leaves. The default counts the leaves only.
+    fn get_entries_sized(&self, start: u64, end: u64) -> Result<(Vec<Vec<u8>>, usize), CtError> {
+        let leaves = self.get_entries(start, end)?;
+        let size = leaves.iter().map(Vec::len).sum();
+        Ok((leaves, size))
+    }
     /// `get-proof-by-hash`: the index of the leaf with this hash in the tree of `tree_size`,
     /// and its audit path.
     fn get_proof_by_hash(
@@ -313,7 +321,10 @@ impl TileSource for Rfc6962Source {
             }
             let start = first + out.len() as u64;
             let wanted = WIDTH - out.len();
-            let got = self.api.get_entries(start, first + WIDTH as u64 - 1)?;
+            let (got, sent) = self
+                .api
+                .get_entries_sized(start, first + WIDTH as u64 - 1)?;
+            bytes += sent;
             if got.is_empty() {
                 // Some logs publish a tree head before they serve its newest entries.
                 return Err(CtError::NotFound(
@@ -326,7 +337,6 @@ impl TileSource for Rfc6962Source {
                 ));
             }
             for leaf in got {
-                bytes += leaf.len();
                 out.push(parse_leaf_input(first + out.len() as u64, &leaf)?);
             }
         }

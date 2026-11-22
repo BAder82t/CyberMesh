@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Classic logs: downloaded bytes counted only a third of the download.** A classic log's `get-entries` answer also carries each entry's certificate chain, and only the leaves were counted. The CLI reported too little, and a worker's bandwidth cap (`ct_fetch_kib_per_sec`) paced it about three times too fast. Real logs send about 6 KiB per entry (decoded), against about 1.5 KiB for a static log, so classic logs cost about four times the bandwidth per entry: now documented ([docs/ct-monitoring.md](docs/ct-monitoring.md) §8). Found by following two real classic logs for ten minutes. Static logs were not affected, and v0.3.5 pins no classic log by default.
+
 ## v0.3.5 (2026-11-21, research pre-release)
 
 Compatible with v0.3.x. Evidence without `api` (static CT logs) and its pins are unchanged, and verifiers publish late-equivocation proofs on the existing `faults` topic. Nodes that share tasks need the same evidence bundle, as before. **Not production-ready; no external audit.**

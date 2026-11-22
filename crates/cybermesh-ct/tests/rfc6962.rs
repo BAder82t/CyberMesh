@@ -257,3 +257,44 @@ fn leaf_inputs_are_parsed_strictly() {
     assert!(parse_leaf_input(0, &unknown_entry).is_err());
     assert!(parse_leaf_input(0, &[]).is_err());
 }
+
+#[test]
+fn downloaded_bytes_count_what_the_log_sent_chains_included() {
+    // A classic log's get-entries answer also carries each entry's certificate chain. The
+    // bytes reported (and so any bandwidth cap) must count it, not only the leaves.
+    struct Chains(MockRfc6962Log);
+    impl cybermesh_ct::rfc6962::LogApi for Chains {
+        fn get_sth(&self) -> Result<cybermesh_ct::rfc6962::Sth, CtError> {
+            self.0.get_sth()
+        }
+        fn get_entries(&self, start: u64, end: u64) -> Result<Vec<Vec<u8>>, CtError> {
+            self.0.get_entries(start, end)
+        }
+        fn get_entries_sized(
+            &self,
+            start: u64,
+            end: u64,
+        ) -> Result<(Vec<Vec<u8>>, usize), CtError> {
+            let leaves = self.0.get_entries(start, end)?;
+            let size = leaves.iter().map(|l| l.len() + 4000).sum();
+            Ok((leaves, size))
+        }
+        fn get_proof_by_hash(&self, h: &[u8; 32], n: u64) -> Result<(u64, Vec<[u8; 32]>), CtError> {
+            self.0.get_proof_by_hash(h, n)
+        }
+        fn get_sth_consistency(&self, a: u64, b: u64) -> Result<Vec<[u8; 32]>, CtError> {
+            self.0.get_sth_consistency(a, b)
+        }
+    }
+    let log = MockRfc6962Log::build(ORIGIN, &entries(256)).unwrap();
+    let leaf_bytes: usize = (0..256).map(|i| log.leaf_input(i).len()).sum();
+    // The default counts leaves only.
+    let (_, plain) = source(&log).entries(0).unwrap();
+    assert_eq!(plain, leaf_bytes);
+    let src = Rfc6962Source::new(Box::new(Chains(log.clone())), &info(&log)).unwrap();
+    let (e, counted) = src.entries(0).unwrap();
+    assert_eq!(e.len(), 256);
+    assert_eq!(counted, leaf_bytes + 256 * 4000);
+    // A cached tile reports the same size, so a second read is not undercounted.
+    assert_eq!(src.entries(0).unwrap().1, counted);
+}

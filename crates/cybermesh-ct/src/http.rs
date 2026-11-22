@@ -119,9 +119,12 @@ impl crate::rfc6962::LogApi for HttpLogApi {
     }
 
     fn get_entries(&self, start: u64, end: u64) -> Result<Vec<Vec<u8>>, CtError> {
-        crate::rfc6962::parse_entries(
-            &self.get(&format!("ct/v1/get-entries?start={start}&end={end}"))?,
-        )
+        Ok(self.get_entries_sized(start, end)?.0)
+    }
+
+    fn get_entries_sized(&self, start: u64, end: u64) -> Result<(Vec<Vec<u8>>, usize), CtError> {
+        let body = self.get(&format!("ct/v1/get-entries?start={start}&end={end}"))?;
+        Ok((crate::rfc6962::parse_entries(&body)?, body.len()))
     }
 
     fn get_proof_by_hash(
