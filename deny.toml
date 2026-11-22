@@ -6,10 +6,15 @@ all-features = true
 version = 2
 yanked = "deny"
 ignore = [
-  # `paste` is unmaintained (no known vulnerability). It is a compile-time proc-macro
-  # reached only via libp2p-tcp -> if-watch -> netlink-packet-core. Revisit when libp2p
-  # drops it; tracked in docs/roadmap.md.
-  { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time proc-macro via libp2p; no runtime code" },
+  # `paste` is unmaintained (no known vulnerability). It is a compile-time proc-macro in the
+  # Linux graph only: libp2p-tcp -> if-watch 3.2.2 -> netlink-packet-core 0.8.2.
+  # Checked 2026-11-22: netlink-packet-core 0.9.0 and the matching 0.9 netlink releases
+  # no longer depend on it, and libp2p/if-watch PR #55 moves if-watch to them (5 lines in
+  # Cargo.toml), but if-watch has not merged it or released since 3.2.2. REMOVE THIS IGNORE
+  # when a new if-watch release is taken (`cargo update -p if-watch`) and `cargo tree -i paste
+  # --workspace --target all` finds nothing; `cargo deny` then warns that the ignore is unused.
+  # Not worth a git patch or a fork of paste: see docs/roadmap.md.
+  { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time proc-macro via libp2p; no runtime code; waiting for an if-watch release on netlink 0.9" },
 ]
 
 [licenses]

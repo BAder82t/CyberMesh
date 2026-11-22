@@ -127,4 +127,4 @@ After the CT evaluation, a two-week feasibility spike will test the central ques
 - **Detection.** Add a learned lexical model shipped as pinned evidence, deterministic integer inference, and trained only on licensed data.
 - **Releases.** Add delta releases and hashed-indicator releases (k-anonymity buckets) for very large lists.
 - **Appeals.** Add a public appeal-tracking site and governance tooling, and a stated service level for appeals.
-- **Dependencies.** Replace dependencies flagged by `cargo-deny`, for example `paste` through libp2p.
+- **Dependencies.** Replace dependencies flagged by `cargo-deny`. `paste` (unmaintained, a compile-time macro on Linux only) is the one left, through libp2p-tcp and `if-watch`. The fix exists upstream: netlink 0.9 (`netlink-packet-core` 0.9.0, 2026-08-18) no longer needs it. It reaches us when `if-watch` releases on that line (its PR #55, open since 2026-08-31, has had no review), through a plain `cargo update -p if-watch`. Not worth a git patch or a fork meanwhile (checked 2026-11-22).
