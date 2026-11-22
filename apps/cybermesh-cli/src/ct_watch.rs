@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use clap::Args;
 use cybermesh_analysis::{CtLogInfo, Engine, EvidenceBundle, normalize_domain};
-use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, check_fresh, fetch_verified_checkpoint};
+use cybermesh_ct::checkpoint::{check_fresh, fetch_verified_checkpoint, max_checkpoint_age_secs};
 use cybermesh_ct::names::certificate_dns_names;
 use cybermesh_ct::tile::tile_root;
 use cybermesh_ct::{Checkpoint, CtError, EntryKind, TileSource, is_brand_signal};
@@ -446,9 +446,9 @@ impl<'a> Watcher<'a> {
             t_ms: now_ms(),
             ..PollRecord::default()
         };
-        let cp = match fetch_verified_checkpoint(&src, &self.info)
-            .and_then(|cp| check_fresh(&cp, now_ms() / 1000, MAX_CHECKPOINT_AGE_SECS).map(|()| cp))
-        {
+        let cp = match fetch_verified_checkpoint(&src, &self.info).and_then(|cp| {
+            check_fresh(&cp, now_ms() / 1000, max_checkpoint_age_secs(&self.info)).map(|()| cp)
+        }) {
             Ok(cp) => cp,
             Err(e) => {
                 self.event("checkpoint_refused", e.to_string())?;

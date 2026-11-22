@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixed
+- **Classic logs: a tree head up to 24 hours old is accepted, not one hour.** A classic RFC 6962 log only has to sign a head once per maximum merge delay (24 hours), and real ones sign far less often than static logs: Cloudflare Nimbus2026 went more than an hour between heads, so a follower refused it as stale (`checkpoint_refused`) for the rest of that time. The limit is now chosen by the log's API (one hour for static logs, as before) in the coordinator, the witness code and `ct watch`. Each followed head must still be proven to extend the last. No evidence format change.
 - **Classic logs: downloaded bytes counted only a third of the download.** A classic log's `get-entries` answer also carries each entry's certificate chain, and only the leaves were counted. The CLI reported too little, and a worker's bandwidth cap (`ct_fetch_kib_per_sec`) paced it about three times too fast. Real logs send about 6 KiB per entry (decoded), against about 1.5 KiB for a static log, so classic logs cost about four times the bandwidth per entry: now documented ([docs/ct-monitoring.md](docs/ct-monitoring.md) §8). Found by following two real classic logs for ten minutes. Static logs were not affected, and v0.3.5 pins no classic log by default.
 
 ## v0.3.5 (2026-11-21, research pre-release)

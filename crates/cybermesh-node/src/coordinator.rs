@@ -10,7 +10,7 @@ use cybermesh_analysis::{Engine, EvidenceBundle, engine_spec, normalize_domain};
 use cybermesh_crypto::{
     Digest, Envelope, KeyId, SecretKey, canonical, generate_nonce, random_bytes,
 };
-use cybermesh_ct::checkpoint::{MAX_CHECKPOINT_AGE_SECS, fetch_verified_checkpoint};
+use cybermesh_ct::checkpoint::{fetch_verified_checkpoint, max_checkpoint_age_secs};
 use cybermesh_ct::http::open_log;
 use cybermesh_ct::scan_entries;
 use cybermesh_network::{
@@ -160,7 +160,7 @@ fn check_fault_proof_here(
     let auth = match (&src, &log) {
         (Some(s), Some(l)) => fetch_verified_checkpoint(&**s, l)
             .and_then(|cp| {
-                cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+                cybermesh_ct::checkpoint::check_fresh(&cp, now, max_checkpoint_age_secs(l))?;
                 Ok(cp)
             })
             .ok()
@@ -597,7 +597,7 @@ pub(crate) fn finalize_ct(
     // is then settled as without log access (disagreement disputed, nothing confirmed).
     let auth = match (&src, log) {
         (Some(s), Some(l)) => match fetch_verified_checkpoint(&**s, l).and_then(|cp| {
-            cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+            cybermesh_ct::checkpoint::check_fresh(&cp, now, max_checkpoint_age_secs(l))?;
             if let Some(a) = anchor {
                 cybermesh_ct::authenticator(&**s, cp.clone()).prove_extends(a)?;
             }
@@ -1432,7 +1432,11 @@ impl Coordinator {
                     .map_err(|e| PollOutcome::Failed(e.to_string()))?;
                 let cp = fetch_verified_checkpoint(&*src, &log)
                     .and_then(|cp| {
-                        cybermesh_ct::checkpoint::check_fresh(&cp, now, MAX_CHECKPOINT_AGE_SECS)?;
+                        cybermesh_ct::checkpoint::check_fresh(
+                            &cp,
+                            now,
+                            max_checkpoint_age_secs(&log),
+                        )?;
                         Ok(cp)
                     })
                     .map_err(|e| PollOutcome::Failed(e.to_string()))?;
