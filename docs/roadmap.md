@@ -59,12 +59,21 @@ It is compatible with v0.3.x.
 - **Ownership.** CyberMesh is copyright VaultBytes Innovations Ltd (`NOTICE`); the licence remains Apache-2.0.
 
 
-## v0.3.5 (this release): classic CT logs, and verifiers that prove late equivocation
+## v0.3.5: classic CT logs, and verifiers that prove late equivocation
 - **Classic RFC 6962 CT logs.** Workers, verifiers, the coordinator (also following) and the CLI use them, selected by `api` in the `ct-logs` evidence. The 17 usable logs of DigiCert, Cloudflare, Sectigo and TrustAsia are listed in `datasets/ct-logs/public-rfc6962-ct-logs.json` and were checked against the live logs ([ct-monitoring.md](ct-monitoring.md) §8).
 - **Independent verifiers prove late equivocation.** A verifier keeps the evidence of settled tasks and publishes a fault proof when an accepted worker later contradicts itself (threat model T30).
 - **README.** The opening describes the resilience-network vision, with the current implementation stated separately.
 
 It is compatible with v0.3.x. Evidence without `api` and its pins are unchanged.
+
+
+## v0.3.6 (this release): classic logs, checked against real ones
+- **Following two real classic logs for ten minutes** (DigiCert Wyvern and Cloudflare Nimbus) found two faults in v0.3.5, both fixed:
+  - Downloaded bytes counted only a third of what a classic log sends (its `get-entries` answer also carries certificate chains), so a worker's bandwidth cap paced it about three times too fast. Real classic logs cost about 6 KiB per entry against about 1.5 KiB for a static log ([ct-monitoring.md](ct-monitoring.md) §8).
+  - A tree head more than an hour old was refused for every log, but classic logs may sign one only once per 24 hours: Nimbus went more than an hour between heads. The limit is now chosen by the log's API (an hour for static logs, 24 hours for classic ones).
+- **Dependencies.** `url` is updated for RUSTSEC-2026-0592.
+
+It is compatible with v0.3.x. No evidence format change.
 
 ## Evaluation milestone: CT detection results (from 2026-11-28)
 The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on 2026-11-28. Then the test window (days 3–7) is scored for both engines, as shipped and with the frozen revision 1, following the method fixed in advance. The results are published in [ct-evaluation.md](ct-evaluation.md) §8.1, failures included.
