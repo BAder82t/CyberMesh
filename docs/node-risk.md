@@ -68,6 +68,7 @@ Malformed input is the usual way into network software. The parsers for tasks, e
   - hard CPU and memory limits.
 
   `systemd-analyze security` rates both units at an exposure level of 1.1 ("OK") on its 0–10 scale.
+  - **On macOS** the `launchd` daemons in `deploy/launchd/` give the unprivileged account, private files, no core dumps and the lowest priority, but **no hard CPU or memory cap and no sandbox**: macOS has no equivalent of cgroups or `ProtectSystem`. The node's own limits below are then the only cap. Use Linux for a node you want to bound from outside.
 - **Its own limits.** The worker also enforces its CPU, memory and bandwidth budget itself. It pauses while the machine is busy (load per CPU above 0.8) or outside the hours you allow (`active_hours_utc`).
 - **Keys.** The signing key is generated on the host and never leaves it; you send governance only the public key. If you suspect the key is compromised:
   1. stop the node;

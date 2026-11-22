@@ -82,6 +82,18 @@ holds and can be made to do. For the pilot itself, see [pilot.md](pilot.md).
    sudo cp deploy/systemd/cybermesh-worker.service /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable --now cybermesh-worker
    ```
+   **On macOS**, use the `launchd` daemon [`deploy/launchd/org.cybermesh.worker.plist`](../deploy/launchd/org.cybermesh.worker.plist) instead (see §5 for what it does and does not enforce). Create an unprivileged role account first (a name starting with an underscore, such as `_cybermesh`, with a user ID below 500 and no login shell: see `man sysadminctl`), then:
+   ```bash
+   sudo mkdir -p /usr/local/etc/cybermesh /usr/local/var/lib/cybermesh /usr/local/var/log/cybermesh
+   sudo cp worker.toml /usr/local/etc/cybermesh/        # state_dir = "/usr/local/var/lib/cybermesh"
+   sudo chown -R _cybermesh:_cybermesh /usr/local/var/lib/cybermesh /usr/local/var/log/cybermesh
+   sudo chmod 700 /usr/local/var/lib/cybermesh
+   sudo cp deploy/launchd/org.cybermesh.worker.plist /Library/LaunchDaemons/
+   sudo chown root:wheel /Library/LaunchDaemons/org.cybermesh.worker.plist   # launchd refuses other owners
+   sudo chmod 644 /Library/LaunchDaemons/org.cybermesh.worker.plist
+   sudo launchctl bootstrap system /Library/LaunchDaemons/org.cybermesh.worker.plist
+   ```
+   Stop it with `sudo launchctl bootout system/org.cybermesh.worker`. The log is `/usr/local/var/log/cybermesh/worker.log` and is not rotated.
 
 ## 2a. Optional: Certificate Transparency scanning
 
@@ -138,6 +150,7 @@ trust from the coordinator.
    sudo cp deploy/systemd/cybermesh-verifier.service /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable --now cybermesh-verifier
    ```
+   On macOS, use [`deploy/launchd/org.cybermesh.verifier.plist`](../deploy/launchd/org.cybermesh.verifier.plist) in the same way as for the worker (§2, step 6), with `/usr/local/etc/cybermesh/verifier.toml` and `state_dir = "/usr/local/var/lib/cybermesh-verifier"`.
    Or run `cybermesh verifier run --config /etc/cybermesh/verifier.toml` directly.
    - It writes its own signed records to `state_dir/records/`.
    - It publishes them on the network's `records` topic.
@@ -182,5 +195,5 @@ sudo systemctl stop cybermesh-worker                         # immediate shutdow
 | Platform | Status |
 |---|---|
 | Linux (x86_64, aarch64) | Supported: systemd unit, cgroup limits, Docker image |
-| macOS | Builds and runs (used for development). The governor measures process CPU time and reads load via `sysctl`. Use `launchd` with `LowPriorityIO` and `ProcessType=Background`; there is no hard CPU cap without third-party tools. |
+| macOS | Builds and runs (used for development). The governor measures process CPU time and reads load via `sysctl`. `launchd` daemons for the worker and the verifier are in `deploy/launchd/`: lowest scheduling and disk priority (`ProcessType=Background`, `Nice`, `LowPriorityIO`), an unprivileged account, private files (`Umask` 0077), no core dumps, 1,024 open files, restart after a crash but not after a clean exit. There is **no hard CPU or memory cap** and no filesystem sandbox on macOS: the worker's own governor keeps its budgets, and the account owns nothing but its state directory. |
 | Windows | Not yet tested. Planned path: run as a Windows service under a low-privilege virtual account and enforce CPU and memory with a Job Object (`JOBOBJECT_CPU_RATE_CONTROL_INFORMATION`, `JobMemoryLimit`). On Windows the governor's load check is disabled. |
