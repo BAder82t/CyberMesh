@@ -13,6 +13,8 @@ members = [
     "apps/cybermesh-cli",
     "tests",
 ]
+# Vendored third-party crate, not a CyberMesh crate: see vendor/if-watch/VENDORED.md.
+exclude = ["vendor/if-watch"]
 
 [workspace.package]
 version = "0.3.6"
@@ -73,3 +75,9 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# if-watch 3.2.2 with its Linux netlink dependencies on the 0.9 line, which no longer need
+# `paste` (RUSTSEC-2024-0436). Same change as libp2p/if-watch PR #55. Remove when if-watch
+# releases it: see vendor/if-watch/VENDORED.md.
+[patch.crates-io]
+if-watch = { path = "vendor/if-watch" }

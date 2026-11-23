@@ -172,7 +172,7 @@ An independent internal review covered continuous tailing. It found no flaw in t
 - **Extension trust root.** The extension's trust root is bundled, so a revoked release key is removed only by shipping an extension update.
 - **Synchronous analysis.** `assess_task` runs on the worker's async loop. It costs about 1 ms per 32-domain task.
 - **Gossipsub peer scoring is not enabled.** Bad messages are rejected but the sender's mesh score is not reduced. *Update: penalty-only peer scoring has since been enabled, for provable misbehaviour by a message's author (threat model T29).*
-- **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It is a compile-time proc-macro reached through libp2p.
+- **`RUSTSEC-2024-0436`.** `paste` is unmaintained. It was a compile-time proc-macro reached through libp2p (`if-watch`), on Linux only. It is no longer in the build: `if-watch` is vendored on the netlink 0.9 crates (`vendor/if-watch/VENDORED.md`).
 - **Quorum enforced by builders only.** Browsers never see records, so they cannot check `min_verifiers`. Co-signers must rebuild rather than sign a payload someone else built.
 - **Verifier quorum is opt-in.** Independent verifiers and the manifest's `min_verifiers` exist since v0.2.0. With `min_verifiers = 1`, the default for compatibility, a single verifier is still trusted as in v0.1. Networks should set 2 or more and run at least one more verifier than that.
 - **Late CT equivocation during finalisation.** CT tasks are finalised in the background. A second, conflicting result that arrives in that window (usually seconds) is ignored rather than recorded as provable equivocation. Results that arrive before or after the window are handled as for domain tasks.
