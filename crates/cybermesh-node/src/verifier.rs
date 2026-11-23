@@ -90,6 +90,8 @@ pub struct VerifierSetup {
 /// Counters written to `verifier-report.json` on exit.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerifierReport {
+    /// When the trust manifest in force expires (Unix seconds); 0 until the first tick.
+    pub manifest_expires_at: u64,
     pub verifier: String,
     pub operator: String,
     pub tasks_seen: u64,
@@ -834,6 +836,8 @@ pub async fn run_verifier(
     };
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
+    let mut expiry =
+        crate::expiry::ExpiryWatch::new(v.s.manifest_source.as_ref().map(|s| s.manifest.clone()));
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -900,6 +904,10 @@ pub async fn run_verifier(
                         }
                         files::Reload::Unchanged => {}
                     }
+                }
+                v.report.manifest_expires_at = v.s.manifest.expires_at;
+                if let Some(notice) = expiry.due(v.s.manifest.expires_at, v.s.clock.now()) {
+                    notice.log();
                 }
             }
             _ = tick.tick() => {

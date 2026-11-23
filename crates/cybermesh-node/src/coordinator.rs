@@ -210,6 +210,8 @@ enum PollOutcome {
 /// Summary returned when the coordinator exits.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CoordinatorReport {
+    /// When the trust manifest in force expires (Unix seconds); 0 until the first tick.
+    pub manifest_expires_at: u64,
     pub tasks_issued: u64,
     pub reassignments: u64,
     pub results_accepted: u64,
@@ -1760,6 +1762,8 @@ pub async fn run_coordinator(
             .map_or(Duration::from_secs(3600), |f| f.poll),
     );
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
+    let mut expiry =
+        crate::expiry::ExpiryWatch::new(c.s.manifest_source.as_ref().map(|s| s.manifest.clone()));
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -1819,6 +1823,10 @@ pub async fn run_coordinator(
                         }
                         files::Reload::Unchanged => {}
                     }
+                }
+                c.report.manifest_expires_at = c.s.manifest.expires_at;
+                if let Some(notice) = expiry.due(c.s.manifest.expires_at, c.s.clock.now()) {
+                    notice.log();
                 }
             }
             _ = tick.tick() => {

@@ -25,8 +25,8 @@ use crate::files::{self, ManifestState};
 use crate::governor::ResourcePolicy;
 use crate::worker::allowed_peers;
 
-/// A manifest with fewer seconds than this left earns a warning.
-pub const EXPIRY_WARNING_SECS: u64 = 7 * 86_400;
+/// A manifest with fewer seconds than this left earns a warning, as in the node's own log.
+pub const EXPIRY_WARNING_SECS: u64 = crate::expiry::WARN_WITHIN_SECS;
 /// A clock this many seconds behind the manifest's issue time earns a warning.
 const CLOCK_SKEW_SECS: u64 = 300;
 
@@ -342,15 +342,7 @@ fn check_keys(node: &Node, checks: &mut Vec<Check>) -> Vec<LoadedKey> {
     loaded
 }
 
-fn duration_text(secs: u64) -> String {
-    let (d, h) = (secs / 86_400, (secs % 86_400) / 3_600);
-    match (d, h) {
-        (0, 0) => format!("{} minute(s)", secs / 60),
-        (0, h) => format!("{h} hour(s)"),
-        (d, 0) => format!("{d} day(s)"),
-        (d, h) => format!("{d} day(s) {h} hour(s)"),
-    }
-}
+use crate::expiry::duration_text;
 
 fn check_manifest(node: &Node, now: u64, checks: &mut Vec<Check>) -> Option<TrustManifest> {
     if !node.governance_root.exists() {
