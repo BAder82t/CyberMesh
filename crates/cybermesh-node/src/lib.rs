@@ -23,6 +23,7 @@ pub mod config;
 pub mod coordinator;
 pub mod ct_follow;
 pub mod ct_witness;
+pub mod doctor;
 pub mod fault_proofs;
 pub mod files;
 pub mod governor;
