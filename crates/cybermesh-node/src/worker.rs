@@ -57,6 +57,9 @@ pub struct WorkerStatus {
     pub operator: String,
     pub peer_id: String,
     pub state: String,
+    /// When the trust manifest in force expires (Unix seconds). The node logs a reminder from
+    /// 7 days before; at expiry its state becomes `manifest-expired` and it takes no work.
+    pub manifest_expires_at: u64,
     pub pause_reason: Option<PauseReason>,
     pub tasks_completed: u64,
     pub tasks_refused: u64,
@@ -714,6 +717,8 @@ pub async fn run_worker(
     };
 
     let mut manifest_tick = tokio::time::interval(Duration::from_secs(60));
+    let mut expiry =
+        crate::expiry::ExpiryWatch::new(w.s.manifest_source.as_ref().map(|s| s.manifest.clone()));
     let mut hb = tokio::time::interval(heartbeat_every);
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     let mut last_status = Instant::now() - Duration::from_secs(10);
@@ -759,6 +764,10 @@ pub async fn run_worker(
                         }
                         files::Reload::Unchanged => {}
                     }
+                }
+                w.status.manifest_expires_at = w.s.manifest.expires_at;
+                if let Some(notice) = expiry.due(w.s.manifest.expires_at, w.s.clock.now()) {
+                    notice.log();
                 }
                 if w.s.clock.now() >= w.s.manifest.expires_at {
                     w.status.state = "manifest-expired".into();
