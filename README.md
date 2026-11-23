@@ -146,7 +146,8 @@ test page for a fictional bank — to see the warning. A step-by-step walkthroug
 | `apps/browser-extension` | Chromium MV3 extension (offline verification, warnings, strict mode) |
 | `tests/` | End-to-end, adversarial and performance tests over real libp2p |
 | `datasets/demo` | Demo evidence (synthetic feed, Majestic top-10k subset, brand table, hosting platforms) |
-| `deploy/` | Dockerfile, Compose demo, hardened systemd unit |
+| `deploy/` | Dockerfile, Compose demo, hardened systemd unit, macOS `launchd` daemons |
+| `vendor/if-watch` | Third-party `if-watch` 3.2.2 on the netlink 0.9 crates (drops `paste`); see its `VENDORED.md` |
 | `docs/` | Architecture, protocol, threat model, privacy, anchoring, evaluation, operator guide, roadmap |
 
 The proposed `cybermesh-core`, `cybermesh-consensus`, `cybermesh-reputation`, `cybermesh-worker` and dashboard packages were deliberately
