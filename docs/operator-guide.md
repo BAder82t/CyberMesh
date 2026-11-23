@@ -77,7 +77,8 @@ holds and can be made to do. For the pilot itself, see [pilot.md](pilot.md).
    active_hours_utc = ["18:00-07:00"]  # e.g. outside office hours
    ```
    *Note:* bootstrap addresses can name a peer by host name (`/dns4/`, `/dns6/` or `/dns/`), resolved with the system resolver, or by IP (`/ip4/`, `/ip6/`). Always include the `/p2p/<peer id>` part: it is what authenticates the peer, so a wrong DNS answer can only make the connection fail.
-6. **Run under the hardened systemd unit** in [`deploy/systemd/cybermesh-worker.service`](../deploy/systemd/cybermesh-worker.service). It adds OS-enforced limits: `CPUQuota=2%`, `MemoryMax=200M`, a read-only system, no capabilities, and a system-call filter.
+6. **Check the setup, then run it.** `cybermesh doctor --config /etc/cybermesh/worker.toml` reads the configuration and tells you, before the node starts, whether it would be admitted: the key and its permissions, the signed manifest (valid, for this network, how long until it expires, not older than the one last accepted), whether governance has enrolled your key, the evidence, the state directory, the listen ports, and whether each bootstrap peer is a known peer that accepts connections. It changes nothing (see §3). Fix every `FAIL`; a `WARN` is worth reading.
+   **Run under the hardened systemd unit** in [`deploy/systemd/cybermesh-worker.service`](../deploy/systemd/cybermesh-worker.service). It adds OS-enforced limits: `CPUQuota=2%`, `MemoryMax=200M`, a read-only system, no capabilities, and a system-call filter.
    ```bash
    sudo cp deploy/systemd/cybermesh-worker.service /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable --now cybermesh-worker
@@ -175,6 +176,8 @@ trust from the coordinator.
      counter is `records_too_large`. You can still pass such files with another `--records`.
 
 ## 3. Day-to-day control
+
+`cybermesh doctor --config <file>` is the first thing to run when a node does not behave, and again before and after changing its configuration or receiving a new manifest. It works for worker, verifier and coordinator configurations (`--role` if the file is ambiguous), prints one line per check with the fix under each problem, and exits with 1 if anything failed. `--offline` skips the connection to the bootstrap peers, and `--json` gives the same report for scripts. It is read-only: it creates and removes one probe file in an existing state directory, briefly binds each listen port, and, unless `--offline`, opens one TCP connection to each bootstrap address in your own configuration. It does not query the network's clocks, check disk space, or start the node. The signed manifest is verified exactly as the node verifies it, but doctor does not record it as accepted.
 
 ```bash
 cybermesh worker status --state-dir /var/lib/cybermesh     # live state, CPU, RSS, network counters

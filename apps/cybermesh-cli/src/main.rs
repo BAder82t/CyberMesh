@@ -34,6 +34,23 @@ struct Cli {
     cmd: Cmd,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum DoctorRole {
+    Worker,
+    Verifier,
+    Coordinator,
+}
+
+impl From<DoctorRole> for cybermesh_node::doctor::NodeKind {
+    fn from(r: DoctorRole) -> Self {
+        match r {
+            DoctorRole::Worker => Self::Worker,
+            DoctorRole::Verifier => Self::Verifier,
+            DoctorRole::Coordinator => Self::Coordinator,
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum Cmd {
     /// Generate an Ed25519 key file (0600).
@@ -45,6 +62,23 @@ enum Cmd {
     KeyInfo {
         #[arg(long)]
         key: PathBuf,
+    },
+    /// Check a node's configuration before it joins the network (read-only): keys, signed
+    /// manifest and its expiry, enrolment, evidence, state directory, ports and bootstrap
+    /// peers. Exits with 1 if anything fails.
+    Doctor {
+        /// The worker, verifier or coordinator configuration file.
+        #[arg(long)]
+        config: PathBuf,
+        /// Which kind of node it is (default: guessed from the file).
+        #[arg(long, value_enum)]
+        role: Option<DoctorRole>,
+        /// Do not open a TCP connection to the bootstrap addresses.
+        #[arg(long)]
+        offline: bool,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Governance: trust root and manifest management.
     #[command(subcommand)]
@@ -208,6 +242,32 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Keygen { out } => keys::keygen(&out),
         Cmd::KeyInfo { key } => keys::key_info(&key),
+        Cmd::Doctor {
+            config,
+            role,
+            offline,
+            json,
+        } => {
+            use cybermesh_protocol::Clock as _;
+            let report = cybermesh_node::doctor::run(
+                &config,
+                role.map(Into::into),
+                &cybermesh_node::doctor::Options {
+                    now: clock.now(),
+                    probe: !offline,
+                    probe_timeout: std::time::Duration::from_secs(5),
+                },
+            );
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", report.render());
+            }
+            if report.failed() {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Cmd::Governance(c) => keys::governance(c),
         Cmd::Evidence(c) => keys::evidence(c),
         Cmd::Analyze { evidence, domains } => eval::analyze(&evidence, &domains),
