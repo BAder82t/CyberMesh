@@ -67,13 +67,23 @@ It is compatible with v0.3.x.
 It is compatible with v0.3.x. Evidence without `api` and its pins are unchanged.
 
 
-## v0.3.6 (this release): classic logs, checked against real ones
+## v0.3.6: classic logs, checked against real ones
 - **Following two real classic logs for ten minutes** (DigiCert Wyvern and Cloudflare Nimbus) found two faults in v0.3.5, both fixed:
   - Downloaded bytes counted only a third of what a classic log sends (its `get-entries` answer also carries certificate chains), so a worker's bandwidth cap paced it about three times too fast. Real classic logs cost about 6 KiB per entry against about 1.5 KiB for a static log ([ct-monitoring.md](ct-monitoring.md) §8).
   - A tree head more than an hour old was refused for every log, but classic logs may sign one only once per 24 hours: Nimbus went more than an hour between heads. The limit is now chosen by the log's API (an hour for static logs, 24 hours for classic ones).
 - **Dependencies.** `url` is updated for RUSTSEC-2026-0592.
 
 It is compatible with v0.3.x. No evidence format change.
+
+
+## v0.3.7 (this release): help for the organisations that join
+- **`cybermesh doctor`** checks a node's configuration before it joins the network: keys, signed manifest and its expiry, enrolment, evidence, state directory, ports and bootstrap peers. Read-only ([operator-guide.md](operator-guide.md) §2 step 6 and §3).
+- **A reminder in the node's log before its trust manifest expires**, from 7 days before. Until now a node simply stopped accepting work at expiry.
+- **macOS `launchd` daemons** for the worker and the verifier (`deploy/launchd/`).
+- **`paste` is out of the build.** `if-watch` is vendored on the netlink 0.9 crates (`vendor/if-watch/`), so the Linux binaries no longer pull in the unmaintained `paste` macro.
+- **OpenTimestamps compatibility** is checked against the reference client, in both directions, for pending proofs.
+
+It is compatible with v0.3.x: the wire protocol and the evidence format are unchanged.
 
 ## Evaluation milestone: CT detection results (from 2026-11-28)
 The week-long live run's CT window ends on 2026-11-25, and its feed snapshots on 2026-11-28. Then the test window (days 3–7) is scored for both engines, as shipped and with the frozen revision 1, following the method fixed in advance. The results are published in [ct-evaluation.md](ct-evaluation.md) §8.1, failures included.
