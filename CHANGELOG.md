@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.7 (2026-11-24, research pre-release)
+
+Compatible with v0.3.x: the wire protocol and the evidence format are unchanged. A worker's `status.json` and the verifier's and coordinator's reports gain a `manifest_expires_at` field (additive). The Linux binaries are built with a vendored `if-watch` (see below). **Not production-ready; no external audit.**
 
 ### Changed
 - **`paste` is out of the build.** `paste` (RUSTSEC-2024-0436, unmaintained, a compile-time macro in the Linux graph only) was reached through `if-watch` 3.2.2. `if-watch` is now vendored in `vendor/if-watch/` with its Linux netlink dependencies on the 0.9 line (`netlink-packet-core` 0.9.0 and the matching crates), which do not need it: five version lines in its `Cargo.toml`, the same change as `libp2p/if-watch` PR #55, with every other file identical to upstream v3.2.2. The advisory ignore in `deny.toml` is removed, and `Cargo.lock` loses `paste` and `thiserror` 1.x and gains `zerocopy`. Tested on Linux x86_64 (the workspace builds, the network tests pass) and on macOS (all 272 tests). Remove the vendored copy when `if-watch` releases on the netlink 0.9 line: see `vendor/if-watch/VENDORED.md`.

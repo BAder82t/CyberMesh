@@ -23,7 +23,7 @@ holds and can be made to do. For the pilot itself, see [pilot.md](pilot.md).
    and the signed build provenance before installing it
    ([build-integrity.md](build-integrity.md)):
    ```bash
-   V=0.3.6 T=x86_64-unknown-linux-gnu        # or aarch64-unknown-linux-gnu
+   V=0.3.7 T=x86_64-unknown-linux-gnu        # or aarch64-unknown-linux-gnu
    sha256sum --ignore-missing -c SHA256SUMS
    gh attestation verify "cybermesh-$V-$T" --repo BAder82t/CyberMesh \
      --signer-workflow BAder82t/CyberMesh/.github/workflows/release.yml
