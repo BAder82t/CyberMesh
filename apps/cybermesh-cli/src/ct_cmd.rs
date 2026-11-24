@@ -12,6 +12,7 @@ use cybermesh_ct::http::open_log;
 use cybermesh_ct::{TileSource, scan_entries};
 use serde::Serialize;
 
+use crate::ct_gaps::{Gap, GapState, coverage_gaps};
 use crate::release_cmd::load_records;
 use crate::util::{self, write_json};
 
@@ -141,6 +142,10 @@ struct Coverage {
     truncated_tiles: Vec<(String, u64)>,
     /// (log, tile) whose data did not match the log's own hash (task disputed, not verified).
     log_inconsistent_tiles: Vec<(String, u64)>,
+    /// Runs of tiles with no verified record, between the verified ranges of a log. Names in
+    /// those tiles are missing from this report. Tiles after a log's last verified one are
+    /// not listed: the records do not say how large the log was.
+    gaps: Vec<Gap>,
 }
 
 #[derive(Serialize)]
@@ -307,6 +312,19 @@ pub fn run(c: CtCmd) -> Result<()> {
             let recs = load_records(&records, &m, false)?;
             let mut by_brand: BTreeMap<String, Vec<ReportItem>> = BTreeMap::new();
             let mut cov = Coverage::default();
+            let tasks: Vec<_> = recs
+                .iter()
+                .filter_map(|(_, r)| {
+                    let ct = r.ct.as_ref()?;
+                    Some((
+                        ct.log_id.as_str(),
+                        ct.first_tile,
+                        ct.tile_count,
+                        r.status == cybermesh_verifier::TaskStatus::Verified,
+                    ))
+                })
+                .collect();
+            cov.gaps = coverage_gaps(&tasks);
             for (_, r) in &recs {
                 if let Some(ct) = &r.ct {
                     cov.log_inconsistent_tiles.extend(
@@ -377,6 +395,21 @@ pub fn run(c: CtCmd) -> Result<()> {
             }
             for (log, t) in &cov.log_inconsistent_tiles {
                 println!("  log inconsistency: {log} tile {t} does not match the log's own hash");
+            }
+            for g in &cov.gaps {
+                let why = match g.state {
+                    GapState::NoRecord => "no record: never tasked, or its records are not here",
+                    GapState::AttemptedNotVerified => {
+                        "tasked, but the record is disputed or insufficient"
+                    }
+                };
+                println!(
+                    "  gap: {} tiles {}..{} ({} tile(s)), {why}: names in them are missing from this report",
+                    g.log_id,
+                    g.first_tile,
+                    g.last_tile(),
+                    g.tile_count
+                );
             }
             for (b, items) in &by_brand {
                 let published = items.iter().filter(|i| i.published_as_warning).count();

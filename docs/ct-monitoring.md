@@ -154,7 +154,7 @@ cybermesh evidence pin --dir <evidence>
 cybermesh ct checkpoint --evidence <evidence> --log <log-id>
 cybermesh ct scan --evidence <evidence> --log <log-id> --tiles 4        # one-off local scan
 cybermesh ct report --records state/coordinator/records --manifest manifest.json \
-  --root governance-root.json --evidence evidence --out ct-report.json   # per-brand investigation report
+  --root governance-root.json --evidence evidence --out ct-report.json   # per-brand investigation report, with the tile gaps
 ```
 
 Coordinator (`coordinator.toml`):
@@ -276,4 +276,4 @@ The 13 domains are now in `datasets/demo/evidence/brands.json`, and the three pl
 - **Pinned keys must be maintained.** When a log's key or URL changes, the `ct-logs` evidence (and its pin) must be updated, as for any evidence.
 - **Brand table.** `evidence suggest-owned-domains` proposes brand-owned domains from CT data, and the shipped table includes 13 found this way (§7). Lists confirmed by the brand owners are still needed before CT warnings can be enabled responsibly.
 - **Verifiers.** Independent verifiers check CT shards with their own log access and their own secret spot-check seeds, so their spot checks are independent of the coordinator's. A published CT warning needs the manifest's `min_verifiers` verifier operators.
-- **One coordinator per log.** A single coordinator follows each log. Independent verifiers check its tasks but do not poll the log themselves.
+- **One coordinator per log, and it decides which tiles are tasked.** A single coordinator follows each log. Independent verifiers check its tasks but do not poll the log themselves. A coordinator cannot forge results or records (workers and verifiers sign those), but it can leave tiles out, as an issuer can for domains (threat model T15), and no verifier would notice: it only sees the tasks it is given. The same hole appears when a task is abandoned or never verified. `cybermesh ct report` now lists these holes: for each log, the runs of tiles between its verified ranges that no verified record covers, told apart as *no record* (never tasked, or the records are not among those given) and *attempted, not verified* (a disputed or insufficient record). Names in those tiles are missing from the report, so read the gap lines with it. It does not list tiles after a log's last verified tile, since records do not say how large the log was: a coordinator that simply stops looks like a short run, and catching that would need verifiers to track the log's head themselves.

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`cybermesh ct report` lists the tile gaps.** A coordinator decides which CT tiles are tasked, and a tile it never tasks leaves no record: a name that sits in it silently vanished from the report. The signed records already state each task's log and tile range, so the report now finds, per log, the runs of tiles between its verified ranges that no verified record covers, and says whether they have *no record* or only a *disputed or insufficient* one (`coverage.gaps` in the JSON, and a `gap:` line each in the text). Shown on the demo's four real signed records: with the record for tiles 2 and 3 removed, the report listed `demo-mock-log tiles 2..3`, and the lookalike name in them was the one missing from the findings. It finds holes between verified ranges only: tiles after a log's last verified tile are not listed, since records do not say how large the log was. Documented in `docs/ct-monitoring.md` §8 and threat model T15.
+
 ## v0.3.7 (2026-11-24, research pre-release)
 
 Compatible with v0.3.x: the wire protocol and the evidence format are unchanged. A worker's `status.json` and the verifier's and coordinator's reports gain a `manifest_expires_at` field (additive). The Linux binaries are built with a vendored `if-watch` (see below). **Not production-ready; no external audit.**
