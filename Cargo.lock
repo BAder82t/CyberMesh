@@ -939,6 +939,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-trust"
+version = "0.3.7"
+dependencies = [
+ "cybermesh-entropy",
+ "proptest",
+ "tempfile",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "cybermesh-verifier"
 version = "0.3.7"
 dependencies = [
