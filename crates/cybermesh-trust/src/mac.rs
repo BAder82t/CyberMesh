@@ -171,13 +171,29 @@ impl MacKey {
     }
 
     fn raw_tag(&self, msg: &[u8], pad: &Reservation) -> Result<[u8; TAG_LEN], MacError> {
+        let mut p = material(pad)?;
+        let t = self.tag_with_pad(msg, &p);
+        p.zeroize();
+        t
+    }
+
+    /// Tag with pad bytes the caller already holds. The caller guarantees one tag per pad.
+    pub(crate) fn tag_with_pad(
+        &self,
+        msg: &[u8],
+        pad: &[u8; TAG_LEN],
+    ) -> Result<[u8; TAG_LEN], MacError> {
         if msg.len() > MAX_MESSAGE_LEN {
             return Err(MacError::MessageTooLong);
         }
-        let mut p = material(pad)?;
-        let t = (poly_hash(self.r, msg) ^ u128::from_be_bytes(p)).to_be_bytes();
-        p.zeroize();
-        Ok(t)
+        Ok((poly_hash(self.r, msg) ^ u128::from_be_bytes(*pad)).to_be_bytes())
+    }
+
+    /// Key from raw bytes the caller took from an `Authentication` reservation.
+    pub(crate) fn from_key_bytes(b: &[u8; TAG_LEN]) -> Self {
+        Self {
+            r: u128::from_be_bytes(*b),
+        }
     }
 
     /// Tag `msg`, spending `pad` (a 16-byte `Authentication` reservation, consumed).

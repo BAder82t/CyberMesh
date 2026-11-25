@@ -10,7 +10,7 @@
   tests, with n=5, k=3 (e=1), 6 of the 10 ways to corrupt two shares decoded to a wrong
   secret and 4 failed. Robust reconstruction is therefore only safe if the number of wrong
   shares is bounded by something else (authenticated shares, a trust assumption on holders).
-  It is correction, not authentication. When `m - k` is odd, one unit of redundancy is unused;
+  It is correction, not authentication; `cybermesh-trust::shares` adds the authentication (altered shares are rejected before decoding), but only for shares tagged by the dealer, not for refreshed ones. When `m - k` is odd, one unit of redundancy is unused;
   a mixed correct-and-detect mode is not built.
 * Elimination is variable-time on secret data.
 * Perfect secrecy needs fresh uniform secret coefficients. `OsRandom` is the OS CSPRNG: that

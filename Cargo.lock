@@ -943,6 +943,7 @@ name = "cybermesh-trust"
 version = "0.3.7"
 dependencies = [
  "cybermesh-entropy",
+ "cybermesh-sharing",
  "proptest",
  "tempfile",
  "thiserror",
