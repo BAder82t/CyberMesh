@@ -12,6 +12,7 @@ members = [
     "crates/cybermesh-network",
     "crates/cybermesh-node",
     "crates/cybermesh-sharing",
+    "crates/cybermesh-trust",
     "apps/cybermesh-cli",
     "tests",
 ]
@@ -38,6 +39,7 @@ cybermesh-entropy = { path = "crates/cybermesh-entropy", version = "0.3.7" }
 cybermesh-network = { path = "crates/cybermesh-network", version = "0.3.7" }
 cybermesh-node = { path = "crates/cybermesh-node", version = "0.3.7" }
 cybermesh-sharing = { path = "crates/cybermesh-sharing", version = "0.3.7" }
+cybermesh-trust = { path = "crates/cybermesh-trust", version = "0.3.7" }
 
 anyhow = "1"
 base64 = "0.22"
