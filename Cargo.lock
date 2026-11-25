@@ -939,6 +939,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-transport"
+version = "0.3.7"
+dependencies = [
+ "cybermesh-entropy",
+ "cybermesh-trust",
+ "getrandom 0.3.4",
+ "proptest",
+ "tempfile",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "cybermesh-trust"
 version = "0.3.7"
 dependencies = [
