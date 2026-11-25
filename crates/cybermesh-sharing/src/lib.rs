@@ -50,6 +50,8 @@ pub enum SharingError {
     TooFewShares { needed: usize, got: usize },
     #[error("shares are inconsistent: at least one is wrong")]
     Inconsistent,
+    #[error("epoch counter would overflow")]
+    EpochOverflow,
     #[error("more wrong shares than the {limit} correctable with the shares given")]
     TooManyErrors { limit: usize },
 }
@@ -102,8 +104,8 @@ impl core::fmt::Debug for Share {
     }
 }
 
-const WIRE_VERSION: u8 = 1;
-const HEADER: usize = 1 + 16 + 4 + 1 + 1 + 4;
+pub(crate) const WIRE_VERSION: u8 = 1;
+pub(crate) const HEADER: usize = 1 + 16 + 4 + 1 + 1 + 4;
 
 impl Share {
     /// This share's evaluation point (1..=255).
@@ -214,16 +216,43 @@ pub fn split<R: RandomSource>(
     if k < 2 || k > n || n > MAX_SHARES {
         return Err(SharingError::InvalidThreshold);
     }
+    // 1..=255 by the check above.
+    let indices: Vec<u8> = (1..=u8::try_from(n).unwrap_or(u8::MAX)).collect();
+    deal(secret, k, &indices, set, epoch, rng)
+}
+
+/// Evaluate a fresh random degree-`k-1` polynomial with constant term `secret` at `indices`.
+fn deal<R: RandomSource>(
+    secret: &[u8],
+    k: usize,
+    indices: &[u8],
+    set: [u8; 16],
+    epoch: u32,
+    rng: &mut R,
+) -> Result<Vec<Share>, SharingError> {
+    if k < 2 || k > indices.len() || indices.len() > MAX_SHARES {
+        return Err(SharingError::InvalidThreshold);
+    }
     if secret.is_empty() || secret.len() > MAX_SECRET_LEN {
         return Err(SharingError::InvalidSecretLength);
     }
-    let mut shares: Vec<Share> = (1..=n)
-        .map(|i| Share {
+    let mut seen = [false; 256];
+    for &i in indices {
+        if i == 0 {
+            return Err(SharingError::ZeroIndex);
+        }
+        if core::mem::replace(&mut seen[usize::from(i)], true) {
+            return Err(SharingError::DuplicateIndex(i));
+        }
+    }
+    let mut shares: Vec<Share> = indices
+        .iter()
+        .map(|&index| Share {
             set,
             epoch,
-            // k, n <= 255 checked above
+            // k <= indices.len() <= 255 checked above
             threshold: u8::try_from(k).unwrap_or(u8::MAX),
-            index: u8::try_from(i).unwrap_or(u8::MAX),
+            index,
             y: vec![0; secret.len()],
         })
         .collect();
@@ -331,7 +360,9 @@ fn same_poly(base: &[&Share], extra: &Share, pos: usize) -> bool {
     acc == extra.y[pos]
 }
 
+mod refresh;
 mod robust;
+pub use refresh::{Delta, refresh_share, zero_sharing};
 pub use robust::{Recovered, max_correctable, reconstruct_robust};
 
 #[cfg(test)]

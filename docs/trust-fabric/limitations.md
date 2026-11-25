@@ -22,5 +22,16 @@
 * Field arithmetic avoids secret-dependent branches, but the crate has had no timing review
   and the final comparisons are not constant time.
 * Zeroization on drop is best effort: the compiler, swap and core dumps are outside its reach.
-* No proactive refresh, redistribution or dynamic membership yet.
+* Proactive refresh (`zero_sharing`, `refresh_share`) re-randomises shares of the same secret and
+  steps the epoch; shares of different epochs never combine. It assumes **honest dealers**:
+  a dealer that shares a non-zero polynomial silently changes the secret and every check still
+  passes (a test demonstrates it). Catching that needs verifiable secret sharing, not built.
+* Refresh also assumes private authenticated channels for the deltas, that all holders add
+  exactly the same set of dealers' deltas (a holder that misses one is out of step and
+  reconstruction then fails or yields garbage), erasure of the old share and the deltas, and
+  fresh randomness per dealing. None of these are enforced by the crate.
+* The mobile-adversary guarantee is the standard one: an adversary holding fewer than `k` shares
+  in every epoch, with erasure between epochs, learns nothing. It does not cover an adversary
+  that reaches `k` shares inside one epoch, nor one that sees a dealer's randomness.
+* No redistribution to a new threshold or membership (adding or removing holders) yet.
 * Maximum 255 shares (GF(2^8)).
