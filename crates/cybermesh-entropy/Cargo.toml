@@ -1,0 +1,22 @@
+[package]
+name = "cybermesh-entropy"
+description = "Experimental one-time secret-resource pools with crash-safe consumption for the CyberMesh Trust Fabric"
+version.workspace = true
+edition.workspace = true
+# File::lock (cross-process exclusion) is stable from Rust 1.89.
+rust-version = "1.89"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

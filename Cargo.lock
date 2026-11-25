@@ -838,6 +838,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-entropy"
+version = "0.3.7"
+dependencies = [
+ "hex",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "cybermesh-intelligence"
 version = "0.3.7"
 dependencies = [
