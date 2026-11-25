@@ -2,9 +2,17 @@
 
 ## cybermesh-sharing
 
-* Not verifiable. A wrong share is detected only when more than `k` shares are given, and the
-  holder of the wrong share is not identified. Robust (Reed-Solomon) reconstruction with
-  `2e + s <= n - k` is not implemented yet.
+* Not verifiable. Plain `reconstruct` detects a wrong share only when more than `k` shares are
+  given and cannot name it. `reconstruct_robust` (Berlekamp-Welch, per byte) corrects up to
+  `e = (m - k) / 2` wrong shares among the `m` given and names them, which is the
+  Reed-Solomon bound `2e + s <= n - k` with `s` missing shares simply not supplied.
+* **Past that bound the robust decoder can return a wrong secret with no error.** In the
+  tests, with n=5, k=3 (e=1), 6 of the 10 ways to corrupt two shares decoded to a wrong
+  secret and 4 failed. Robust reconstruction is therefore only safe if the number of wrong
+  shares is bounded by something else (authenticated shares, a trust assumption on holders).
+  It is correction, not authentication. When `m - k` is odd, one unit of redundancy is unused;
+  a mixed correct-and-detect mode is not built.
+* Elimination is variable-time on secret data.
 * Perfect secrecy needs fresh uniform secret coefficients. `OsRandom` is the OS CSPRNG: that
   is computational randomness, fine for local generation, but it is not shared secret
   randomness between parties and not information-theoretic entropy. Treat sharing generated

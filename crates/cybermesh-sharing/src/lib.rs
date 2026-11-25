@@ -13,7 +13,7 @@
 //! Plain Shamir sharing is **not verifiable**: a wrong share is not detected on its own.
 //! [`reconstruct`] therefore interpolates from `k` shares and checks every extra share against
 //! the result, failing closed on any disagreement. It cannot say *which* share is wrong;
-//! error correction (Reed-Solomon, `2e + s <= n - k`) is a later step.
+//! [`reconstruct_robust`] additionally corrects wrong shares (Berlekamp-Welch).
 //!
 //! The field is GF(2^8) with the AES polynomial; each secret byte is shared independently, so
 //! `n <= 255`. Arithmetic is branch-free on secret data.
@@ -50,6 +50,8 @@ pub enum SharingError {
     TooFewShares { needed: usize, got: usize },
     #[error("shares are inconsistent: at least one is wrong")]
     Inconsistent,
+    #[error("more wrong shares than the {limit} correctable with the shares given")]
+    TooManyErrors { limit: usize },
 }
 
 /// Where the polynomial coefficients come from. Must yield uniform secret randomness.
@@ -170,7 +172,7 @@ impl Share {
 // ---- GF(2^8), polynomial x^8 + x^4 + x^3 + x + 1 -------------------------------------------
 
 /// Branch-free multiplication.
-fn mul(mut a: u8, mut b: u8) -> u8 {
+pub(crate) fn mul(mut a: u8, mut b: u8) -> u8 {
     let mut p = 0u8;
     for _ in 0..8 {
         p ^= a & 0u8.wrapping_sub(b & 1);
@@ -182,7 +184,7 @@ fn mul(mut a: u8, mut b: u8) -> u8 {
 }
 
 /// a^254 = a^-1 for a != 0 (and 0 for 0).
-fn inv(a: u8) -> u8 {
+pub(crate) fn inv(a: u8) -> u8 {
     let a2 = mul(a, a);
     let a4 = mul(a2, a2);
     let a8 = mul(a4, a4);
@@ -257,16 +259,9 @@ fn lagrange_at_zero(points: &[&Share], pos: usize) -> u8 {
     total
 }
 
-/// Reconstruct the secret.
-///
-/// Uses the first `k` shares, then checks every further share lies on the same polynomial.
-///
-/// # Errors
-/// Mixed sets/epochs/thresholds, duplicates, too few shares, or [`SharingError::Inconsistent`]
-/// when any share disagrees (the secret is then not returned).
-pub fn reconstruct(shares: &[Share]) -> Result<Vec<u8>, SharingError> {
+/// Checks labels, indexes and duplicates; returns the first share and the threshold.
+fn validate(shares: &[Share]) -> Result<(&Share, usize), SharingError> {
     let first = shares.first().ok_or(SharingError::NoShares)?;
-    let k = usize::from(first.threshold);
     let mut seen = [false; 256];
     for s in shares {
         if s.index == 0 {
@@ -283,6 +278,18 @@ pub fn reconstruct(shares: &[Share]) -> Result<Vec<u8>, SharingError> {
             return Err(SharingError::DuplicateIndex(s.index));
         }
     }
+    Ok((first, usize::from(first.threshold)))
+}
+
+/// Reconstruct the secret.
+///
+/// Uses the first `k` shares, then checks every further share lies on the same polynomial.
+///
+/// # Errors
+/// Mixed sets/epochs/thresholds, duplicates, too few shares, or [`SharingError::Inconsistent`]
+/// when any share disagrees (the secret is then not returned).
+pub fn reconstruct(shares: &[Share]) -> Result<Vec<u8>, SharingError> {
+    let (first, k) = validate(shares)?;
     if shares.len() < k {
         return Err(SharingError::TooFewShares {
             needed: k,
@@ -323,6 +330,9 @@ fn same_poly(base: &[&Share], extra: &Share, pos: usize) -> bool {
     }
     acc == extra.y[pos]
 }
+
+mod robust;
+pub use robust::{Recovered, max_correctable, reconstruct_robust};
 
 #[cfg(test)]
 mod tests;
