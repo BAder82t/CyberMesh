@@ -86,15 +86,40 @@ short messages are padded.
 * **Crash.** Session state (sequence numbers, keys in memory) is lost. The pools survive and
   are never reissued. A new handshake works only if both sides' cursors still agree.
 
+## Resynchronisation
+
+A lost record, or a crash with undelivered records in flight, leaves one party's cursor ahead of
+the other's copy of the same pool; the next handshake reports `OutOfStep` and consumes nothing.
+`Endpoint::sync_message` gives the party's four cursors (no secrets) and `Endpoint::resync`
+takes the peer's message and, for each of the four pools, **burns forward to the larger of the
+two cursors**. Cursors never move backwards, so after both parties apply it the pair is in step
+and a new handshake works. A session, even a terminated one, returns its pools with
+`Session::into_endpoint`.
+
+Why it needs no authentication for safety: every byte below a party's cursor is already spent or
+erased on that side, so burning forward can only waste material; it cannot make a pad usable
+twice or reveal anything. A forged or replayed sync message can only persuade a party to burn
+material (denial of service), bounded by: a target beyond the pool's provisioned size is refused
+(`ResyncExceedsPool`), the caller's `max_burn` per pool (`ResyncExceedsPolicy`), and a gap no
+sequence of records can produce (under 8 bytes) is refused (`Misaligned`). All four targets are
+validated before anything is burned. A stale message moves nothing; applying the same exchange
+twice is a no-op. If a lie leaves the pair out of step, the next authenticated handshake detects
+it and another honest exchange heals it; the cost is only burned material. Run it with no
+session active.
+
+Tested: a lost record, losses in both directions and a crash with records in flight, a session
+terminated by tampering, idempotence, stale messages, forged claims (beyond the pool, over
+policy, misaligned, within policy then healed), erased bytes on disk, and a property test over
+random loss patterns.
+
 ## Limitations
 
 * **No post-compromise recovery.** Whoever copies the unspent pools can read and forge all
   future traffic until they are replaced.
 * **Availability is not protected.** An active attacker can end any session by injecting or
   altering one record.
-* **No resynchronisation.** A lost record, or a crash with undelivered records in flight, leaves
-  the pools out of step; the handshake detects it (`OutOfStep`) and refuses. A resync protocol
-  (the lagging side burns forward to the leader's cursor) is not built.
+* **Resynchronisation is manual and burns material** (next section). It is not automatic and
+  not authenticated; it needs a quiescent pair.
 * **Cost.** One secret byte per plaintext byte (at least 8 per record) plus 16 authentication
   bytes per record, and 48 / 32 bytes per handshake. Throughput is bounded by provisioning.
 * The pools are provisioned out of band: this crate does not establish keys. ITSAKE and other

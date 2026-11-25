@@ -82,6 +82,20 @@ pub enum TransportError {
     Mac(#[from] MacError),
     #[error("randomness source failed")]
     Randomness,
+    #[error("malformed resync message")]
+    BadSync,
+    #[error("peer's cursor for the {pool} pool is beyond what was provisioned")]
+    ResyncExceedsPool { pool: &'static str },
+    #[error("resync would burn {gap} bytes of the {pool} pool, over the allowed {max}")]
+    ResyncExceedsPolicy {
+        pool: &'static str,
+        gap: u64,
+        max: u64,
+    },
+    #[error(
+        "cursors of the {pool} pool differ by {gap} bytes, which no sequence of records can cause"
+    )]
+    Misaligned { pool: &'static str, gap: u64 },
 }
 
 /// Which side of the handshake a party is.
@@ -166,6 +180,15 @@ impl Endpoint {
 
     fn dir(&self) -> u8 {
         self.role as u8
+    }
+
+    pub(crate) fn pools(&self) -> [(&'static str, &Pool); 4] {
+        [
+            ("send encryption", &self.send_enc),
+            ("send authentication", &self.send_auth),
+            ("receive encryption", &self.recv_enc),
+            ("receive authentication", &self.recv_auth),
+        ]
     }
 }
 
@@ -474,6 +497,14 @@ impl Session {
         }
     }
 
+    /// Give the pools back (for [`Endpoint::resync`] or a new session). The session's keys are
+    /// dropped and zeroized. Works on terminated sessions too.
+    #[must_use]
+    pub fn into_endpoint(self) -> Endpoint {
+        let Self { ep, .. } = self;
+        ep
+    }
+
     /// Public session identifier.
     #[must_use]
     pub fn id(&self) -> [u8; 16] {
@@ -654,4 +685,4 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
