@@ -308,3 +308,182 @@ proptest! {
         prop_assert_eq!(r.corrupted.len(), idx.len());
     }
 }
+
+// ---- proactive refresh ----------------------------------------------------------------------
+
+fn refresh_all(shares: &[Share], dealers: usize, seed: u64) -> Vec<Share> {
+    let k = usize::from(shares[0].threshold());
+    let idx: Vec<u8> = shares.iter().map(Share::index).collect();
+    let mut rng = TestRng(seed | 1);
+    let per_dealer: Vec<Vec<Delta>> = (0..dealers)
+        .map(|_| {
+            zero_sharing(k, &idx, shares[0].y.len(), SET, shares[0].epoch(), &mut rng).unwrap()
+        })
+        .collect();
+    shares
+        .iter()
+        .enumerate()
+        .map(|(h, s)| {
+            let mine: Vec<Delta> = per_dealer
+                .iter()
+                .map(|d| Delta::from_bytes(&d[h].to_bytes()).unwrap())
+                .collect();
+            refresh_share(s, &mine).unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn refresh_keeps_the_secret_changes_the_shares_and_steps_the_epoch() {
+    let secret = b"long lived secret".to_vec();
+    let old = split(&secret, 3, 5, SET, 7, &mut TestRng(21)).unwrap();
+    let new = refresh_all(&old, 3, 22);
+    assert!(new.iter().all(|s| s.epoch() == 8));
+    assert_eq!(reconstruct(&new).unwrap(), secret);
+    for (o, n) in old.iter().zip(&new) {
+        assert_ne!(o.y, n.y, "share {} must change", o.index());
+    }
+    // Refresh again, and with a different number of dealers: still the same secret.
+    let newer = refresh_all(&new, 1, 23);
+    assert_eq!(reconstruct(&newer).unwrap(), secret);
+    assert_eq!(newer[0].epoch(), 9);
+    // Robust decoding still works on refreshed shares.
+    let bad = corrupt(&newer, &[1], 5);
+    assert_eq!(reconstruct_robust(&bad).unwrap().secret, secret);
+}
+
+#[test]
+fn old_and_new_epochs_never_combine() {
+    let old = split(b"abc", 2, 4, SET, 1, &mut TestRng(24)).unwrap();
+    let new = refresh_all(&old, 2, 25);
+    let mixed = vec![old[0].clone_for_test(), new[1].clone_for_test()];
+    assert_eq!(reconstruct(&mixed).unwrap_err(), SharingError::Mismatched);
+    assert_eq!(
+        reconstruct_robust(&mixed).unwrap_err(),
+        SharingError::Mismatched
+    );
+}
+
+#[test]
+fn shares_from_before_and_after_a_refresh_reveal_nothing_together() {
+    // k = 2: an adversary holds holder 1's OLD share and holder 2's NEW share (the label check
+    // would stop it combining them, so we model the strongest case: it ignores labels).
+    // For a fixed secret the pair of raw values takes every one of the 65,536 combinations
+    // exactly once as the dealing randomness (a1, d1) varies, so the pair is independent of the
+    // secret.
+    let pair_set = |s: u8| {
+        let mut seen = vec![false; 1 << 16];
+        for a1 in 0..=255u8 {
+            for d1 in 0..=255u8 {
+                let old1 = s ^ mul(a1, 1);
+                let new2 = (s ^ mul(a1, 2)) ^ mul(d1, 2); // old share at x=2 plus delta at x=2
+                seen[usize::from(old1) << 8 | usize::from(new2)] = true;
+            }
+        }
+        seen.iter().filter(|&&b| b).count()
+    };
+    assert_eq!(pair_set(0), 65_536);
+    assert_eq!(pair_set(77), 65_536);
+}
+
+#[test]
+fn a_dishonest_dealer_silently_changes_the_secret() {
+    // Documented limit: plain sharing cannot tell. The dealer shares a non-zero constant.
+    let secret = vec![10, 20, 30];
+    let old = split(&secret, 2, 3, SET, 1, &mut TestRng(26)).unwrap();
+    let idx: Vec<u8> = old.iter().map(Share::index).collect();
+    let evil: Vec<Delta> = deal(&[1, 1, 1], 2, &idx, SET, 1, &mut TestRng(27))
+        .unwrap()
+        .into_iter()
+        .map(Delta)
+        .collect();
+    let new: Vec<Share> = old
+        .iter()
+        .zip(&evil)
+        .map(|(s, d)| refresh_share(s, std::slice::from_ref(d)).unwrap())
+        .collect();
+    let got = reconstruct(&new).unwrap();
+    assert_eq!(
+        got,
+        vec![10 ^ 1, 20 ^ 1, 30 ^ 1],
+        "secret shifted, no error raised"
+    );
+    assert_ne!(got, secret);
+}
+
+#[test]
+fn refresh_rejects_wrong_or_mismatched_deltas() {
+    let old = split(b"xyz", 2, 3, SET, 5, &mut TestRng(28)).unwrap();
+    let idx: Vec<u8> = old.iter().map(Share::index).collect();
+    let good = zero_sharing(2, &idx, 3, SET, 5, &mut TestRng(29)).unwrap();
+    assert_eq!(
+        refresh_share(&old[0], &[]).unwrap_err(),
+        SharingError::NoShares
+    );
+    // Delta for another holder.
+    assert_eq!(
+        refresh_share(&old[0], std::slice::from_ref(&good[1])).unwrap_err(),
+        SharingError::Mismatched
+    );
+    // Wrong epoch, set, threshold, length.
+    let w = |k, len, set, ep| zero_sharing(k, &idx, len, set, ep, &mut TestRng(30)).unwrap();
+    for bad in [
+        w(2, 3, SET, 4),
+        w(2, 3, [1; 16], 5),
+        w(3, 3, SET, 5),
+        w(2, 4, SET, 5),
+    ] {
+        assert_eq!(
+            refresh_share(&old[0], std::slice::from_ref(&bad[0])).unwrap_err(),
+            SharingError::Mismatched
+        );
+    }
+    // Epoch counter cannot wrap around.
+    let top = split(b"x", 2, 3, SET, u32::MAX, &mut TestRng(31)).unwrap();
+    let d = zero_sharing(2, &idx, 1, SET, u32::MAX, &mut TestRng(32)).unwrap();
+    assert_eq!(
+        refresh_share(&top[0], std::slice::from_ref(&d[0])).unwrap_err(),
+        SharingError::EpochOverflow
+    );
+    // Bad dealing parameters.
+    assert!(zero_sharing(1, &idx, 3, SET, 0, &mut TestRng(1)).is_err());
+    assert!(zero_sharing(2, &[1, 1, 2], 3, SET, 0, &mut TestRng(1)).is_err());
+    assert!(zero_sharing(2, &[0, 1, 2], 3, SET, 0, &mut TestRng(1)).is_err());
+    assert!(zero_sharing(2, &idx, 0, SET, 0, &mut TestRng(1)).is_err());
+    assert!(zero_sharing(2, &idx, 3, SET, 0, &mut Failing).is_err());
+}
+
+#[test]
+fn deltas_and_shares_cannot_be_confused_on_the_wire() {
+    let old = split(b"wire", 2, 3, SET, 1, &mut TestRng(33)).unwrap();
+    let idx: Vec<u8> = old.iter().map(Share::index).collect();
+    let d = zero_sharing(2, &idx, 4, SET, 1, &mut TestRng(34)).unwrap();
+    assert_eq!(Delta::from_bytes(&d[0].to_bytes()).unwrap(), d[0]);
+    assert!(
+        Share::from_bytes(&d[0].to_bytes()).is_err(),
+        "delta parsed as share"
+    );
+    assert!(
+        Delta::from_bytes(&old[0].to_bytes()).is_err(),
+        "share parsed as delta"
+    );
+    assert!(Delta::from_bytes(&[]).is_err());
+    assert!(!format!("{:?}", d[0]).contains("y:"));
+}
+
+proptest! {
+    #[test]
+    fn refresh_roundtrip(secret in proptest::collection::vec(any::<u8>(), 1..24),
+                         k in 2usize..5, extra in 0usize..5, dealers in 1usize..4,
+                         seed in any::<u64>(), rounds in 1usize..4) {
+        let n = k + extra;
+        let mut shares = split(&secret, k, n, SET, 0, &mut TestRng(seed | 1)).unwrap();
+        for r in 0..rounds {
+            shares = refresh_all(&shares, dealers, seed.wrapping_add(r as u64));
+        }
+        prop_assert_eq!(shares[0].epoch(), rounds as u32);
+        prop_assert_eq!(reconstruct(&shares).unwrap(), secret.clone());
+        // Any k of them suffice.
+        prop_assert_eq!(reconstruct(&take(&shares, &(0..k).collect::<Vec<_>>())).unwrap(), secret);
+    }
+}
