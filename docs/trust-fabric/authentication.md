@@ -49,10 +49,34 @@ is cited, not re-proved here; the statement has had no independent review.
 * **Not replay or order protection by itself.** It authenticates exactly the bytes given.
   Binding session id, direction and sequence number into those bytes is the transport's job
   (not built yet).
-* **Not yet attached to secret sharing.** Authenticating shares so a holder's wrong share is
-  rejected before decoding needs pairwise keys between the dealer and each holder; that
-  integration is not built, so Reed-Solomon decoding in `cybermesh-sharing` is still not
-  protected against more wrong shares than it can correct.
+* **Shares are authenticated separately**, see the next section.
 * Key material is consumed: authentication costs 16 bytes of pad per message plus the key.
 * The multiplication has no secret-dependent branches or tables, but there has been no timing
   review, and `unsafe` is forbidden but compiler output has not been inspected.
+
+## Authenticated shares (`shares` module)
+
+Information checking in the Rabin-Ben-Or style. A dealer tags each share of a sharing with a MAC
+key the holder never sees; the verifier who will reconstruct holds a copy of the same material
+from a pairwise `Authentication` pool. The holder keeps `(share, tag)` and presents both.
+
+* One reservation per dealing, `16 * (1 + n)` bytes: a fresh hash key and one pad per holder
+  slot (slot = share index - 1). The authenticated bytes are a domain string, the pool id, the
+  block offset and the share's full encoding (set, epoch, threshold, index, length, data), so a
+  tag cannot be moved to another share, index, set, epoch or dealing.
+* The verifier checks every presented share and drops the ones that fail **before**
+  reconstruction, then reconstructs from the authentic ones, cross-checking any beyond the
+  threshold. The result is the dealer's secret or an error. With 3-of-5 shares and any two
+  altered, all 10 combinations recover the real secret and name the bad shares; plain
+  Reed-Solomon decoding returned a wrong secret for 6 of those 10 (`limitations.md`). With three
+  altered the result is `TooFewAuthentic`, never a wrong secret.
+* Every mismatch counts against a failure budget; a spent budget retires the dealing's material.
+
+Limits: a valid tag only says the dealer issued this share unchanged. A **dishonest dealer** that
+tags shares of different polynomials is caught only when more than `k` shares are presented (the
+consistency check); with exactly `k` it goes unnoticed (a test shows both). Verifiable secret
+sharing is not built. Only the verifier holding the material can check a tag (no public
+verification), and each verifier needs its own pairwise material. **Proactively refreshed
+shares carry no tag**: authenticated refresh is not built, and a refreshed sharing must be
+re-dealt to be authenticated. The verifier's block lives in memory only; if it is lost the
+dealing can no longer be checked and verification fails closed.
