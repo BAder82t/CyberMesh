@@ -39,16 +39,18 @@
 //!
 //! Fail-closed means availability is not protected: an active network attacker can end any
 //! session. Sessions are strictly in-order over a reliable byte transport; a lost record
-//! desynchronises the pools and the pair needs fresh material or a (not yet built) resync. The
+//! desynchronises the pools; [`Endpoint::resync`] brings them back by burning forward. The
 //! number of bytes sent is limited by the pool size: confidentiality costs as many secret bytes
 //! as plaintext bytes, plus 16 bytes of authentication pad per record.
 
 #![forbid(unsafe_code)]
 
 mod profile;
+mod resync;
 mod session;
 
 pub use profile::SecurityProfile;
+pub use resync::{Cursors, ResyncReport, SYNC_LEN};
 pub use session::{
     Endpoint, Initiator, MAX_RECORD_DATA, Opened, Responder, Role, Session, TransportError,
 };

@@ -4,10 +4,10 @@ use cybermesh_entropy::{PoolId, Provenance};
 use proptest::prelude::*;
 use std::path::Path;
 
-const IT: SecurityProfile = SecurityProfile::InformationTheoretic;
+pub(crate) const IT: SecurityProfile = SecurityProfile::InformationTheoretic;
 
 /// xorshift fixture bytes (never zero). Test fixture only; NOT secret randomness.
-fn fixture(tag: u8, n: usize) -> Vec<u8> {
+pub(crate) fn fixture(tag: u8, n: usize) -> Vec<u8> {
     let mut s = 0x9e37_79b9_7f4a_7c15u64 ^ (u64::from(tag) << 32);
     (0..n)
         .map(|_| {
@@ -20,10 +20,10 @@ fn fixture(tag: u8, n: usize) -> Vec<u8> {
 }
 
 // Pool tags: initiator->responder encryption/authentication, responder->initiator ditto.
-const IR_ENC: u8 = 1;
-const IR_AUTH: u8 = 2;
-const RI_ENC: u8 = 3;
-const RI_AUTH: u8 = 4;
+pub(crate) const IR_ENC: u8 = 1;
+pub(crate) const IR_AUTH: u8 = 2;
+pub(crate) const RI_ENC: u8 = 3;
+pub(crate) const RI_AUTH: u8 = 4;
 
 fn make(dir: &Path, tag: u8, enc: usize, auth: usize, prov: Provenance) -> Pool {
     let (purpose, n) = if tag == IR_ENC || tag == RI_ENC {
@@ -34,18 +34,18 @@ fn make(dir: &Path, tag: u8, enc: usize, auth: usize, prov: Provenance) -> Pool 
     Pool::create(dir, PoolId([tag; 16]), purpose, prov, &fixture(tag, n)).unwrap()
 }
 
-fn open(dir: &Path, tag: u8) -> Pool {
+pub(crate) fn open(dir: &Path, tag: u8) -> Pool {
     Pool::open(dir, PoolId([tag; 16])).unwrap()
 }
 
 /// Two parties, each with its own directory holding identical copies of the four pools.
-struct Rig {
-    di: tempfile::TempDir,
-    dr: tempfile::TempDir,
+pub(crate) struct Rig {
+    pub(crate) di: tempfile::TempDir,
+    pub(crate) dr: tempfile::TempDir,
 }
 
 impl Rig {
-    fn new(enc: usize, auth: usize) -> Self {
+    pub(crate) fn new(enc: usize, auth: usize) -> Self {
         let (di, dr) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         for d in [&di, &dr] {
             for t in [IR_ENC, IR_AUTH, RI_ENC, RI_AUTH] {
@@ -54,7 +54,7 @@ impl Rig {
         }
         Self { di, dr }
     }
-    fn ep(&self, role: Role) -> Endpoint {
+    pub(crate) fn ep(&self, role: Role) -> Endpoint {
         let (d, se, sa, re, ra) = match role {
             Role::Initiator => (&self.di, IR_ENC, IR_AUTH, RI_ENC, RI_AUTH),
             Role::Responder => (&self.dr, RI_ENC, RI_AUTH, IR_ENC, IR_AUTH),
@@ -69,7 +69,7 @@ impl Rig {
         )
         .unwrap()
     }
-    fn connect(&self) -> (Session, Session) {
+    pub(crate) fn connect(&self) -> (Session, Session) {
         let (ini, hello) = Initiator::start(self.ep(Role::Initiator)).unwrap();
         let (res, reply) = Responder::accept(self.ep(Role::Responder), &hello).unwrap();
         let (si, fin) = ini.finish(&reply).unwrap();
@@ -77,7 +77,7 @@ impl Rig {
     }
 }
 
-fn big() -> Rig {
+pub(crate) fn big() -> Rig {
     Rig::new(1 << 18, 1 << 12)
 }
 
