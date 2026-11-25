@@ -2,6 +2,8 @@
 use super::*;
 use proptest::prelude::*;
 
+const HEADER: usize = super::HEADER;
+
 /// Deterministic xorshift for tests only. NOT secret randomness.
 struct TestRng(u64);
 impl RandomSource for TestRng {
@@ -194,5 +196,115 @@ proptest! {
         for i in (1..n).rev() { p = p.wrapping_mul(6364136223846793005).wrapping_add(1); idx.swap(i, (p >> 33) as usize % (i + 1)); }
         idx.truncate(k);
         prop_assert_eq!(reconstruct(&take(&shares, &idx)).unwrap(), secret);
+    }
+}
+
+fn corrupt(v: &[Share], bad: &[usize], salt: u8) -> Vec<Share> {
+    v.iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut b = s.to_bytes();
+            if bad.contains(&i) {
+                for (j, byte) in b[HEADER..].iter_mut().enumerate() {
+                    *byte ^= salt.wrapping_add(j as u8).wrapping_mul(37) | 1;
+                }
+            }
+            Share::from_bytes(&b).unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn robust_corrects_every_placement_up_to_the_bound() {
+    // n = 7, k = 3, all given: e = 2. Every pair of wrong shares is corrected and named.
+    let secret = b"robust secret".to_vec();
+    let shares = split(&secret, 3, 7, SET, 1, &mut TestRng(11)).unwrap();
+    for a in 0..7 {
+        for b in a..7 {
+            let bad: Vec<usize> = if a == b { vec![a] } else { vec![a, b] };
+            let r = reconstruct_robust(&corrupt(&shares, &bad, 5 + a as u8)).unwrap();
+            assert_eq!(r.secret, secret, "bad {bad:?}");
+            let want: Vec<u8> = bad.iter().map(|&i| shares[i].index()).collect();
+            assert_eq!(r.corrupted, want);
+        }
+    }
+    let clean = reconstruct_robust(&shares).unwrap();
+    assert_eq!(clean.secret, secret);
+    assert!(clean.corrupted.is_empty());
+}
+
+#[test]
+fn robust_respects_the_reed_solomon_bound_with_missing_shares() {
+    // n = 9, k = 3. Drop s = 2 shares, so m = 7 and e = 2: 2e + s = 6 <= n - k = 6.
+    let secret = vec![1, 2, 3, 250];
+    let shares = split(&secret, 3, 9, SET, 4, &mut TestRng(12)).unwrap();
+    let given: Vec<Share> = take(&shares, &[0, 2, 3, 4, 6, 7, 8]);
+    let r = reconstruct_robust(&corrupt(&given, &[1, 5], 9)).unwrap();
+    assert_eq!(r.secret, secret);
+    assert_eq!(r.corrupted.len(), 2);
+}
+
+#[test]
+fn robust_corrects_a_share_wrong_in_one_byte_only() {
+    let secret = b"abcdef".to_vec();
+    let shares = split(&secret, 2, 5, SET, 1, &mut TestRng(13)).unwrap();
+    let mut bytes = shares[3].to_bytes();
+    bytes[HEADER + 2] ^= 0x40;
+    let mut v = take(&shares, &[0, 1, 2]);
+    v.push(Share::from_bytes(&bytes).unwrap());
+    v.push(take(&shares, &[4]).remove(0));
+    let r = reconstruct_robust(&v).unwrap();
+    assert_eq!(r.secret, secret);
+    assert_eq!(r.corrupted, vec![shares[3].index()]);
+}
+
+#[test]
+fn robust_fails_closed_beyond_the_bound_and_on_bad_input() {
+    // n = 5, k = 3: e = 1. Two wrong shares exceed the bound.
+    let secret = b"beyond".to_vec();
+    let shares = split(&secret, 3, 5, SET, 1, &mut TestRng(14)).unwrap();
+    let mut returned_wrong = 0;
+    for a in 0..5 {
+        for b in a + 1..5 {
+            match reconstruct_robust(&corrupt(&shares, &[a, b], 3)) {
+                Err(SharingError::TooManyErrors { limit }) => assert_eq!(limit, 1),
+                Ok(r) if r.secret == secret => panic!("cannot have corrected {a},{b}"),
+                Ok(_) => returned_wrong += 1,
+                Err(e) => panic!("{e}"),
+            }
+        }
+    }
+    // Past the bound a wrong secret is possible and silent (documented). Pin the measured
+    // count for this fixed seed so a decoder change is noticed.
+    assert_eq!(returned_wrong, 6, "past-bound wrong decodes of 10 pairs");
+    assert_eq!(max_correctable(5, 3), 1);
+    assert_eq!(max_correctable(2, 3), 0);
+    assert_eq!(
+        reconstruct_robust(&take(&shares, &[0, 1])).unwrap_err(),
+        SharingError::TooFewShares { needed: 3, got: 2 }
+    );
+    assert_eq!(reconstruct_robust(&[]).unwrap_err(), SharingError::NoShares);
+    let dup = vec![take(&shares, &[0]).remove(0), take(&shares, &[0]).remove(0)];
+    assert_eq!(
+        reconstruct_robust(&dup).unwrap_err(),
+        SharingError::DuplicateIndex(1)
+    );
+}
+
+proptest! {
+    #[test]
+    fn robust_roundtrip(secret in proptest::collection::vec(any::<u8>(), 1..24),
+                        k in 2usize..5, extra in 0usize..6, seed in any::<u64>(),
+                        pick in any::<u64>(), salt in any::<u8>()) {
+        let n = k + extra;
+        let e = (n - k) / 2;
+        let shares = split(&secret, k, n, SET, 2, &mut TestRng(seed | 1)).unwrap();
+        let mut idx: Vec<usize> = (0..n).collect();
+        let mut p = pick | 1;
+        for i in (1..n).rev() { p = p.wrapping_mul(6364136223846793005).wrapping_add(1); idx.swap(i, (p >> 33) as usize % (i + 1)); }
+        idx.truncate(e);
+        let r = reconstruct_robust(&corrupt(&shares, &idx, salt)).unwrap();
+        prop_assert_eq!(&r.secret, &secret);
+        prop_assert_eq!(r.corrupted.len(), idx.len());
     }
 }
