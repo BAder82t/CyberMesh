@@ -1,0 +1,19 @@
+[package]
+name = "cybermesh-private-compute"
+description = "Experimental information-theoretic secret-shared computation (BGW-style baseline) for the CyberMesh Trust Fabric"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cybermesh-sharing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

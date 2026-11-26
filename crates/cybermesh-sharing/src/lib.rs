@@ -360,6 +360,21 @@ fn same_poly(base: &[&Share], extra: &Share, pos: usize) -> bool {
     acc == extra.y[pos]
 }
 
+/// GF(2^8) arithmetic (polynomial `x^8 + x^4 + x^3 + x + 1`), exposed so protocols built on these
+/// shares compute in the same field. Addition and subtraction are both XOR.
+pub mod gf256 {
+    /// Product, without secret-dependent branches.
+    #[must_use]
+    pub fn mul(a: u8, b: u8) -> u8 {
+        super::mul(a, b)
+    }
+    /// Multiplicative inverse; `inv(0)` is 0.
+    #[must_use]
+    pub fn inv(a: u8) -> u8 {
+        super::inv(a)
+    }
+}
+
 mod refresh;
 mod robust;
 pub use refresh::{Delta, refresh_share, zero_sharing};

@@ -897,6 +897,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-private-compute"
+version = "0.3.7"
+dependencies = [
+ "cybermesh-sharing",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "cybermesh-protocol"
 version = "0.3.7"
 dependencies = [
