@@ -8,7 +8,7 @@ message. It does **not** model the handshake's transcript binding, the key sched
 session, timing, or cryptography (the MAC is ideal, see below). Issue #3 in `known-issues.md`
 (no composable security proof, no machine-checked model of the whole handshake) stays open.
 
-Files: `formal/tla/TrustFabricResync.tla`, eight `.cfg` files, and `formal/tla/run.sh`, which runs
+Files: `formal/tla/TrustFabricResync.tla`, sixteen `.cfg` files, and `formal/tla/run.sh`, which runs
 every configuration and checks each gives the **expected** result (needs Java and `tla2tools.jar`;
 run with TLC 2.19 from the tlaplus v1.7.4 release, a file whose checksum I did not compare with an
 upstream value).
@@ -43,6 +43,11 @@ offsets equal its copies; it accepts a sync message only if the message's slot i
 | `unauth` / `unauth_overrun` | the sync message has no MAC (the design before #65) | no forgery accepted; no cursor overrun | **violated**: a forged sync burns the receiver's copy past the sender's own cursor, 3 steps |
 | `restore` / `restore_pad` | one restore from an earlier backup | no authentication slot reused; no encryption pad reused | **violated**: a party that sends, is restored, and sends again reuses both |
 | `discipline` / `discipline_pad` | as above, but a restored party sends nothing until it has **applied a peer sync** | same | **violated**, see the finding below |
+| `instep_discipline` / `_pad` | as `discipline`, restore only when the peer has seen everything the party sent, no loss, `MaxSends = 3` | same | **violated**: the stale-sync finding below, without any loss involved |
+| `fresh_instep_discipline` | as above, **plus a nonce challenge** (a sync is accepted only as the answer to a nonce the receiver chose after restarting) | no slot reuse, no forgery | **holds** (316,665 states, depth 14) |
+| `fresh_instep_nodiscipline` | nonce challenge, but a restored party may send before it has synced | same | **violated**: the restored party speaks first |
+| `fresh_discipline` | nonce challenge, restore allowed while a message of the party's is lost or in flight | same | **violated**: see "What freshness does not fix" |
+| `fresh_safe`, `fresh_reach`, `fresh_instep_recovers` | nonce challenge, no restore / recovery reachability | holds / reachable | as expected |
 | `reach` | no restore | "lose a message, apply a sync, end in step" is reachable | reachable (the property is expected to be violated, which shows the healing state exists) |
 
 The bounds are `MaxC = 3` slots per pool and `MaxSends = 4` messages, one restore. TLC finishes the
@@ -66,12 +71,50 @@ initiator's send cursors stay behind what it had already used. The cause is that
 authenticates the sender's cursors but **not that they are current**, and the stale check only
 compares the message's offset with the receiver's own (possibly rolled-back) copy. An attacker who
 replays an old message from the peer, or an ordinary delay, produces the same state. **This is not
-fixed here.** A fix needs a freshness input (a counter the restore cannot roll back, which is the
-open part of #1), not a tweak to the message. The register and `transport-protocol.md` now say so.
+fixed in code here.** An earlier version of this page, and the register, said a fix needs a counter a
+restore cannot roll back. **That was too strong**, and is corrected: the model shows that a **nonce
+challenge** closes this particular hole (next section).
 
 The discipline configurations also assume an oracle that tells a party it was restored. The real
 code has none, so even the procedure that the model shows to be insufficient cannot be followed
 reliably.
+
+## A candidate fix, modelled but not implemented: a nonce challenge
+
+A party about to resynchronise picks a fresh random **nonce** (public, needs uniqueness, not secrecy)
+and sends it; the peer's sync message covers the nonce in its one-time tag; the requester accepts
+only a message that echoes the nonce it is waiting for, and forgets the nonce when it restarts. An old
+genuine message cannot match a nonce chosen after the restore. Under the bounds above, with the nonce,
+a restore from an in-step state, no loss, and a restored party that sends nothing until it has
+applied a fresh sync, **no slot is reused and no forgery is accepted** (`fresh_instep_discipline`,
+exhaustive for those bounds). Removing the nonce (`instep_discipline`) or the discipline
+(`fresh_instep_nodiscipline`) each brings a violation back, so both are needed.
+
+Because the discipline here is "send nothing until a fresh sync has been applied", a party would run
+the request and response **at every start**, before any record, hello or sync of its own, so that it
+needs no way of knowing it was restored. The model gives a restored party an oracle (it is
+quarantined by the restore action); the start-up rule above is the proposal for removing the oracle and
+**is not itself modelled**: how two parties that both restart and both wait for the other are
+sequenced is not settled.
+
+### What freshness does not fix
+
+* **A message of the restored party's that was lost or still in flight.** Its slot was used and seen on
+  the wire, but the peer never accepted it, so the peer's copy cannot tell the restored party. It reuses
+  that slot after the restore (`fresh_discipline`). No message exchange can fix this: it needs durable
+  local state the restore cannot undo, which is the open part of #1.
+* **Both parties restored to the same moment.** Both give old cursors; nothing differs.
+* **Nonce uniqueness is an assumption.** Restoring a whole virtual machine can also restore the random
+  number generator's state and a nonce already chosen; the model assumes the restart gives a new,
+  never-used nonce.
+* **A restored party's first attempt before it knows** (a hello or sync made from reused material)
+  is not prevented by the start-up rule if the party was not yet started that way.
+* **A forged request** makes the peer spend 32 authentication bytes: a small denial of service that needs
+  a rate limit or a policy.
+
+Bounds for the restore pair: `MaxSends = 3`, `MaxNonce = 2`, no loss; with four messages the search did
+not finish in the time I gave it (about 2.1 million states and a growing queue), so it is a bound, not a
+proof for larger ones.
 
 ## What this does not show
 
