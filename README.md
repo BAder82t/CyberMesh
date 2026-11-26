@@ -50,6 +50,17 @@ the [roadmap](docs/roadmap.md).
 | Colluding or compromised workers trying to get benign domains blocked | Poisoned reference feeds that the verifier itself trusts (mitigated, not eliminated) |
 | Network outages (cached, still-valid releases keep working offline) | Users who dismiss advisory warnings |
 
+## Maturity at a glance
+
+| Capability | Status |
+|---|---|
+| Signed tasks, recomputation-based verification, co-signed releases, offline verification | Implemented and tested, including against adversarial workers. Internal reviews only; **no external audit** |
+| Certificate Transparency monitoring | Implemented; the held-out evaluation is pending (feed collection ends 2026-11-28), see [docs/ct-evaluation.md](docs/ct-evaluation.md) |
+| Lexical phishing detection | Implemented; early detection is **marginal** (4.7 % of unlisted phishing domains in the held-out set, [docs/evaluation.md](docs/evaluation.md)) |
+| Nodes run by independent organisations | **Not yet.** So far every node has been run by one party; the [pilot](docs/pilot.md) is the next step |
+| Distributed application hosting, failover, replicated state | **Not implemented.** A separate feasibility spike is planned (see above) |
+| Information-theoretic "Trust Fabric" crates | **Experimental and unaudited**, not used by anything above; see the next section |
+
 ## Architecture at a glance
 
 ### Implemented in v0.3.7
@@ -107,6 +118,38 @@ Details: [docs/architecture.md](docs/architecture.md) · protocol: [docs/protoco
 
 **Organisations interested in running a node:** see the [pilot invitation](docs/pilot.md), the [operator guide](docs/operator-guide.md) and, for your security team, [what running a node exposes you to](docs/node-risk.md).
 
+## Experimental: the Trust Fabric
+
+Alongside the network above, the workspace holds a **research layer** that explores building blocks whose
+security does not rest on computational assumptions: secret sharing, a pool of one-time secret material,
+one-time-pad transport with Wegman-Carter authentication, trust-aware routing across independent
+administrative domains, and secret-shared computation. It is a different question from the one the
+network answers (who may be trusted to compute and publish), and **nothing in the node, the command-line
+tool, the browser extension or any release depends on it**. The crates are workspace members and are built
+and tested with `cargo test --workspace`; none has been released, tagged or published separately.
+
+| Crate | What it is | Main limit |
+|---|---|---|
+| `cybermesh-sharing` | Shamir sharing over GF(2^8), Reed-Solomon robust decoding, proactive refresh | Past its error bound the decoder can return a wrong secret silently; a dishonest dealer is not detected |
+| `cybermesh-entropy` | Pool of pre-shared secret material, spent once and erased | A restored backup resurrects spent material; provenance is the operator's claim |
+| `cybermesh-trust` | One-time MACs, authenticated shares, trust policy and approvals | Pairwise symmetric tags: not publicly verifiable |
+| `cybermesh-transport` | Information-theoretic sessions, handshake and resynchronisation | One secret byte per plaintext byte; handshake unproved; **not a TLS replacement** |
+| `cybermesh-routing` | Min-cost routing over domain-disjoint paths, secret-flow limits | Independence is only what the domain labels say |
+| `cybermesh-private-compute` | BGW-style computation on secret shares | Semi-honest only; simulated locally |
+| `cybermesh-sim` | Deterministic simulator of routing and budgets | Simulated results, not measurements of real infrastructure |
+
+**What this is not.** It is not audited, no human domain expert has reviewed it, and it is not ready to
+protect real traffic: the [known-issues register](docs/trust-fabric/known-issues.md) lists two **critical**
+open problems (backup restoration; synchronisation between peers) and a third critical one, an
+unproved handshake. The security statements are made only inside the stated models; a bounded TLA+ model
+of pool use and resynchronisation found, and then helped close, one real hole, and it is a bounded check,
+not a proof. The [literature review](docs/trust-fabric/literature-review.md) records what the cited sources
+say and what could not be read.
+
+Start with [docs/trust-fabric/known-issues.md](docs/trust-fabric/known-issues.md), then
+[limitations](docs/trust-fabric/limitations.md), [security profiles](docs/trust-fabric/security-profiles.md)
+and the [formal model](docs/trust-fabric/formal-model.md).
+
 ## Quick start
 
 Requirements: Rust 1.98.1 (pinned via `rust-toolchain.toml`), Python 3 (helper scripts), and optionally Docker and Node 22 (browser extension).
@@ -142,6 +185,8 @@ test page for a fictional bank — to see the warning. A step-by-step walkthroug
 | `crates/cybermesh-anchor` | RFC 9162 Merkle log and proofs, anchoring trait, local test chain, OpenTimestamps codec/client |
 | `crates/cybermesh-network` | Permissioned libp2p gossipsub transport (Noise, allowlist, rate limits, bounded queues) |
 | `crates/cybermesh-node` | Worker runtime with resource governor; coordinator and independent verifier runtimes |
+| `crates/cybermesh-sharing`, `-entropy`, `-trust`, `-transport`, `-routing`, `-private-compute`, `-sim` | Experimental Trust Fabric research layer, unaudited and not used by the network (see above) |
+| `formal/tla` | TLA+ model of pool use and resynchronisation, with a script that checks every configuration gives its expected result |
 | `apps/cybermesh-cli` | `cybermesh` command-line tool |
 | `apps/browser-extension` | Chromium MV3 extension (offline verification, warnings, strict mode) |
 | `tests/` | End-to-end, adversarial and performance tests over real libp2p |

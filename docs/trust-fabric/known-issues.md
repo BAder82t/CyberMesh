@@ -1,6 +1,6 @@
 # Trust Fabric: known issues register
 
-Status: experimental, unaudited. The first two issues are **Critical**: until they are closed,
+Status: experimental, unaudited. The first three issues are **Critical**: until they are closed,
 nothing in the Trust Fabric should protect real traffic, and none of it has been tagged or
 released. Severity and status in the first three columns are the reviewer's classification; the
 other columns say what the repository does today and what would close the item.
