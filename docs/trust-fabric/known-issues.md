@@ -42,6 +42,12 @@ Tested (`cybermesh-transport`, `resync/tests.rs`):
   Nothing local tells a party it was restored, so it cannot know which order to use; the
   responder-first order is a procedure, not a guarantee.
   This depends on the peer being honest and not itself restored.
+* **Even the responder-first order can be defeated by a stale message.** The TLA+ model
+  (`formal-model.md`) found that a restored party accepts a **genuine but old** sync message from
+  its peer (its slot is unspent in the restored copy), which burns nothing past what the party had
+  already used, so its next messages reuse pad and authentication material. The code does the same
+  (`a_stale_genuine_sync_is_accepted_by_a_restored_side_and_does_not_heal_it`). The message
+  authenticates cursors, not their freshness; a fix needs a counter the restore cannot roll back.
 * **Both parties restored to the same moment: not detected.** Their cursors agree, the
   handshake succeeds, and the same plaintext meets the same pad, giving the same ciphertext
   (`restoring_both_parties_is_not_detected_and_reuses_the_pad`). With two different plaintexts
@@ -81,9 +87,10 @@ backwards), bounded by pool size and a caller policy. Not built or open:
 ## 3. The handshake
 
 The protocol (hello, hello, finished, with the MAC covering both hellos) has unit,
-mutation and property tests, and its limits are written down. It has **no formal model, no
-composable security proof, no analysis of the whole protocol against an active adversary, and
-no independent review**. Until it does, "information-theoretically secure handshake" is a design
+mutation and property tests, and its limits are written down. A bounded TLA+ model covers pool
+cursors and resynchronisation only (`formal-model.md`). It has **no formal model of the handshake
+itself, no composable security proof, no analysis of the whole protocol against an active adversary,
+and no independent review**. Until it does, "information-theoretically secure handshake" is a design
 intention, not a result.
 
 ## 4 to 8

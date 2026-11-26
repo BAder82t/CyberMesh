@@ -519,6 +519,42 @@ fn a_restored_side_that_speaks_first_is_refused_as_stale_and_reuses_authenticati
     assert!(in_step(ei.cursors().unwrap(), er.cursors().unwrap()));
 }
 
+// Found by the TLA+ model (`formal/tla`): the sync message authenticates the sender's cursors but
+// not that they are current, and the stale check only compares its offset with the receiver's
+// own copy. A genuine message the peer made earlier is therefore accepted by a restored side.
+#[test]
+fn a_stale_genuine_sync_is_accepted_by_a_restored_side_and_does_not_heal_it() {
+    let rig = big();
+    let snap = snapshot(rig.di.path());
+    // The responder makes a sync message while the pair is fresh, and it is kept.
+    let stale = rig.ep(Role::Responder).sync_message().unwrap();
+    // A later, fresh exchange brings the pair back in step, so a session can run.
+    exchange(&rig.ep(Role::Initiator), &rig.ep(Role::Responder));
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    b.open(&a.seal(b"sent before the restore").unwrap())
+        .unwrap();
+    drop((a, b));
+    let ahead = rig.ep(Role::Initiator).cursors().unwrap();
+    assert!(ahead.send_enc > 0 && ahead.send_auth > 0);
+
+    // The initiator is restored, and applies the peer's message first, as the procedure says.
+    copy_files(snap.path(), rig.di.path());
+    let ei = rig.ep(Role::Initiator);
+    ei.resync(&stale, POLICY)
+        .expect("a genuine message whose slot is unspent on this side is accepted");
+    let after = ei.cursors().unwrap();
+    // But it burned nothing past what the initiator already used: the same encryption and
+    // authentication material is offered again.
+    assert!(
+        after.send_enc < ahead.send_enc,
+        "encryption pad bytes that were already used are still on offer"
+    );
+    assert!(
+        after.send_auth < ahead.send_auth,
+        "so are authentication bytes"
+    );
+}
+
 #[test]
 fn restoring_both_parties_is_not_detected_and_reuses_the_pad() {
     // The unresolved case: both copies roll back to the same moment, so their cursors agree and
