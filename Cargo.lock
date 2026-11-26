@@ -911,6 +911,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-routing"
+version = "0.3.7"
+dependencies = [
+ "cybermesh-trust",
+ "thiserror",
+]
+
+[[package]]
 name = "cybermesh-sharing"
 version = "0.3.7"
 dependencies = [

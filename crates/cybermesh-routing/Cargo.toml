@@ -1,0 +1,17 @@
+[package]
+name = "cybermesh-routing"
+description = "Experimental trust-aware, domain-disjoint, secret-budgeted routing for the CyberMesh Trust Fabric"
+version.workspace = true
+edition.workspace = true
+# Depends on cybermesh-trust -> cybermesh-entropy, which needs File::lock (Rust 1.89).
+rust-version = "1.89"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+cybermesh-trust.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
