@@ -37,6 +37,6 @@ holders; it gives no authentication and, alone, no error detection of which shar
 |---|---|
 | cybermesh-sharing (Shamir over GF(2^8), Reed-Solomon correction, proactive refresh) | implemented, unit and property tests, unaudited |
 | cybermesh-entropy (one-time pools, crash-safe cursor, erasure) | implemented, unit tests incl. crash, torn-write and concurrency, unaudited |
-| cybermesh-trust (Wegman-Carter MAC over GF(2^128), failure budget, authenticated shares) | implemented, unit and exhaustive small-field tests, unaudited; trust policy, domains and revocation not started |
+| cybermesh-trust (Wegman-Carter MAC over GF(2^128), failure budget, authenticated shares, registry, domain-threshold policy, authenticated approvals) | implemented, unit, mutation and exhaustive small-field tests, unaudited; no persistence, public verifiability or multi-verifier agreement |
 | cybermesh-transport (handshake, one-time-pad records, sequence/replay/close, fail closed) | implemented, unit, mutation and property tests, unaudited; manual resync, no key establishment |
 | cybermesh-routing, -private-compute | not started |

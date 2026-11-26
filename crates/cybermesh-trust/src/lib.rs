@@ -1,7 +1,8 @@
 //! Trust Fabric authentication (EXPERIMENTAL, unaudited).
 //!
-//! Modules: [`mac`], an information-theoretically secure message authentication code, and
-//! [`shares`], which uses it to authenticate secret shares.
+//! Modules: [`mac`], an information-theoretically secure message authentication code;
+//! [`shares`], which uses it to authenticate secret shares; and [`policy`], who may authorise
+//! what across administrative domains.
 //!
 //! The MAC is **pairwise and symmetric**: the receiver holds the same key as the sender, so a
 //! tag convinces the receiver only. It is not a signature, is not publicly verifiable and gives no
@@ -9,5 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod block;
 pub mod mac;
+pub mod policy;
 pub mod shares;
