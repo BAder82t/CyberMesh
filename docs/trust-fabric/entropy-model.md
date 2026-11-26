@@ -43,7 +43,9 @@ Files are created `0600`; opening a group- or world-accessible pool is refused.
 ## What it does not do
 
 * A restore of the whole pool directory from a backup brings the erased material back and cannot
-  be detected locally. Defence: no backups of pool directories, or an external monotonic counter.
+  be detected locally. With a live, honest peer the transport detects a one-sided restore and
+  burns past it, but a restore of both parties goes unnoticed (tested; `known-issues.md` #1).
+  Defence: no backups of pool directories, or an external monotonic counter.
 * It manages one party's copy. Peers must consume matching offsets in the same order and append
   the same replenishment; nothing here synchronises them.
 * Erasure is a file overwrite. Journaling file systems, snapshots and flash wear levelling can
