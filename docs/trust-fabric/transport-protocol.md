@@ -122,6 +122,9 @@ used**; the peer refuses such a message as stale, and its tag reuses a key and p
 message first**, which burns it forward past everything the peer has used, and only then create
 its own. Nothing local tells a party that it was restored, so this is a procedure, not a
 guarantee.
+It is not even sufficient: a genuine but **old** message from the peer is accepted by a restored side
+and burns nothing past what that side had already used, because the message authenticates cursors, not
+their freshness (found by the TLA+ model in `formal-model.md`, pinned by a test).
 
 Tested: a lost record, losses in both directions and a crash with records in flight, a session
 terminated by tampering, an in-step exchange that burns nothing, replays and stale messages,
