@@ -1,0 +1,24 @@
+[package]
+name = "cybermesh-sim"
+description = "Deterministic simulator for the CyberMesh Trust Fabric routing and secret-budget model"
+version.workspace = true
+edition.workspace = true
+# Depends on cybermesh-routing -> cybermesh-trust -> cybermesh-entropy (File::lock, Rust 1.89).
+rust-version = "1.89"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "cybermesh-sim"
+path = "src/main.rs"
+
+[dependencies]
+cybermesh-routing.workspace = true
+cybermesh-trust.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

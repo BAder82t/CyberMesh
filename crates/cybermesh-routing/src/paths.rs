@@ -76,6 +76,12 @@ impl Path {
     pub fn hops(&self) -> impl Iterator<Item = (NodeId, NodeId)> + '_ {
         self.nodes.windows(2).map(|w| (w[0], w[1]))
     }
+    /// True if every hop is usable under the constraints (links up, nodes and domains allowed,
+    /// each hop's secret budget covers `msg_bytes`).
+    #[must_use]
+    pub fn is_usable(&self, g: &Graph, c: &Constraints) -> bool {
+        self.hops().all(|(a, b)| usable(g, c, a, b))
+    }
     /// Domains the path passes through.
     #[must_use]
     pub fn domains(&self, g: &Graph) -> BTreeSet<DomainId> {

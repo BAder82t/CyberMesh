@@ -117,6 +117,43 @@ pub struct Allocation {
     pub per_link: BTreeMap<(NodeId, NodeId), u64>,
 }
 
+/// Spend `bytes_per_path` secret bytes on every hop of every path, on a graph the caller owns
+/// (several sessions can share one graph and so compete for the same budgets), all or nothing.
+///
+/// # Errors
+/// [`RoutingError::Exhausted`] for the first link that cannot cover its total demand; no budget
+/// is changed.
+pub fn allocate_paths(
+    g: &mut Graph,
+    paths: &[Path],
+    bytes_per_path: u64,
+) -> Result<Allocation, RoutingError> {
+    let mut per_link: BTreeMap<(NodeId, NodeId), u64> = BTreeMap::new();
+    for p in paths {
+        for hop in p.hops() {
+            let e = per_link.entry(hop).or_default();
+            *e = e.saturating_add(bytes_per_path);
+        }
+    }
+    for (&(a, b), &need) in &per_link {
+        let have = g.link(a, b).map_or(0, |l| l.secret_bytes);
+        if have < need {
+            return Err(RoutingError::Exhausted {
+                from: a,
+                to: b,
+                have,
+                need,
+            });
+        }
+    }
+    for (&(a, b), &need) in &per_link {
+        if let Some(l) = g.links.get_mut(&a).and_then(|m| m.get_mut(&b)) {
+            l.secret_bytes = l.secret_bytes.saturating_sub(need);
+        }
+    }
+    Ok(Allocation { per_link })
+}
+
 /// What a re-plan changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Replan {
@@ -228,33 +265,10 @@ impl Router {
     /// nothing.
     ///
     /// # Errors
-    /// [`RoutingError::Exhausted`] for the first link that cannot carry its total demand; no
+    /// [`RoutingError::Exhausted`] for the first link that cannot cover its total demand; no
     /// budget is changed.
     pub fn allocate(&mut self, bytes_per_path: u64) -> Result<Allocation, RoutingError> {
-        let mut per_link: BTreeMap<(NodeId, NodeId), u64> = BTreeMap::new();
-        for p in &self.plan.paths {
-            for hop in p.hops() {
-                let e = per_link.entry(hop).or_default();
-                *e = e.saturating_add(bytes_per_path);
-            }
-        }
-        for (&(a, b), &need) in &per_link {
-            let have = self.graph.link(a, b).map_or(0, |l| l.secret_bytes);
-            if have < need {
-                return Err(RoutingError::Exhausted {
-                    from: a,
-                    to: b,
-                    have,
-                    need,
-                });
-            }
-        }
-        for (&(a, b), &need) in &per_link {
-            if let Some(l) = self.graph.links.get_mut(&a).and_then(|m| m.get_mut(&b)) {
-                l.secret_bytes = l.secret_bytes.saturating_sub(need);
-            }
-        }
-        Ok(Allocation { per_link })
+        allocate_paths(&mut self.graph, &self.plan.paths, bytes_per_path)
     }
 
     /// One provisioning tick on every link.

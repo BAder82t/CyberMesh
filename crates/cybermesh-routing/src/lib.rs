@@ -41,7 +41,7 @@ pub use bound::wire_secret_flow;
 pub use graph::{Graph, Link, NodeId};
 pub use paths::{Constraints, Disjointness, Path, RoutingError, disjoint_paths};
 pub use plan::{
-    Allocation, Plan, Protection, Replan, Requirement, Router, SharingParameters,
+    Allocation, Plan, Protection, Replan, Requirement, Router, SharingParameters, allocate_paths,
     plan_transmission, sharing_parameters,
 };
 
