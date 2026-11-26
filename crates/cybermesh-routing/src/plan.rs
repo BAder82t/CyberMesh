@@ -46,10 +46,12 @@ pub struct SharingParameters {
 /// `k + f` without tampering; `k + t + f` with authenticated shares (each tampered path is one
 /// rejected share, so `n - t - f >= k`); `k + 2t + f` with Reed-Solomon decoding (the bound
 /// `2e + s <= n - k`). With `t` tampering and no protection the result would be wrong without any
-/// error, so that is refused. These count shares needed under the stated model; they are
-/// consequences of the sharing constructions, and the classical perfectly-secure-message-
-/// transmission bounds (`2t + 1` paths with interaction, `3t + 1` without) are the literature
-/// the numbers are consistent with (citations to be verified).
+/// error, so that is refused. These count shares needed under *our* model, in which sender and
+/// receiver already share pairwise MAC material. They are not the classical perfectly-secure-
+/// message-transmission bounds, which are for a model with **no** pre-shared secrets: as restated
+/// by Desmedt and Wang and by Spini and Zemor, and attributed there to Dolev, Dwork, Waarts and
+/// Yung, one round needs `3t + 1` paths and two or more rounds `2t + 1` (the original paper was
+/// not read; see `docs/trust-fabric/literature-review.md`).
 ///
 /// # Errors
 /// [`RoutingError::UnprotectedTampering`].

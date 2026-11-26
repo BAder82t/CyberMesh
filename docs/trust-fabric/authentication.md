@@ -20,17 +20,25 @@ Wegman-Carter: `tag = H_r(message) XOR pad`.
 
 For two different messages of at most `n` blocks the hash difference is a non-zero polynomial
 in `r` of degree at most `n + 1` (the length block makes different lengths differ; equal
-lengths differ in some block). So `H` is `(n+1)/2^128`-almost-universal. With a fresh uniform
+lengths differ in some block). Subtracting any constant keeps it non-zero of the same degree, so for
+**every** difference `d` at most `n + 1` keys give `H(m) xor H(m') = d`: `H` is
+`(n+1)/2^128`-**almost-XOR-universal**, which is what forgery needs (collision-only
+almost-universality is not enough). The same bound is proved for GHASH (McGrew and Viega, Lemma 2)
+and, for a prime field, by Bernstein (Theorem 3.3); both were read in full text
+(`literature-review.md`). With a fresh uniform
 pad per tag, tags reveal nothing about `r`, and an adversary with **unbounded computation**
 that makes `q` forgery attempts succeeds with probability at most `q (n+1) / 2^128`
 (`forgery_bound`). With the defaults (16 MiB messages, 65,536 allowed failures) that is below
 `2^-90`.
 
 Evidence: the polynomial claim is checked **exhaustively over GF(2^8)** with the same
-construction (any two different messages of up to 3 blocks collide for at most 4 of 256 keys).
-Removing the length block makes that test and the padding-ambiguity test fail. The
-Wegman-Carter step from almost-universality to unforgeability is the standard textbook one and
-is cited, not re-proved here; the statement has had no independent review.
+construction: for any two different messages of up to 3 blocks and **every** difference, at most
+4 of 256 keys produce it. Removing the length block makes that test and the padding-ambiguity test
+fail. The step from an almost-XOR-universal hash masked by a fresh one-time pad to an
+unconditionally secure MAC, with the hash key **reused** across messages, is credited to Wegman and
+Carter (1981), **whose text could not be read** for this review; Stinson's Theorem 3.2 covers the
+different, strongly-universal case. The argument above is ours and has had no independent
+review.
 
 ## What must hold
 

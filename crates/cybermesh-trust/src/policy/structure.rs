@@ -225,10 +225,13 @@ pub fn max_tolerable_loss(policy: &Policy, registry: &Registry) -> Result<usize,
     Ok(best)
 }
 
-/// The `Q^k` conditions of the general-adversary multiparty-computation literature (citation to
-/// be verified in the literature review): no `k` corruptible sets (repetition allowed) cover all
-/// the domains. `k = 2` is the usual condition for passive information-theoretic MPC with
-/// honest-majority-style guarantees, `k = 3` for active. `Err` carries the covering sets.
+/// The `Q^k` conditions on a general adversary structure: no `k` corruptible sets (repetition
+/// allowed) cover all the domains. Hirt and Maurer's abstract states, in words, that the
+/// no-two-sets-cover condition (`k = 2`) characterises **passive** adversaries and **active
+/// adversaries with a broadcast channel**, and the no-three condition (`k = 3`) **active
+/// adversaries without broadcast**; Cramer, Damgard and Maurer (Theorem 2) require `k = 2` for
+/// passive security. See `docs/trust-fabric/literature-review.md` (`hirtmaurer1997`, `cdm2000`).
+/// `Err` carries the covering sets.
 ///
 /// # Errors
 /// The `k` sets whose union is the whole domain set.

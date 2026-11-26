@@ -23,7 +23,9 @@
 //! | Communication | `n - 1` elements per input, `n(n-1)` per multiplication and per opening |
 //! | Randomness | fresh uniform secret bytes for every sharing (`RandomSource`) |
 //!
-//! Privacy against `t` semi-honest parties is the classical BGW result for this construction;
+//! Privacy against `t` semi-honest parties is the classical BGW result for this construction
+//! (thresholds `t < n/2` passive, `t < n/3` active, read in the proceedings text; see
+//! `docs/trust-fabric/literature-review.md`);
 //! the tests check it exhaustively for the sharing and for one multiplication gate on a small
 //! instance, not as a proof. **Not secure against malicious parties**: a party that deviates while
 //! re-sharing a product corrupts the result silently (a test shows it), and the output check can

@@ -6,6 +6,14 @@
 //! different epochs never combine, so what an adversary learned from fewer than `k` shares in an
 //! earlier epoch does not add up with what it learns in a later one (the mobile-adversary model).
 //!
+//! Herzberg et al. (CRYPTO 1995, Section 3.3) describe this renewal. Their **full scheme is
+//! computational**: it assumes a broadcast channel, a synchronous clock, a bounded adversary,
+//! signatures and encryption, a verifiable secret sharing (Feldman or Pedersen), erasure and
+//! `k < n/2` per period. Only the bare renewal step is information-theoretic, and only if the
+//! sub-shares are delivered perfectly secretly. This module is **the bare renewal only**: none of
+//! their detection of wrong shares or their recovery protocol (see
+//! `docs/trust-fabric/literature-review.md`, `herzberg1995proactive`).
+//!
 //! Assumptions this does NOT discharge, and which the caller must supply:
 //!
 //! * **Honest dealers.** Plain sharing is not verifiable. A dealer that shares a non-zero

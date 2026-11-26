@@ -13,7 +13,12 @@
 //! For two different messages of at most `n` blocks, the difference of their hashes is a
 //! non-zero polynomial in `r` of degree at most `n + 1` (the coefficient of `r` is the message
 //! length, so different lengths differ; equal-length messages differ in a block). It therefore
-//! vanishes for at most `n + 1` of the `2^128` keys: `H` is `(n+1)/2^128`-almost-universal.
+//! vanishes for at most `n + 1` of the `2^128` keys. Subtracting any constant `d` keeps it a non-zero
+//! polynomial of the same degree, so for **every** difference `d` at most `n + 1` keys give
+//! `H(m) xor H(m') = d`: `H` is `(n+1)/2^128`-**almost-XOR-universal**, the property forgery
+//! needs (collision-only almost-universality is not enough). McGrew and Viega's Lemma 2 proves the
+//! analogous bound for GHASH, and Bernstein's Theorem 3.3 for polynomial evaluation modulo a prime
+//! (`docs/trust-fabric/literature-review.md`).
 //! Because the pad is fresh and uniform for every tag, a tag reveals nothing about `r`, and an
 //! adversary with **unbounded computation** that sees tags and makes `q` forgery attempts
 //! succeeds with probability at most `q * (n + 1) / 2^128` ([`forgery_bound`]). This is the

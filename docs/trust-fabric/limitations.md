@@ -25,6 +25,11 @@ handshake) are in [known-issues.md](known-issues.md).
 * Field arithmetic avoids secret-dependent branches, but the crate has had no timing review
   and the final comparisons are not constant time.
 * Zeroization on drop is best effort: the compiler, swap and core dumps are outside its reach.
+* Proactive refresh (`zero_sharing`, `refresh_share`) is the bare renewal step of Herzberg et al.
+  (CRYPTO 1995, Section 3.3). **Their full scheme is computational** (broadcast, signatures and
+  encryption, Feldman or Pedersen VSS, erasure, `k < n/2` per period); only this step is
+  information-theoretic, and only with perfectly secret delivery of the sub-shares. None of their
+  detection of wrong shares or recovery protocol is implemented (`literature-review.md`).
 * Proactive refresh (`zero_sharing`, `refresh_share`) re-randomises shares of the same secret and
   steps the epoch; shares of different epochs never combine. It assumes **honest dealers**:
   a dealer that shares a non-zero polynomial silently changes the secret and every check still
