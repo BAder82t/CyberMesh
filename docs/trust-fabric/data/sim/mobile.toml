@@ -1,0 +1,26 @@
+seed = 1
+participants = 600
+domains = 40
+extra_links_per_node = 3
+latency_min_ms = 2
+latency_max_ms = 40
+initial_secret = 1048576
+replenish_per_tick = 4096
+sessions = 30
+msg_bytes = 512
+ticks = 80
+link_failure_prob = 0.0
+link_repair_ticks = 3
+domain_outage_prob = 0.0
+outage_ticks = 4
+detect_ticks = 3
+scarcity_weight = 1
+
+[requirement]
+corrupt_domains = 1
+path_failures = 0
+tampering = true
+protection = "authenticated"
+
+[adversary]
+kind = "none"

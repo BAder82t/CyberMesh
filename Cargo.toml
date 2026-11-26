@@ -14,6 +14,7 @@ members = [
     "crates/cybermesh-private-compute",
     "crates/cybermesh-routing",
     "crates/cybermesh-sharing",
+    "crates/cybermesh-sim",
     "crates/cybermesh-transport",
     "crates/cybermesh-trust",
     "apps/cybermesh-cli",
@@ -44,6 +45,7 @@ cybermesh-node = { path = "crates/cybermesh-node", version = "0.3.7" }
 cybermesh-private-compute = { path = "crates/cybermesh-private-compute", version = "0.3.7" }
 cybermesh-routing = { path = "crates/cybermesh-routing", version = "0.3.7" }
 cybermesh-sharing = { path = "crates/cybermesh-sharing", version = "0.3.7" }
+cybermesh-sim = { path = "crates/cybermesh-sim", version = "0.3.7" }
 cybermesh-transport = { path = "crates/cybermesh-transport", version = "0.3.7" }
 cybermesh-trust = { path = "crates/cybermesh-trust", version = "0.3.7" }
 

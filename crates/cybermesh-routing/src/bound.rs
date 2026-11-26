@@ -33,7 +33,9 @@ pub fn wire_secret_flow(
         return Err(RoutingError::SameEndpoints);
     }
     let ids: Vec<NodeId> = g.nodes().filter(|&n| !excluded(g, c, n)).collect();
-    let at = |n: NodeId| ids.iter().position(|&x| x == n);
+    let index: std::collections::BTreeMap<NodeId, usize> =
+        ids.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+    let at = |n: NodeId| index.get(&n).copied();
     let mut f = Flow::new(ids.len());
     for (&a, m) in &g.links {
         for (&b, l) in m {

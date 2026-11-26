@@ -78,6 +78,11 @@ impl Graph {
         }
     }
 
+    /// The nodes `n` has a link to.
+    pub fn links_of(&self, n: NodeId) -> impl Iterator<Item = &NodeId> + '_ {
+        self.links.get(&n).into_iter().flat_map(BTreeMap::keys)
+    }
+
     /// The directed link `a -> b`.
     #[must_use]
     pub fn link(&self, a: NodeId, b: NodeId) -> Option<&Link> {

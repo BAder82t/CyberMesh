@@ -938,6 +938,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cybermesh-sim"
+version = "0.3.7"
+dependencies = [
+ "cybermesh-routing",
+ "cybermesh-trust",
+ "serde",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "cybermesh-tests"
 version = "0.3.7"
 dependencies = [
