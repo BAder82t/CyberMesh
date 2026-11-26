@@ -29,6 +29,8 @@ CONSTANTS
     NoLoss,      \* TRUE: messages are never lost (they may still be replayed or delayed)
     InStepOnly,  \* TRUE: a restore happens only when the peer has seen everything the party sent
                  \* (no message of the party's is lost or in flight): the quiescent case
+    Startup,     \* TRUE: every party starts quarantined (the rule needs no oracle), not only a restored one
+    Answerers,   \* parties that may answer a sync request while quarantined
     Discipline   \* TRUE: a restored party sends nothing until it has applied a peer sync
                  \* (assumes an oracle that tells it it was restored; the real code has none)
 
@@ -64,7 +66,7 @@ Init ==
     /\ encUses = {}
     /\ sends = 0
     /\ restores = 0
-    /\ quarantine = [p \in Parties |-> FALSE]
+    /\ quarantine = [p \in Parties |-> Startup]
     /\ lost = FALSE
     /\ synced = FALSE
     /\ forgedOk = FALSE
@@ -104,7 +106,7 @@ SendHello(p) ==
 \* Under Fresh the message answers a nonce the peer issued (n is public: the adversary can relay it);
 \* otherwise it is unsolicited (nonce 0) as in the shipped protocol.
 SendSync(p, n) ==
-    /\ CanSpeak(p) /\ sends < MaxSends
+    /\ (CanSpeak(p) \/ p \in Answerers) /\ sends < MaxSends
     /\ cur[p].sa < MaxC
     /\ IF Fresh THEN n \in 1..nonces ELSE n = 0
     /\ LET c == cur[p]
@@ -224,6 +226,10 @@ NotHealed == ~(lost /\ synced /\ InStep /\ sends > 0 /\ ~forgedOk)
 
 \* Reachability check (expected to be VIOLATED): a restored party applies a fresh sync, which lifts
 \* its quarantine, and messages go on afterwards.
+\* With Startup, the pair can come out of its start-up quarantine (expected to be VIOLATED when it can,
+\* and to HOLD when the parties deadlock): both parties have applied a fresh sync.
+NeverSequenced == ~(synced /\ \A p \in Parties : ~quarantine[p])
+
 NotRecovered == ~(restores = 1 /\ synced /\ \A p \in Parties : ~quarantine[p]) \/ sends < 3
 
 =============================================================================

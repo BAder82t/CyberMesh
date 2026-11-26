@@ -12,7 +12,7 @@ The nonce challenge described below is **implemented** in `cybermesh-transport` 
 `sync_response`, `resync`). The implementation was written from the model's description and checked by
 its own tests; **the model was not re-derived from the code**, so the two can drift.
 
-Files: `formal/tla/TrustFabricResync.tla`, sixteen `.cfg` files, and `formal/tla/run.sh`, which runs
+Files: `formal/tla/TrustFabricResync.tla`, twenty-four `.cfg` files, and `formal/tla/run.sh`, which runs
 every configuration and checks each gives the **expected** result (needs Java and `tla2tools.jar`;
 run with TLC 2.19 from the tlaplus v1.7.4 release, a file whose checksum I did not compare with an
 upstream value).
@@ -119,6 +119,42 @@ sequenced is not settled.
 Bounds for the restore pair: `MaxSends = 3`, `MaxNonce = 2`, no loss; with four messages the search did
 not finish in the time I gave it (about 2.1 million states and a growing queue), so it is a bound, not a
 proof for larger ones.
+
+## Start-up sequencing: a rule that needs no oracle (modelled, not implemented)
+
+The restore configurations above give a restored party an oracle: the restore action quarantines it. The
+real code has none, so the rule has to apply to **every start**: a party sends no record and no hello
+until it has applied a fresh response to a request of its own. The model (`Startup = TRUE`: both parties
+start quarantined) asks how the first response can then be produced.
+
+| Config | What is checked | Result |
+|---|---|---|
+| `startup_none_cold` | nobody may answer a request while quarantined | **deadlock**: both parties request, nobody answers, and the pair is stuck (7 states in all) |
+| `startup_both_cold`, `startup_responder_cold` | a quarantined party may answer (both parties, or only the responder) | the pair comes out of its quarantine (the property `NeverSequenced` is violated, which is the reachability we want) |
+| `startup_both_safe`, `startup_responder_safe` | as above, one restore from an in-step state, no loss | no pad reused and no forgery accepted: **holds**, exhaustive (32,539 and 10,969 states) |
+| `startup_both_hygiene`, `startup_responder_hygiene` | the same, but asking that no authentication slot is reused | **violated**: see below |
+| `startup_both_recovers` | a restored party can recover | reachable |
+
+**What this says.** A rule that lets nobody answer while quarantined deadlocks two parties that start together, so
+somebody has to answer. Letting a quarantined party answer has a price: a restored party that answers
+uses a slot it used before the restore. In the model that is **harmless** (a hygiene failure, not a
+break): the peer was in step with the restored party at the restore, so it already spent that slot, and a
+message at a spent slot is refused as stale; a quarantined party sends no record, so no pad is reused. The
+trace is short: the responder answers during the cold start, is restored, then answers a request made
+by anyone (the nonce is public) and reuses slot 0. A role-based tie-break (only the responder may answer
+while quarantined) is enough to break the symmetry and exposes one party's answers instead of both.
+
+**What this does not show.**
+* **A message lost or in flight at the restore.** The reused slot may then be unspent at the peer, and a
+  forgery at that slot becomes possible. The start-up configurations require an in-step restore and no loss;
+  the case without them was shown to fail earlier (`fresh_discipline`) and was not repeated with the start-up
+  rule.
+* **The code does not enforce the rule.** `Initiator::start` and `Responder::accept` do not check that a
+  sync has been applied since the endpoint was opened; enforcing it (an endpoint that knows whether it
+  has synced since it was opened, and refuses to start a handshake before then) is a design change that is
+  **not made**. Until it is made, the start-up rule is a procedure.
+* Bounds as before: `MaxSends = 3`, `MaxNonce = 2`, one restore. Both parties restored to the same moment
+  is not modelled and is still not detected.
 
 ## What this does not show
 
