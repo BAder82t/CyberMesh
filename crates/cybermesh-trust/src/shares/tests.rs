@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
-use cybermesh_entropy::{Pool, Provenance};
+use cybermesh_entropy::{Pool, Provenance, Purpose};
 use cybermesh_sharing::{RandomSource, split};
 
 const SET: [u8; 16] = [3; 16];

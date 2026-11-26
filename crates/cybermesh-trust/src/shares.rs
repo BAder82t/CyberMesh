@@ -33,11 +33,11 @@
 //! * **Persistence.** The verifier's block is held in memory; if it is lost, the dealing can no
 //!   longer be checked and verification fails closed.
 
-use cybermesh_entropy::{PoolId, Purpose, Reservation};
+use cybermesh_entropy::{PoolId, Reservation};
 use cybermesh_sharing::{Share, SharingError, reconstruct};
-use zeroize::Zeroizing;
 
-use crate::mac::{MacError, MacKey, TAG_LEN, Tag};
+use crate::block::Block;
+use crate::mac::{MacError, TAG_LEN, Tag};
 
 const DOMAIN: &[u8] = b"cybermesh-trust share-auth v1";
 const BLOCK_HEADER: usize = 8 + TAG_LEN;
@@ -120,51 +120,12 @@ fn message(pool: PoolId, offset: u64, share: &Share) -> Vec<u8> {
     m
 }
 
-/// The key, the pads and where they came from. Zeroized on drop.
-struct Block {
-    pool: PoolId,
-    offset: u64,
-    key: MacKey,
-    pads: Zeroizing<Vec<u8>>,
-}
-
-impl Block {
-    fn from_reservation(res: Reservation) -> Result<Self, SharesError> {
-        let len = res.len();
-        if res.purpose() != Purpose::Authentication
-            || len < 2 * TAG_LEN
-            || !len.is_multiple_of(TAG_LEN)
-            || len / TAG_LEN - 1 > 255
-        {
-            return Err(SharesError::BadMaterial);
-        }
-        let (pool, offset) = (res.pool(), res.offset());
-        let secret = res.into_secret();
-        let mut k = [0u8; TAG_LEN];
-        k.copy_from_slice(&secret[..TAG_LEN]);
-        let key = MacKey::from_key_bytes(&k);
-        zeroize::Zeroize::zeroize(&mut k);
-        Ok(Self {
-            pool,
-            offset,
-            key,
-            pads: Zeroizing::new(secret[TAG_LEN..].to_vec()),
-        })
-    }
-
-    fn pad(&self, index: u8) -> Result<[u8; TAG_LEN], SharesError> {
-        let slot = usize::from(index)
-            .checked_sub(1)
-            .ok_or(SharesError::NoSlot(index))?;
-        let chunk = self
-            .pads
-            .chunks(TAG_LEN)
-            .nth(slot)
-            .ok_or(SharesError::NoSlot(index))?;
-        let mut p = [0u8; TAG_LEN];
-        p.copy_from_slice(chunk);
-        Ok(p)
-    }
+/// Pad of the slot for share `index` (slot = index - 1).
+fn slot_pad(block: &Block, index: u8) -> Result<[u8; TAG_LEN], SharesError> {
+    let slot = usize::from(index)
+        .checked_sub(1)
+        .ok_or(SharesError::NoSlot(index))?;
+    block.pad(slot).ok_or(SharesError::NoSlot(index))
 }
 
 /// Tag every share of a dealing with a block of `16 * (1 + n)` bytes of `Authentication`
@@ -176,11 +137,11 @@ pub fn authenticate_shares(
     shares: Vec<Share>,
     block: Reservation,
 ) -> Result<Vec<AuthShare>, SharesError> {
-    let block = Block::from_reservation(block)?;
+    let block = Block::from_reservation(block).ok_or(SharesError::BadMaterial)?;
     shares
         .into_iter()
         .map(|share| {
-            let mut pad = block.pad(share.index())?;
+            let mut pad = slot_pad(&block, share.index())?;
             let tag = block
                 .key
                 .tag_with_pad(&message(block.pool, block.offset, &share), &pad);
@@ -241,7 +202,7 @@ impl ShareChecker {
     /// [`SharesError::BadMaterial`].
     pub fn new(block: Reservation, max_failures: u32) -> Result<Self, SharesError> {
         Ok(Self {
-            block: Block::from_reservation(block)?,
+            block: Block::from_reservation(block).ok_or(SharesError::BadMaterial)?,
             failures: 0,
             max_failures,
         })
@@ -268,7 +229,7 @@ impl ShareChecker {
                 got: presented.offset,
             });
         }
-        let mut pad = self.block.pad(presented.share.index())?;
+        let mut pad = slot_pad(&self.block, presented.share.index())?;
         let want = self.block.key.tag_with_pad(
             &message(self.block.pool, self.block.offset, &presented.share),
             &pad,
