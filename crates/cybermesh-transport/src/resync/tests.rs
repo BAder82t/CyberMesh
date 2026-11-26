@@ -282,3 +282,113 @@ proptest! {
         prop_assert_eq!(a.open(&b.seal(b"pong").unwrap()).unwrap(), Opened::Data(b"pong".to_vec()));
     }
 }
+
+// ---- restoring a backup of the pools ----------------------------------------------------------
+//
+// A complete copy of a pool directory taken earlier brings back both the cursor and the unerased
+// material. These tests pin down exactly what the transport does and does not defend against.
+
+fn snapshot(dir: &std::path::Path) -> tempfile::TempDir {
+    let snap = tempfile::tempdir().unwrap();
+    copy_files(dir, snap.path());
+    snap
+}
+
+fn copy_files(from: &std::path::Path, to: &std::path::Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+    }
+}
+
+/// The ciphertext part of a record (after the 30-byte header, before the 16-byte tag).
+fn ciphertext(rec: &[u8]) -> &[u8] {
+    &rec[30..rec.len() - 16]
+}
+
+#[test]
+fn a_restored_pool_hands_out_pad_bytes_that_were_already_used() {
+    // The risk, shown directly: after a full restore the pool offers the same bytes again.
+    let rig = big();
+    let snap = snapshot(rig.di.path());
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    let rec = a.seal(b"first message").unwrap();
+    b.open(&rec).unwrap();
+    drop((a, b));
+    copy_files(snap.path(), rig.di.path());
+    let again = open(rig.di.path(), IR_ENC).reserve(18).unwrap();
+    let before = &crate::session::tests::fixture(IR_ENC, 1 << 18)[..18];
+    assert_eq!(again.as_bytes(), before, "the consumed pad is back");
+}
+
+#[test]
+fn restoring_one_party_is_detected_by_the_live_peer_and_healed_without_reuse() {
+    let rig = big();
+    let snap = snapshot(rig.di.path());
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    let first = a.seal(b"message sent before the restore").unwrap();
+    b.open(&first).unwrap();
+    drop((a, b));
+    let high_water = rig.ep(Role::Responder).cursors().unwrap().recv_enc;
+    assert!(high_water > 0);
+
+    // The initiator's directory is restored from the earlier backup.
+    copy_files(snap.path(), rig.di.path());
+    assert_eq!(
+        rig.ep(Role::Initiator).cursors().unwrap().send_enc,
+        0,
+        "rolled back"
+    );
+
+    // 1. The responder refuses the handshake: its copy of the pool is ahead.
+    let (_i, hello) = Initiator::start(rig.ep(Role::Initiator)).unwrap();
+    assert!(matches!(
+        Responder::accept(rig.ep(Role::Responder), &hello),
+        Err(TransportError::OutOfStep { .. })
+    ));
+    // 2. Resync burns the restored side forward to the peer's cursor, erasing the material.
+    let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
+    exchange(&ei, &er);
+    assert!(
+        ei.cursors().unwrap().send_enc >= high_water,
+        "no byte below the peer's cursor is offered again"
+    );
+    drop((ei, er));
+    // 3. New traffic uses pad bytes beyond everything used before.
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    let second = a.seal(b"message sent after the restore").unwrap();
+    assert_eq!(
+        b.open(&second).unwrap(),
+        Opened::Data(b"message sent after the restore".to_vec())
+    );
+    let fresh_start = rig.ep(Role::Responder).cursors().unwrap().recv_enc;
+    assert!(fresh_start > high_water);
+}
+
+#[test]
+fn restoring_both_parties_is_not_detected_and_reuses_the_pad() {
+    // The unresolved case: both copies roll back to the same moment, so their cursors agree and
+    // nothing local can tell. The same plaintext meets the same pad again.
+    let rig = big();
+    let (snap_i, snap_r) = (snapshot(rig.di.path()), snapshot(rig.dr.path()));
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    let rec1 = a.seal(b"identical plaintext!").unwrap();
+    b.open(&rec1).unwrap();
+    drop((a, b));
+    copy_files(snap_i.path(), rig.di.path());
+    copy_files(snap_r.path(), rig.dr.path());
+    let (mut a, mut b) =
+        connect_fresh(&rig).expect("the handshake succeeds: the pair looks in step");
+    let rec2 = a.seal(b"identical plaintext!").unwrap();
+    assert_eq!(
+        b.open(&rec2).unwrap(),
+        Opened::Data(b"identical plaintext!".to_vec())
+    );
+    assert_eq!(
+        ciphertext(&rec1),
+        ciphertext(&rec2),
+        "same pad, same plaintext, same ciphertext"
+    );
+    // With two different plaintexts under that reused pad, the XOR of the ciphertexts would be the
+    // XOR of the plaintexts: the one-time pad is void. This is what a backup restore costs.
+}

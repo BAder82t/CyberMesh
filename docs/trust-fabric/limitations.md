@@ -1,5 +1,8 @@
 # Trust Fabric: known limitations
 
+The cross-cutting critical issues (backup restoration, peer synchronisation, the unproved
+handshake) are in [known-issues.md](known-issues.md).
+
 ## cybermesh-sharing
 
 * Not verifiable. Plain `reconstruct` detects a wrong share only when more than `k` shares are
