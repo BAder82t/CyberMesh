@@ -5,30 +5,45 @@
 //! **burning forward**: for each of the four pools both parties move their copy to the larger of
 //! the two cursors. Cursors never move backwards.
 //!
-//! # Authenticated
+//! # Authenticated and fresh
 //!
-//! A sync message carries the sender's four cursors and a **one-time tag**. The sender takes 32
-//! fresh bytes from its own send authentication pool (a hash key, then a pad) and tags the message
-//! with them; the receiver reads the same 32 bytes at the offset the message names **without
-//! consuming them** ([`cybermesh_entropy::Pool::peek_unspent`]) and verifies the tag **before any
-//! state changes**. A forger, who has none of that material, succeeds with probability at most
-//! `(blocks + 1) / 2^128` per message and a forged message burns nothing. A replay names material
-//! already spent on the receiver's side and is refused ([`TransportError::SyncStale`]). The
-//! receiver then spends the 32 bytes it used and burns forward.
+//! A sync **response** carries the sender's four cursors, the **nonce** of the request it answers,
+//! and a **one-time tag**. The sender takes 32 fresh bytes from its own send authentication pool
+//! (a hash key, then a pad) and tags the message with them; the receiver reads the same 32 bytes at
+//! the offset the message names **without consuming them**
+//! ([`cybermesh_entropy::Pool::peek_unspent`]) and verifies the tag **before any state changes**. A
+//! forger, who has none of that material, succeeds with probability at most `(blocks + 1) / 2^128`
+//! per message and a forged message burns nothing. A replay names material already spent on the
+//! receiver's side and is refused ([`TransportError::SyncStale`]).
+//!
+//! **Freshness.** A response is accepted only as the answer to a request the receiver made: the
+//! requester picks a random 16-byte nonce ([`Endpoint::sync_request`]), the responder's tag covers
+//! it ([`Endpoint::sync_response`]), and [`Endpoint::resync`] refuses a response that does not echo
+//! the nonce of the request it is given ([`TransportError::SyncNotRequested`]). A genuine but old
+//! message, which the peer made for an earlier request, cannot be accepted by a party that has
+//! restarted since. The nonce is public and needs only to be fresh; it is held by the caller in a
+//! [`SyncRequest`], so a restart forgets it. This closes a hole the TLA+ model in `formal/tla`
+//! found (`docs/trust-fabric/formal-model.md`).
 //!
 //! Burning forward is also safe on its own: every byte below a party's cursor is already spent or
 //! erased on that side, so it can only waste material, never make a pad usable twice.
 //!
 //! # What this does not fix
 //!
-//! * **The sender must not tag with material it already used.** After a restore of a pool
-//!   directory from a backup, a party's cursor is behind and the next 32 bytes it takes are bytes
-//!   it has used before (see `docs/trust-fabric/known-issues.md`, #1). Therefore the order
-//!   matters: a party that might have been restored should **verify the peer's message first**
-//!   (which burns it forward) and only then create its own. [`Endpoint::sync_message`] on a
-//!   restored endpoint produces a message the peer refuses as stale, and its tag reuses a key and
-//!   pad.
-//! * Resync is a manual, quiescent step. A message is refused if it is more than `max_burn` bytes
+//! * **A responder that was restored spends material it already used when it answers.** Answering
+//!   spends 32 bytes at the responder's own cursor. A party that might have been restored should
+//!   therefore **request first and answer only after it has applied a fresh response**. Nothing local
+//!   says a party was restored, so this is a procedure, not a guarantee, and two parties that both
+//!   wait for the other are not sequenced here.
+//! * **A message lost or in flight when a party is restored.** Its slot was used and seen on the wire
+//!   but the peer never accepted it, so the peer cannot tell the restored party; it reuses that
+//!   slot. No exchange fixes that (`known-issues.md`, #1).
+//! * **Nonce uniqueness is assumed.** Restoring a whole virtual machine can also restore the random
+//!   number generator and a nonce already chosen.
+//! * **A forged request costs the responder 32 authentication bytes** and leaves the pair out of
+//!   step until a resync: a small denial of service, in line with the transport not protecting
+//!   availability.
+//! * Resync is a manual, quiescent step. A response is refused if it is more than `max_burn` bytes
 //!   ahead of the receiver in any pool, and when the genuine peer is further ahead than the policy
 //!   allows, nothing heals until the policy is raised.
 //! * When both parties are restored to the same moment nothing is detected.
@@ -39,11 +54,16 @@ use zeroize::Zeroizing;
 
 use crate::session::{Endpoint, TransportError};
 
-/// Length of a sync message: `'S'`, version, role, four cursors, tag.
-pub const SYNC_LEN: usize = 3 + 4 * 8 + TAG_LEN;
+/// Length of the nonce in a sync request.
+pub const NONCE_LEN: usize = 16;
+/// Length of a sync request: `'Q'`, version, role, nonce.
+pub const REQUEST_LEN: usize = 3 + NONCE_LEN;
+/// Length of a sync response: `'S'`, version, role, nonce, four cursors, tag.
+pub const SYNC_LEN: usize = 3 + NONCE_LEN + 4 * 8 + TAG_LEN;
 const BODY_LEN: usize = SYNC_LEN - TAG_LEN;
-const VERSION: u8 = 2;
-const DOM_SYNC: &[u8] = b"cybermesh-transport v1 sync";
+const CURSORS_AT: usize = 3 + NONCE_LEN;
+const VERSION: u8 = 3;
+const DOM_SYNC: &[u8] = b"cybermesh-transport v2 sync";
 const AUTH: usize = 3; // index of the receive authentication pool in `Endpoint::pools`
 
 /// One party's four cursors (bytes consumed), in its own send/receive terms.
@@ -78,6 +98,27 @@ impl ResyncReport {
     }
 }
 
+/// A request for a sync response: a fresh nonce, held by the party that made it.
+///
+/// Not `Clone` and not `Copy`: it is used by one successful [`Endpoint::resync`], and a restart
+/// forgets it, which is what makes an old response unacceptable.
+#[derive(Debug)]
+pub struct SyncRequest {
+    nonce: [u8; NONCE_LEN],
+    role: u8,
+    used: bool,
+}
+
+impl SyncRequest {
+    /// The bytes to send to the peer.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut m = vec![b'Q', VERSION, self.role];
+        m.extend_from_slice(&self.nonce);
+        m
+    }
+}
+
 fn tagged(body: &[u8]) -> Vec<u8> {
     let mut m = DOM_SYNC.to_vec();
     m.extend_from_slice(body);
@@ -100,16 +141,39 @@ impl Endpoint {
         })
     }
 
-    /// The message to send to the peer: this party's cursors, authenticated with 32 fresh bytes
-    /// taken (and spent) from the send authentication pool. The cursors in it are the ones **after**
-    /// that spending. Call it once per attempt; each call spends 32 more bytes.
-    ///
-    /// On an endpoint that may have been restored from a backup, call
-    /// [`Endpoint::resync`] on the peer's message first (see the module docs).
+    /// Start a resync: choose a fresh random nonce and return the request to send to the peer.
+    /// Spends no pool material. Keep the [`SyncRequest`] and pass it to [`Endpoint::resync`] with
+    /// the response.
     ///
     /// # Errors
-    /// Entropy errors (including an exhausted pool).
-    pub fn sync_message(&self) -> Result<Vec<u8>, TransportError> {
+    /// [`TransportError::Randomness`] if the system's random source fails.
+    pub fn sync_request(&self) -> Result<SyncRequest, TransportError> {
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce).map_err(|_| TransportError::Randomness)?;
+        Ok(SyncRequest {
+            nonce,
+            role: self.role() as u8,
+            used: false,
+        })
+    }
+
+    /// Answer the peer's request: this party's cursors and the request's nonce, authenticated with
+    /// 32 fresh bytes taken (and spent) from the send authentication pool. The cursors in it are the
+    /// ones **after** that spending. Each call spends 32 more bytes, whoever sent the request.
+    ///
+    /// On an endpoint that may have been restored from a backup, make your own request and apply
+    /// its response first (see the module docs).
+    ///
+    /// # Errors
+    /// [`TransportError::BadSync`] for a malformed request or one from the wrong role; entropy
+    /// errors (including an exhausted pool).
+    pub fn sync_response(&self, request: &[u8]) -> Result<Vec<u8>, TransportError> {
+        if request.len() != REQUEST_LEN || request[0] != b'Q' || request[1] != VERSION {
+            return Err(TransportError::BadSync);
+        }
+        if request[2] > 1 || request[2] == self.role() as u8 {
+            return Err(TransportError::BadSync);
+        }
         let material = self.pools()[1]
             .1
             .reserve(ONE_TIME_MATERIAL_LEN)?
@@ -117,6 +181,7 @@ impl Endpoint {
         let mut m = [0u8; ONE_TIME_MATERIAL_LEN];
         m.copy_from_slice(&material);
         let mut body = vec![b'S', VERSION, self.role() as u8];
+        body.extend_from_slice(&request[3..]);
         for c in self.cursors()?.as_array() {
             body.extend_from_slice(&c.to_be_bytes());
         }
@@ -126,19 +191,29 @@ impl Endpoint {
         Ok(body)
     }
 
-    /// Authenticate the peer's sync message, then burn forward to the larger of the two cursors in
+    /// Authenticate the peer's sync response to `request`, then burn forward to the larger of the two cursors in
     /// each pool.
     ///
-    /// Nothing is changed unless the tag verifies. All four targets are validated before anything
+    /// Nothing is changed unless the response echoes the nonce of `request` and the tag verifies.
+    /// `request` is marked used only after a successful burn, so a refusal (a forgery, or a policy
+    /// that is too small) leaves it usable.
+    ///
+    ///  All four targets are validated before anything
     /// is burned. My send pool pairs with the peer's receive copy of it and vice versa.
     ///
     /// # Errors
     /// [`TransportError::BadSync`] for a malformed message or one from the wrong role;
+    /// [`TransportError::SyncNotRequested`] for a response that does not answer `request`;
     /// [`TransportError::SyncStale`] for material this side has already spent;
     /// [`TransportError::SyncAuthentication`] for a tag that does not verify;
     /// [`TransportError::ResyncExceedsPool`], [`TransportError::ResyncExceedsPolicy`] and
     /// [`TransportError::Misaligned`] leave every pool untouched.
-    pub fn resync(&self, peer: &[u8], max_burn: u64) -> Result<ResyncReport, TransportError> {
+    pub fn resync(
+        &self,
+        peer: &[u8],
+        request: &mut SyncRequest,
+        max_burn: u64,
+    ) -> Result<ResyncReport, TransportError> {
         if peer.len() != SYNC_LEN || peer[0] != b'S' || peer[1] != VERSION {
             return Err(TransportError::BadSync);
         }
@@ -146,7 +221,11 @@ impl Endpoint {
         if their_role > 1 || their_role == self.role() as u8 {
             return Err(TransportError::BadSync);
         }
-        let theirs: Vec<u64> = peer[3..BODY_LEN]
+        if request.used || request.role != self.role() as u8 || peer[3..CURSORS_AT] != request.nonce
+        {
+            return Err(TransportError::SyncNotRequested);
+        }
+        let theirs: Vec<u64> = peer[CURSORS_AT..BODY_LEN]
             .as_chunks::<8>()
             .0
             .iter()
@@ -242,6 +321,7 @@ impl Endpoint {
                 plan[i]
             };
         }
+        request.used = true;
         Ok(ResyncReport { burned })
     }
 }

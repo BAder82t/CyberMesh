@@ -42,14 +42,15 @@ Tested (`cybermesh-transport`, `resync/tests.rs`):
   Nothing local tells a party it was restored, so it cannot know which order to use; the
   responder-first order is a procedure, not a guarantee.
   This depends on the peer being honest and not itself restored.
-* **Even the responder-first order can be defeated by a stale message.** The TLA+ model
-  (`formal-model.md`) found that a restored party accepts a **genuine but old** sync message from
-  its peer (its slot is unspent in the restored copy), which burns nothing past what the party had
-  already used, so its next messages reuse pad and authentication material. The code does the same
-  (`a_stale_genuine_sync_is_accepted_by_a_restored_side_and_does_not_heal_it`). The message
-  authenticates cursors, not their freshness. A nonce challenge closes this hole in the model
-  (`formal-model.md`, not yet implemented); it does not fix a message lost or in flight at the moment of the
-  restore, which needs durable local state.
+* **A stale genuine message used to defeat the "ask first" order; a nonce now closes that.** The
+  TLA+ model (`formal-model.md`) found that a restored party accepted a **genuine but old** sync
+  message from its peer, which burned nothing past what it had already used. A sync response now
+  carries the nonce of the request it answers, and a request does not survive a restart, so an old
+  response is refused (`SyncNotRequested`;
+  `a_stale_genuine_response_is_refused_by_a_restored_side_which_then_heals_properly`). **Still
+  open:** a message of the restored party's that was lost or in flight when it was restored is
+  reused and no exchange can tell it (needs durable local state); the "ask first, answer after a
+  fresh response" rule is a procedure the code does not enforce; nonce uniqueness is assumed.
 * **Both parties restored to the same moment: not detected.** Their cursors agree, the
   handshake succeeds, and the same plaintext meets the same pad, giving the same ciphertext
   (`restoring_both_parties_is_not_detected_and_reuses_the_pad`). With two different plaintexts
@@ -67,10 +68,10 @@ Partially mitigated, not resolved. Built: the handshake compares pool cursors be
 anything (`OutOfStep`); `resync` burns both sides forward to the larger cursor (it cannot move
 backwards), bounded by pool size and a caller policy. Not built or open:
 
-* **The sync message is now authenticated.** It carries a one-time MAC made from 32 fresh bytes
-  the sender spends from its send authentication pool; the receiver reads the same bytes at the
-  offset the message names **without consuming them**, verifies before changing anything, and
-  only then burns. Forged, tampered, reflected and replayed messages burn nothing
+* **The sync response is authenticated and fresh.** It carries a one-time MAC made from 32 fresh
+  bytes the responder spends from its send authentication pool, covering the nonce of the request it
+  answers; the requester reads the same bytes at the offset the message names **without consuming
+  them**, verifies before changing anything, and only then burns. Forged, tampered, reflected and replayed messages burn nothing
   (`forged_and_tampered_messages_burn_nothing`,
   `a_message_that_was_already_applied_is_stale_and_changes_nothing`); a forger succeeds with
   probability at most `(blocks + 1) / 2^128` per message. A genuine message further ahead than the

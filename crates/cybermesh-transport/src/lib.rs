@@ -50,7 +50,7 @@ mod resync;
 mod session;
 
 pub use profile::SecurityProfile;
-pub use resync::{Cursors, ResyncReport, SYNC_LEN};
+pub use resync::{Cursors, NONCE_LEN, REQUEST_LEN, ResyncReport, SYNC_LEN, SyncRequest};
 pub use session::{
     Endpoint, Initiator, MAX_RECORD_DATA, Opened, Responder, Role, Session, TransportError,
 };

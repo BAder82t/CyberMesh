@@ -84,6 +84,8 @@ pub enum TransportError {
     Randomness,
     #[error("malformed resync message")]
     BadSync,
+    #[error("the sync response does not answer the request it was given; nothing was changed")]
+    SyncNotRequested,
     #[error("the sync message does not authenticate; nothing was changed")]
     SyncAuthentication,
     #[error(

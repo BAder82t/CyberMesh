@@ -13,14 +13,19 @@ fn connect_fresh(rig: &Rig) -> Result<(Session, Session), TransportError> {
     Ok((a, res.finish(&fin)?))
 }
 
-/// Both parties create a sync message, then each applies the other's. Right when neither party
-/// has been restored from a backup (a lost record, a crash).
+/// `a` asks, `b` answers, `a` applies the answer.
+fn ask(a: &Endpoint, b: &Endpoint) -> ResyncReport {
+    let mut rq = a.sync_request().unwrap();
+    let resp = b.sync_response(&rq.to_bytes()).unwrap();
+    a.resync(&resp, &mut rq, POLICY).unwrap()
+}
+
+/// Each party asks the other in turn. Right when neither party has been restored from a backup
+/// (a lost record, a crash).
 fn exchange(a: &Endpoint, b: &Endpoint) -> (ResyncReport, ResyncReport) {
-    let (ma, mb) = (a.sync_message().unwrap(), b.sync_message().unwrap());
-    (
-        a.resync(&mb, POLICY).unwrap(),
-        b.resync(&ma, POLICY).unwrap(),
-    )
+    let first = ask(a, b);
+    let second = ask(b, a);
+    (first, second)
 }
 
 fn all_cursors(rig: &Rig) -> (Cursors, Cursors) {
@@ -38,9 +43,11 @@ fn in_step(i: Cursors, r: Cursors) -> bool {
         && i.recv_auth == r.send_auth
 }
 
-/// A message with the right shape and whatever tag the forger chose.
-fn forged(role: Role, cursors: [u64; 4], tag: [u8; 16]) -> Vec<u8> {
-    let mut m = vec![b'S', 2, role as u8];
+/// A response with the right shape that echoes `nonce` (which is public) and whatever tag the forger
+/// chose.
+fn forged(role: Role, nonce: &[u8; NONCE_LEN], cursors: [u64; 4], tag: [u8; 16]) -> Vec<u8> {
+    let mut m = vec![b'S', 3, role as u8];
+    m.extend_from_slice(nonce);
     for c in cursors {
         m.extend_from_slice(&c.to_be_bytes());
     }
@@ -151,31 +158,63 @@ fn an_exchange_in_step_burns_nothing_and_spends_32_authentication_bytes_each_way
 }
 
 #[test]
-fn a_message_that_was_already_applied_is_stale_and_changes_nothing() {
+fn a_response_is_accepted_once_and_only_for_the_request_it_answers() {
     let rig = big();
     let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
-    let m1 = ei.sync_message().unwrap();
-    er.resync(&m1, POLICY).unwrap();
+    let mut rq1 = ei.sync_request().unwrap();
+    let m1 = er.sync_response(&rq1.to_bytes()).unwrap();
+    ei.resync(&m1, &mut rq1, POLICY).unwrap();
     let after = (ei.cursors().unwrap(), er.cursors().unwrap());
-    // Replay of a genuine, already-applied message.
+    // The same request cannot be used again, even for the genuine response it just applied.
     assert!(matches!(
-        er.resync(&m1, POLICY),
-        Err(TransportError::SyncStale)
+        ei.resync(&m1, &mut rq1, POLICY),
+        Err(TransportError::SyncNotRequested)
     ));
-    // An older message after a newer one.
-    let m2 = ei.sync_message().unwrap();
-    er.resync(&m2, POLICY).unwrap();
+    // Replay of the genuine, already-applied response against a new request: a different nonce.
+    let mut rq2 = ei.sync_request().unwrap();
+    assert!(matches!(
+        ei.resync(&m1, &mut rq2, POLICY),
+        Err(TransportError::SyncNotRequested)
+    ));
+    // The response made for another request is refused the same way, however genuine it is.
+    let other = er.sync_response(&rq2.to_bytes()).unwrap();
+    let mut rq3 = ei.sync_request().unwrap();
+    assert!(matches!(
+        ei.resync(&other, &mut rq3, POLICY),
+        Err(TransportError::SyncNotRequested)
+    ));
+    assert_eq!(
+        (ei.cursors().unwrap(), er.cursors().unwrap()),
+        (after.0, er.cursors().unwrap()),
+        "the initiator changed nothing"
+    );
+    // The right request still takes the right response after all those refusals.
+    ei.resync(&other, &mut rq2, POLICY).unwrap();
+    // Nonces are fresh.
+    assert_ne!(rq1.to_bytes(), rq2.to_bytes());
+    assert_ne!(rq2.to_bytes(), rq3.to_bytes());
+}
+
+#[test]
+fn a_replayed_response_names_spent_material_and_is_stale() {
+    // With a request carrying the same nonce (built by hand, which a real caller cannot do), the
+    // material check is still there: a response that was already applied names spent bytes.
+    let rig = big();
+    let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
+    let mut rq = ei.sync_request().unwrap();
+    let m1 = er.sync_response(&rq.to_bytes()).unwrap();
+    let mut same = SyncRequest {
+        nonce: rq.nonce,
+        role: rq.role,
+        used: false,
+    };
+    ei.resync(&m1, &mut rq, POLICY).unwrap();
     let now = (ei.cursors().unwrap(), er.cursors().unwrap());
     assert!(matches!(
-        er.resync(&m1, POLICY),
-        Err(TransportError::SyncStale)
-    ));
-    assert!(matches!(
-        er.resync(&m2, POLICY),
+        ei.resync(&m1, &mut same, POLICY),
         Err(TransportError::SyncStale)
     ));
     assert_eq!((ei.cursors().unwrap(), er.cursors().unwrap()), now);
-    assert_ne!(after, now);
 }
 
 #[test]
@@ -184,51 +223,56 @@ fn forged_and_tampered_messages_burn_nothing() {
     let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
     let before = (ei.cursors().unwrap(), er.cursors().unwrap());
     let mine = er.cursors().unwrap();
+    // The responder asks; the request (and so the nonce) is public.
+    let mut rq = er.sync_request().unwrap();
+    let nonce = rq.nonce;
     // A forger with the right shape and a guessed tag, at the right offset and far ahead.
     for ahead in [0u64, 8, 64, 1000] {
         let target = mine.recv_auth + 32 + ahead;
         let m = forged(
             Role::Initiator,
+            &nonce,
             [mine.recv_enc + ahead, target, mine.send_enc, mine.send_auth],
             [7; 16],
         );
         assert!(
             matches!(
-                er.resync(&m, POLICY),
+                er.resync(&m, &mut rq, POLICY),
                 Err(TransportError::SyncAuthentication)
             ),
             "ahead {ahead}"
         );
     }
-    // A genuine message with any one cursor byte flipped is no longer authentic, even when the
-    // flipped cursor would be a plausible, in-policy burn.
-    let genuine = ei.sync_message().unwrap();
-    for i in 3..35 {
+    // A genuine response with any one byte of the body flipped is no longer authentic, even when
+    // the flipped cursor would be a plausible, in-policy burn.
+    let genuine = ei.sync_response(&rq.to_bytes()).unwrap();
+    for i in 3..BODY_LEN {
         let mut m = genuine.clone();
         m[i] ^= 1;
-        assert!(er.resync(&m, POLICY).is_err(), "byte {i}");
+        assert!(er.resync(&m, &mut rq, POLICY).is_err(), "byte {i}");
     }
     let mut m = genuine.clone();
     m[SYNC_LEN - 1] ^= 1;
     assert!(matches!(
-        er.resync(&m, POLICY),
+        er.resync(&m, &mut rq, POLICY),
         Err(TransportError::SyncAuthentication)
     ));
-    // Reflecting a message back to its sender, with or without relabelling its role.
+    // Reflecting a response back to its sender, with or without relabelling its role.
+    let mut rq_i = ei.sync_request().unwrap();
     assert!(matches!(
-        ei.resync(&genuine, POLICY),
+        ei.resync(&genuine, &mut rq_i, POLICY),
         Err(TransportError::BadSync)
     ));
     let mut relabelled = genuine.clone();
     relabelled[2] = Role::Responder as u8;
-    assert!(ei.resync(&relabelled, POLICY).is_err());
+    assert!(ei.resync(&relabelled, &mut rq_i, POLICY).is_err());
     assert!(
-        er.resync(&relabelled, POLICY).is_err(),
+        er.resync(&relabelled, &mut rq, POLICY).is_err(),
         "wrong role for the claimed sender"
     );
     // Material that differs from the sender's does not authenticate: flip one byte of the
     // receiver's copy at the exact offset the message spent, then put it back.
-    let second = ei.sync_message().unwrap();
+    let second = ei.sync_response(&rq.to_bytes()).unwrap();
     let path = rig.dr.path().join(format!("{}.pool", hex_id(IR_AUTH)));
     let at = 26 + spent_offset(&second) as usize;
     let mut raw = std::fs::read(&path).unwrap();
@@ -237,7 +281,7 @@ fn forged_and_tampered_messages_burn_nothing() {
         std::fs::write(&path, &raw).unwrap();
         assert!(
             matches!(
-                er.resync(&second, POLICY),
+                er.resync(&second, &mut rq, POLICY),
                 Err(TransportError::SyncAuthentication)
             ),
             "material byte {}",
@@ -247,12 +291,12 @@ fn forged_and_tampered_messages_burn_nothing() {
     }
     std::fs::write(&path, &raw).unwrap();
     // Far beyond the provisioned material.
-    let m = forged(Role::Initiator, [0, u64::MAX / 2, 0, 0], [0; 16]);
+    let m = forged(Role::Initiator, &nonce, [0, u64::MAX / 2, 0, 0], [0; 16]);
     assert!(matches!(
-        er.resync(&m, POLICY),
+        er.resync(&m, &mut rq, POLICY),
         Err(TransportError::ResyncExceedsPool { .. })
     ));
-    // None of that changed anything on either side (sync_message spent 32 bytes of ei's send pool).
+    // None of that changed anything on the receiver (answering spent bytes of the initiator's pool).
     let after = (ei.cursors().unwrap(), er.cursors().unwrap());
     assert_eq!(after.1, before.1, "the receiver burned nothing");
     assert_eq!(after.0.send_enc, before.0.send_enc);
@@ -260,14 +304,65 @@ fn forged_and_tampered_messages_burn_nothing() {
     for i in 0..300u64 {
         let m = forged(
             Role::Initiator,
+            &nonce,
             [i, mine.recv_auth + 32 + (i % 500), 0, 0],
             [i as u8; 16],
         );
-        assert!(er.resync(&m, POLICY).is_err());
+        assert!(er.resync(&m, &mut rq, POLICY).is_err());
     }
     assert_eq!(er.cursors().unwrap(), before.1);
-    // The genuine message still works afterwards.
-    er.resync(&genuine, POLICY).unwrap();
+    // The genuine response still works afterwards: the request survived every refusal.
+    er.resync(&genuine, &mut rq, POLICY).unwrap();
+}
+
+#[test]
+fn a_forged_request_costs_the_responder_32_authentication_bytes() {
+    // Pinned as a known cost, not a defence: anyone who can reach the responder can make it spend
+    // authentication material and leave the pair out of step until the next resync.
+    let rig = big();
+    let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
+    let mut request = vec![b'Q', 3, Role::Initiator as u8];
+    request.extend_from_slice(&[9u8; NONCE_LEN]);
+    let before = er.cursors().unwrap();
+    er.sync_response(&request).unwrap();
+    assert_eq!(er.cursors().unwrap().send_auth, before.send_auth + 32);
+    assert!(!in_step(ei.cursors().unwrap(), er.cursors().unwrap()));
+    // Healing is the ordinary exchange.
+    exchange(&ei, &er);
+    assert!(in_step(ei.cursors().unwrap(), er.cursors().unwrap()));
+    // Malformed requests are refused and spend nothing.
+    let c = er.cursors().unwrap();
+    for bad in [
+        vec![],
+        request[..REQUEST_LEN - 1].to_vec(),
+        [request.clone(), vec![0]].concat(),
+        {
+            let mut v = request.clone();
+            v[0] = b'S';
+            v
+        },
+        {
+            let mut v = request.clone();
+            v[1] = 2;
+            v
+        },
+        {
+            let mut v = request.clone();
+            v[2] = 7;
+            v
+        },
+        {
+            let mut v = request.clone();
+            v[2] = Role::Responder as u8;
+            v
+        },
+    ] {
+        assert!(matches!(
+            er.sync_response(&bad),
+            Err(TransportError::BadSync)
+        ));
+    }
+    assert_eq!(er.cursors().unwrap(), c);
 }
 
 #[test]
@@ -276,10 +371,11 @@ fn a_genuine_message_further_ahead_than_the_policy_is_refused_until_it_is_raised
     let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
     // The initiator's authentication pool runs 1,024 bytes ahead of the responder's copy.
     open(rig.di.path(), IR_AUTH).reserve(1024).unwrap();
-    let m = ei.sync_message().unwrap();
+    let mut rq = er.sync_request().unwrap();
+    let m = ei.sync_response(&rq.to_bytes()).unwrap();
     let before = er.cursors().unwrap();
     assert!(matches!(
-        er.resync(&m, 64),
+        er.resync(&m, &mut rq, 64),
         Err(TransportError::ResyncExceedsPolicy {
             gap: 1024,
             max: 64,
@@ -287,7 +383,7 @@ fn a_genuine_message_further_ahead_than_the_policy_is_refused_until_it_is_raised
         })
     ));
     assert_eq!(er.cursors().unwrap(), before, "refused without burning");
-    let r = er.resync(&m, 2048).unwrap();
+    let r = er.resync(&m, &mut rq, 2048).unwrap();
     assert_eq!(
         r.burned[3], 1024,
         "the skipped bytes, not the message's own 32"
@@ -298,7 +394,11 @@ fn a_genuine_message_further_ahead_than_the_policy_is_refused_until_it_is_raised
 fn malformed_sync_messages_are_refused() {
     let rig = big();
     let e = rig.ep(Role::Responder);
-    let good = rig.ep(Role::Initiator).sync_message().unwrap();
+    let mut rq = e.sync_request().unwrap();
+    let good = rig
+        .ep(Role::Initiator)
+        .sync_response(&rq.to_bytes())
+        .unwrap();
     assert_eq!(good.len(), SYNC_LEN);
     for bad in [
         vec![],
@@ -311,7 +411,7 @@ fn malformed_sync_messages_are_refused() {
         },
         {
             let mut v = good.clone();
-            v[1] = 1;
+            v[1] = 2;
             v
         },
         {
@@ -321,13 +421,26 @@ fn malformed_sync_messages_are_refused() {
         },
     ] {
         assert!(matches!(
-            e.resync(&bad, POLICY),
+            e.resync(&bad, &mut rq, POLICY),
             Err(TransportError::BadSync)
         ));
     }
     // A reported send-authentication cursor too small to hold the tag's 32 bytes.
-    let m = forged(Role::Initiator, [0, 10, 0, 0], [0; 16]);
-    assert!(matches!(e.resync(&m, POLICY), Err(TransportError::BadSync)));
+    let m = forged(Role::Initiator, &rq.nonce, [0, 10, 0, 0], [0; 16]);
+    assert!(matches!(
+        e.resync(&m, &mut rq, POLICY),
+        Err(TransportError::BadSync)
+    ));
+    // A request made by the other role is not this role's request, even with the right nonce.
+    let mut other = SyncRequest {
+        nonce: rq.nonce,
+        role: Role::Initiator as u8,
+        used: false,
+    };
+    assert!(matches!(
+        e.resync(&good, &mut other, POLICY),
+        Err(TransportError::SyncNotRequested)
+    ));
 }
 
 #[test]
@@ -404,7 +517,7 @@ fn ciphertext(rec: &[u8]) -> &[u8] {
 
 /// The offset in a pool of the 32 bytes a sync message spent: its reported cursor minus 32.
 fn spent_offset(msg: &[u8]) -> u64 {
-    u64::from_be_bytes(msg[11..19].try_into().unwrap()) - 32
+    u64::from_be_bytes(msg[CURSORS_AT + 8..CURSORS_AT + 16].try_into().unwrap()) - 32
 }
 
 #[test]
@@ -422,7 +535,7 @@ fn a_restored_pool_hands_out_pad_bytes_that_were_already_used() {
 }
 
 #[test]
-fn restoring_one_party_is_healed_when_the_restored_side_verifies_the_peer_first() {
+fn restoring_one_party_is_healed_when_the_restored_side_asks_first() {
     let rig = big();
     let snap = snapshot(rig.di.path());
     // A first session, driven by hand so its hello can be compared later.
@@ -457,12 +570,10 @@ fn restoring_one_party_is_healed_when_the_restored_side_verifies_the_peer_first(
         Err(TransportError::OutOfStep { .. })
     ));
 
-    // Responder first: its pools are ahead, so its message uses fresh material.
+    // The restored side asks first; the responder's pools are ahead, so its answer uses fresh
+    // material.
     let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
-    let from_responder = er.sync_message().unwrap();
-    let report = ei
-        .resync(&from_responder, POLICY)
-        .expect("the restored side can verify it");
+    let report = ask(&ei, &er);
     assert!(!report.was_in_step());
     // Now the restored side is burned past everything the peer has used, in both pool kinds...
     let healed = ei.cursors().unwrap();
@@ -475,9 +586,10 @@ fn restoring_one_party_is_healed_when_the_restored_side_verifies_the_peer_first(
         "nor any authentication byte"
     );
     // ...so its own message is made from fresh material and the peer accepts it.
-    let from_restored = ei.sync_message().unwrap();
+    let mut rq = er.sync_request().unwrap();
+    let from_restored = ei.sync_response(&rq.to_bytes()).unwrap();
     assert!(spent_offset(&from_restored) >= ahead.recv_auth);
-    er.resync(&from_restored, POLICY).unwrap();
+    er.resync(&from_restored, &mut rq, POLICY).unwrap();
     assert!(in_step(ei.cursors().unwrap(), er.cursors().unwrap()));
     drop((ei, er));
     let (mut a, mut b) = connect_fresh(&rig).unwrap();
@@ -499,35 +611,41 @@ fn a_restored_side_that_speaks_first_is_refused_as_stale_and_reuses_authenticati
     copy_files(snap.path(), rig.di.path());
     let (ei, er) = (rig.ep(Role::Initiator), rig.ep(Role::Responder));
     let before = er.cursors().unwrap();
-    // The naive order: the restored initiator creates its message first. It spends authentication
-    // bytes at a cursor the peer has long passed: bytes it already used before the restore.
-    let stale = ei.sync_message().unwrap();
+    // The naive order: the restored initiator answers the peer's request before asking. It spends
+    // authentication bytes at a cursor the peer has long passed: bytes it already used before the
+    // restore.
+    let mut rq = er.sync_request().unwrap();
+    let stale = ei.sync_response(&rq.to_bytes()).unwrap();
     assert!(
         spent_offset(&stale) < before.recv_auth,
         "material the peer has already spent"
     );
     assert!(matches!(
-        er.resync(&stale, POLICY),
+        er.resync(&stale, &mut rq, POLICY),
         Err(TransportError::SyncStale)
     ));
     assert_eq!(er.cursors().unwrap(), before, "refused without any change");
-    // The way out is still the responder-first order.
-    let from_responder = er.sync_message().unwrap();
-    ei.resync(&from_responder, POLICY).unwrap();
-    let fresh = ei.sync_message().unwrap();
-    er.resync(&fresh, POLICY).unwrap();
+    // The way out is still to ask first.
+    ask(&ei, &er);
+    ask(&er, &ei);
     assert!(in_step(ei.cursors().unwrap(), er.cursors().unwrap()));
 }
 
-// Found by the TLA+ model (`formal/tla`): the sync message authenticates the sender's cursors but
-// not that they are current, and the stale check only compares its offset with the receiver's
-// own copy. A genuine message the peer made earlier is therefore accepted by a restored side.
+// Found by the TLA+ model (`formal/tla`): before the nonce, a restored side accepted a genuine but
+// old response from its peer, which burned nothing past what it had already used. The nonce closes
+// that: an old response answers an old request and is not accepted after a restart.
 #[test]
-fn a_stale_genuine_sync_is_accepted_by_a_restored_side_and_does_not_heal_it() {
+fn a_stale_genuine_response_is_refused_by_a_restored_side_which_then_heals_properly() {
     let rig = big();
     let snap = snapshot(rig.di.path());
-    // The responder makes a sync message while the pair is fresh, and it is kept.
-    let stale = rig.ep(Role::Responder).sync_message().unwrap();
+    // The initiator asks and the responder answers while the pair is fresh; the answer is kept.
+    // (The request lives only in this block: the process that made it will be gone after the restore.)
+    let stale = {
+        let old_request = rig.ep(Role::Initiator).sync_request().unwrap();
+        rig.ep(Role::Responder)
+            .sync_response(&old_request.to_bytes())
+            .unwrap()
+    };
     // A later, fresh exchange brings the pair back in step, so a session can run.
     exchange(&rig.ep(Role::Initiator), &rig.ep(Role::Responder));
     let (mut a, mut b) = connect_fresh(&rig).unwrap();
@@ -537,21 +655,31 @@ fn a_stale_genuine_sync_is_accepted_by_a_restored_side_and_does_not_heal_it() {
     let ahead = rig.ep(Role::Initiator).cursors().unwrap();
     assert!(ahead.send_enc > 0 && ahead.send_auth > 0);
 
-    // The initiator is restored, and applies the peer's message first, as the procedure says.
+    // The initiator is restored (a new process: the old request is gone) and asks again.
     copy_files(snap.path(), rig.di.path());
     let ei = rig.ep(Role::Initiator);
-    ei.resync(&stale, POLICY)
-        .expect("a genuine message whose slot is unspent on this side is accepted");
+    let mut rq = ei.sync_request().unwrap();
+    let rolled_back = ei.cursors().unwrap();
+    // The genuine old response is refused, and nothing changed.
+    assert!(matches!(
+        ei.resync(&stale, &mut rq, POLICY),
+        Err(TransportError::SyncNotRequested)
+    ));
+    assert_eq!(ei.cursors().unwrap(), rolled_back);
+    // A response to this request burns the restored side past everything it had used.
+    let fresh = rig
+        .ep(Role::Responder)
+        .sync_response(&rq.to_bytes())
+        .unwrap();
+    ei.resync(&fresh, &mut rq, POLICY).unwrap();
     let after = ei.cursors().unwrap();
-    // But it burned nothing past what the initiator already used: the same encryption and
-    // authentication material is offered again.
     assert!(
-        after.send_enc < ahead.send_enc,
-        "encryption pad bytes that were already used are still on offer"
+        after.send_enc >= ahead.send_enc,
+        "no encryption pad byte that was used is on offer"
     );
     assert!(
-        after.send_auth < ahead.send_auth,
-        "so are authentication bytes"
+        after.send_auth >= ahead.send_auth,
+        "nor any authentication byte"
     );
 }
 

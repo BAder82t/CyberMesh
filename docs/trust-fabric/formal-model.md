@@ -8,6 +8,10 @@ message. It does **not** model the handshake's transcript binding, the key sched
 session, timing, or cryptography (the MAC is ideal, see below). Issue #3 in `known-issues.md`
 (no composable security proof, no machine-checked model of the whole handshake) stays open.
 
+The nonce challenge described below is **implemented** in `cybermesh-transport` (`SyncRequest`,
+`sync_response`, `resync`). The implementation was written from the model's description and checked by
+its own tests; **the model was not re-derived from the code**, so the two can drift.
+
 Files: `formal/tla/TrustFabricResync.tla`, sixteen `.cfg` files, and `formal/tla/run.sh`, which runs
 every configuration and checks each gives the **expected** result (needs Java and `tla2tools.jar`;
 run with TLC 2.19 from the tlaplus v1.7.4 release, a file whose checksum I did not compare with an
@@ -79,7 +83,7 @@ The discipline configurations also assume an oracle that tells a party it was re
 code has none, so even the procedure that the model shows to be insufficient cannot be followed
 reliably.
 
-## A candidate fix, modelled but not implemented: a nonce challenge
+## The fix: a nonce challenge (implemented in `cybermesh-transport`)
 
 A party about to resynchronise picks a fresh random **nonce** (public, needs uniqueness, not secrecy)
 and sends it; the peer's sync message covers the nonce in its one-time tag; the requester accepts
