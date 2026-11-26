@@ -41,6 +41,16 @@ says which, so a MAC layer can refuse pad bytes.
 
 Files are created `0600`; opening a group- or world-accessible pool is refused.
 
+## Reading without spending
+
+`Pool::peek_unspent(offset, len)` returns unspent bytes **without consuming them**, so a party can
+verify a message its peer authenticated with material the peer took from *its* copy of the pool
+(`transport-protocol.md`, resync). It refuses anything below the cursor (`AlreadySpent`), beyond the
+provisioned material (`OutOfRange`) and any erased region (`Burned`). **It is for verification
+only:** the bytes it returns are still unspent, so a later `reserve` hands them out again, and
+using them as a pad or key for sending would reuse material the peer has already used (a test
+shows the same bytes coming back). Nothing in the type system prevents that misuse.
+
 ## What it does not do
 
 * A restore of the whole pool directory from a backup brings the erased material back and cannot

@@ -84,6 +84,12 @@ pub enum TransportError {
     Randomness,
     #[error("malformed resync message")]
     BadSync,
+    #[error("the sync message does not authenticate; nothing was changed")]
+    SyncAuthentication,
+    #[error(
+        "the sync message names material this side has already spent: a replay, or the peer is behind"
+    )]
+    SyncStale,
     #[error("peer's cursor for the {pool} pool is beyond what was provisioned")]
     ResyncExceedsPool { pool: &'static str },
     #[error("resync would burn {gap} bytes of the {pool} pool, over the allowed {max}")]
@@ -180,6 +186,10 @@ impl Endpoint {
 
     fn dir(&self) -> u8 {
         self.role as u8
+    }
+
+    pub(crate) fn role(&self) -> Role {
+        self.role
     }
 
     pub(crate) fn pools(&self) -> [(&'static str, &Pool); 4] {

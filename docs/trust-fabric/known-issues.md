@@ -23,12 +23,25 @@ Tested (`cybermesh-transport`, `resync/tests.rs`):
 
 * **The risk is real.** After a full restore the pool offers the pad bytes that were already used
   (`a_restored_pool_hands_out_pad_bytes_that_were_already_used`).
-* **One party restored, peer live and honest: detected and healed.** The peer's copy is ahead, so
-  the next handshake fails with `OutOfStep` before consuming anything; resync burns the restored
-  side forward to the peer's cursor, erasing the material below it, and later traffic uses
-  fresh bytes (`restoring_one_party_is_detected_by_the_live_peer_and_healed_without_reuse`).
-  This depends on the restored party running the handshake before sending anything, which the
-  session API forces, and on the peer being honest and not itself restored.
+* **One party restored, peer live and honest: detected, and healed for the data, but not
+  without a reuse.** The peer's copy is ahead, so the next handshake fails with `OutOfStep` before
+  the responder consumes anything. If the restored side then **verifies the peer's sync message
+  first** (the responder-first order), resync burns it forward past everything the peer has used,
+  in the encryption and the authentication pools, and later traffic uses fresh bytes
+  (`restoring_one_party_is_healed_when_the_restored_side_verifies_the_peer_first`).
+  **But the restored party's first handshake attempt, made before it knew, already used the same
+  authentication key and pad as the first handshake** (the hello's authentication offset is
+  identical, pinned in that test). An observer who recorded both hello tags can solve for that
+  key and then forge a message for that one slot; by the structure of the MAC (a fresh pad per
+  slot) I expect later slots to be unaffected, but that is reasoning, not a tested result. An
+  earlier version of this register said "healed without reuse"; that was true of the encryption
+  pad (which the test then checked) and not of the authentication pool.
+* **A restored side that sends its sync message first** is refused by the peer as stale and
+  reuses authentication material the same way
+  (`a_restored_side_that_speaks_first_is_refused_as_stale_and_reuses_authentication_material`).
+  Nothing local tells a party it was restored, so it cannot know which order to use; the
+  responder-first order is a procedure, not a guarantee.
+  This depends on the peer being honest and not itself restored.
 * **Both parties restored to the same moment: not detected.** Their cursors agree, the
   handshake succeeds, and the same plaintext meets the same pad, giving the same ciphertext
   (`restoring_both_parties_is_not_detected_and_reuses_the_pad`). With two different plaintexts
@@ -46,11 +59,18 @@ Partially mitigated, not resolved. Built: the handshake compares pool cursors be
 anything (`OutOfStep`); `resync` burns both sides forward to the larger cursor (it cannot move
 backwards), bounded by pool size and a caller policy. Not built or open:
 
-* **The sync message is unauthenticated.** That is safe for secrecy (burning only wastes
-  material) but a forger can make a party burn material up to the policy limit: denial of
-  service.
+* **The sync message is now authenticated.** It carries a one-time MAC made from 32 fresh bytes
+  the sender spends from its send authentication pool; the receiver reads the same bytes at the
+  offset the message names **without consuming them**, verifies before changing anything, and
+  only then burns. Forged, tampered, reflected and replayed messages burn nothing
+  (`forged_and_tampered_messages_burn_nothing`,
+  `a_message_that_was_already_applied_is_stale_and_changes_nothing`); a forger succeeds with
+  probability at most `(blocks + 1) / 2^128` per message. A genuine message further ahead than the
+  caller's `max_burn` is refused until the policy is raised.
+* **The authentication material of a restored party is reused** by its own first message (see
+  #1): authenticated resync does not fix that, it only stops a forger from exploiting resync.
 * **Resync is manual and needs a quiescent pair.** No automatic recovery, no detection of when
-  to run it.
+  to run it, and the order of the two messages matters after a restore.
 * **No multiplexing.** Concurrent sessions over the same pools are not supported; an
   ordering-aware allocation across sessions is not designed.
 * **No agreement on what was lost.** A crash that loses sent-but-undelivered records is healed

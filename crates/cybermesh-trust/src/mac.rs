@@ -257,6 +257,51 @@ impl Verifier {
     }
 }
 
+/// Length of the material of a one-time tag: a 16-byte hash key, then a 16-byte pad.
+pub const ONE_TIME_MATERIAL_LEN: usize = 2 * TAG_LEN;
+
+fn one_time(material: &[u8; ONE_TIME_MATERIAL_LEN]) -> (MacKey, [u8; TAG_LEN]) {
+    let (k, p) = material.split_at(TAG_LEN);
+    let (mut key, mut pad) = ([0u8; TAG_LEN], [0u8; TAG_LEN]);
+    key.copy_from_slice(k);
+    pad.copy_from_slice(p);
+    let mk = MacKey::from_key_bytes(&key);
+    key.zeroize();
+    (mk, pad)
+}
+
+/// Tag `msg` with **single-use** material: a fresh hash key followed by a fresh pad, both used for
+/// this one message and never again. Because the key is not reused, a forger who has seen the
+/// tag succeeds with probability at most `(blocks + 1) / 2^128` ([`forgery_bound`] with one
+/// attempt). Using the same material for two different messages voids that bound.
+///
+/// # Errors
+/// [`MacError::MessageTooLong`].
+pub fn tag_one_time(material: &[u8; ONE_TIME_MATERIAL_LEN], msg: &[u8]) -> Result<Tag, MacError> {
+    let (key, mut pad) = one_time(material);
+    let t = key.tag_with_pad(msg, &pad);
+    pad.zeroize();
+    t.map(Tag)
+}
+
+/// Check a tag made with [`tag_one_time`] under the same material, in constant time. The
+/// verifier may check the same tag more than once; only the party that tags must never reuse the
+/// material.
+///
+/// # Errors
+/// [`MacError::Invalid`], [`MacError::MessageTooLong`].
+pub fn verify_one_time(
+    material: &[u8; ONE_TIME_MATERIAL_LEN],
+    msg: &[u8],
+    tag: &Tag,
+) -> Result<(), MacError> {
+    if tag_one_time(material, msg)? == *tag {
+        Ok(())
+    } else {
+        Err(MacError::Invalid)
+    }
+}
+
 /// Upper bound on the probability that an unbounded adversary forges a tag, after `attempts`
 /// failed verifications, for messages of at most `max_message_len` bytes:
 /// `attempts * (blocks + 1) / 2^128`, with `blocks = ceil(len / 16)` plus the length block.

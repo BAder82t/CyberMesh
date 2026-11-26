@@ -355,3 +355,53 @@ proptest! {
         prop_assert_eq!(vb.verify(&m2, &Tag::from_bytes(t2), b.reserve(16).unwrap()), Err(MacError::Invalid));
     }
 }
+
+#[test]
+fn one_time_tags_verify_and_reject_any_change() {
+    let material: [u8; ONE_TIME_MATERIAL_LEN] = fixture(77, 32).try_into().unwrap();
+    let msg = b"sync: cursors 1 2 3 4";
+    let t = tag_one_time(&material, msg).unwrap();
+    verify_one_time(&material, msg, &t).unwrap();
+    verify_one_time(&material, msg, &t).unwrap(); // the verifier may check again
+    assert_eq!(
+        verify_one_time(&material, b"sync: cursors 1 2 3 5", &t),
+        Err(MacError::Invalid)
+    );
+    let mut bad = t.to_bytes();
+    bad[0] ^= 1;
+    assert_eq!(
+        verify_one_time(&material, msg, &Tag::from_bytes(bad)),
+        Err(MacError::Invalid)
+    );
+    // Any change to the key half or the pad half of the material is rejected too.
+    for i in 0..ONE_TIME_MATERIAL_LEN {
+        let mut m = material;
+        m[i] ^= 1;
+        assert_eq!(
+            verify_one_time(&m, msg, &t),
+            Err(MacError::Invalid),
+            "byte {i}"
+        );
+    }
+    // The same pad with a different key is a different tag (the key is part of the material).
+    let mut other = material;
+    other[0] ^= 0x80;
+    assert_ne!(tag_one_time(&other, msg).unwrap(), t);
+    assert_eq!(
+        tag_one_time(&material, &vec![0u8; MAX_MESSAGE_LEN + 1]).unwrap_err(),
+        MacError::MessageTooLong
+    );
+}
+
+#[test]
+fn a_one_time_tag_equals_the_reusable_key_construction_with_the_same_bytes() {
+    let material: [u8; ONE_TIME_MATERIAL_LEN] = fixture(5, 32).try_into().unwrap();
+    let key = MacKey::from_key_bytes(material[..16].try_into().unwrap());
+    let mut pad = [0u8; 16];
+    pad.copy_from_slice(&material[16..]);
+    let direct = key.tag_with_pad(b"same bytes", &pad).unwrap();
+    assert_eq!(
+        tag_one_time(&material, b"same bytes").unwrap().to_bytes(),
+        direct
+    );
+}

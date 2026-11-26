@@ -74,6 +74,10 @@ pub enum EntropyError {
     Exhausted { remaining: u64, requested: usize },
     #[error("the requested region was already consumed (erased): refusing to reuse it")]
     Burned,
+    #[error("offset {offset} is below the cursor {cursor}: those bytes are spent")]
+    AlreadySpent { offset: u64, cursor: u64 },
+    #[error("the requested region lies beyond the material provisioned")]
+    OutOfRange,
     #[error("pool state is corrupt or does not belong to this pool: {0}")]
     Corrupt(&'static str),
     #[error("pool files are readable by other users")]
@@ -540,6 +544,50 @@ impl Pool {
             offset: cur,
             bytes,
         })
+    }
+
+    /// Read `len` **unspent** bytes at `offset` without consuming them, so that a message the
+    /// peer authenticated with a pad it took from its copy of this pool can be verified before
+    /// anything is changed.
+    ///
+    /// **For verification only.** The bytes returned are still unspent: a later [`Pool::reserve`]
+    /// can return them again. They must never be used as a pad or key for *sending* or
+    /// encrypting; that would reuse material the peer has already used. Refused with
+    /// [`EntropyError::AlreadySpent`] below the cursor (spent or erased), with
+    /// [`EntropyError::OutOfRange`] beyond the provisioned material, and with
+    /// [`EntropyError::Burned`] if the region is erased (all zero).
+    ///
+    /// # Errors
+    /// As above, plus [`EntropyError::InvalidLength`] and I/O errors.
+    pub fn peek_unspent(
+        &self,
+        offset: u64,
+        len: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, EntropyError> {
+        if !(MIN_RESERVATION..=MAX_RESERVATION).contains(&len) {
+            return Err(EntropyError::InvalidLength);
+        }
+        let mut g = self.lock()?;
+        let r = (|| {
+            let (_, cursor) = read_cursor(&mut g.cursor, self.id)?;
+            if offset < cursor {
+                return Err(EntropyError::AlreadySpent { offset, cursor });
+            }
+            let cap = capacity(&g.pool)?;
+            offset
+                .checked_add(len as u64)
+                .filter(|&end| end <= cap)
+                .ok_or(EntropyError::OutOfRange)?;
+            let mut bytes = Zeroizing::new(vec![0u8; len]);
+            g.pool.seek(SeekFrom::Start(HEADER_LEN + offset))?;
+            g.pool.read_exact(&mut bytes)?;
+            if bytes.iter().all(|&b| b == 0) {
+                return Err(EntropyError::Burned);
+            }
+            Ok(bytes)
+        })();
+        let _ = g.cursor.unlock();
+        r
     }
 
     /// Append freshly provisioned material. Both peers must append identical bytes in the same
