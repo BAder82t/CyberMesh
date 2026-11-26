@@ -470,12 +470,51 @@ impl Harness {
             .expect("coordinator did not finish in time")
             .unwrap();
         let mut verifier_reports = Vec::new();
-        for (tx, h) in self.verifiers {
+        for (tx, mut h) in self.verifiers {
             // Each verifier exits once idle; it may still be settling its last tasks.
-            let r = tokio::time::timeout(Duration::from_secs(60), h)
-                .await
-                .expect("verifier did not finish in time")
-                .unwrap();
+            let r = match tokio::time::timeout(Duration::from_secs(60), &mut h).await {
+                Ok(r) => r.unwrap(),
+                Err(_) => {
+                    // A bare "did not finish" says nothing about why (this failed once in CI and
+                    // could not be reproduced). Ask it to stop and say what it had done, so the
+                    // next occurrence is evidence.
+                    let _ = tx.send(true);
+                    let verifier = match tokio::time::timeout(Duration::from_secs(30), &mut h).await
+                    {
+                        Ok(Ok(v)) => format!(
+                            "it stopped when asked: tasks_seen {}, verified {}, faults {}, \
+                             records published {}, received {}, refused {}, \
+                             results accepted {}, dropped {}, early-buffered {}, \
+                             net in/out {}/{} bytes, penalised peers {}",
+                            v.tasks_seen,
+                            v.verified,
+                            v.faults,
+                            v.records_published,
+                            v.records_received,
+                            v.records_refused,
+                            v.results_accepted,
+                            v.results_dropped,
+                            v.results_buffered_early,
+                            v.net_bytes_in,
+                            v.net_bytes_out,
+                            v.net_penalised_peers,
+                        ),
+                        _ => "it did not stop when asked either".to_owned(),
+                    };
+                    panic!(
+                        "an independent verifier did not exit within 60 s of the coordinator \
+                         finishing; {verifier}. Coordinator: tasks issued {}, verified {}, \
+                         results accepted {}, records published {}, penalised peers {}. One possible \
+                         cause, not shown: a verifier whose record publish finds no peer retries for \
+                         120 s before it can exit.",
+                        report.tasks_issued,
+                        report.verified,
+                        report.results_accepted,
+                        report.records_published,
+                        report.net_penalised_peers,
+                    );
+                }
+            };
             let _ = tx.send(true);
             verifier_reports.push(r);
         }
