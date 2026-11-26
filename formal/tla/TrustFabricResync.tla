@@ -23,7 +23,12 @@ CONSTANTS
     MaxC,        \* pool size in slots
     MaxSends,    \* bound on total honest messages sent
     AuthSync,    \* TRUE: sync message carries a one-time MAC (PR #65); FALSE: it does not
+    Fresh,       \* TRUE: a sync is accepted only as the answer to a fresh nonce the receiver chose
+    MaxNonce,    \* bound on nonces issued
     Restore,     \* TRUE: a party's state may be rolled back to an earlier backup
+    NoLoss,      \* TRUE: messages are never lost (they may still be replayed or delayed)
+    InStepOnly,  \* TRUE: a restore happens only when the peer has seen everything the party sent
+                 \* (no message of the party's is lost or in flight): the quiescent case
     Discipline   \* TRUE: a restored party sends nothing until it has applied a peer sync
                  \* (assumes an oracle that tells it it was restored; the real code has none)
 
@@ -43,9 +48,11 @@ VARIABLES
     quarantine, \* quarantine[p]: p was restored and has not yet applied a peer sync
     lost,       \* a message was lost
     synced,     \* a sync message was applied
-    forgedOk    \* the adversary got a forged message accepted
+    forgedOk,   \* the adversary got a forged message accepted
+    pending,    \* pending[p]: the nonce p is waiting for a sync to answer (0 = none)
+    nonces      \* nonces issued so far (a nonce is never reused, even after a restore)
 
-vars == <<cur, backup, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk>>
+vars == <<cur, backup, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk, pending, nonces>>
 
 Zero == [sa |-> 0, se |-> 0, ra |-> 0, re |-> 0]
 
@@ -61,6 +68,8 @@ Init ==
     /\ lost = FALSE
     /\ synced = FALSE
     /\ forgedOk = FALSE
+    /\ pending = [p \in Parties |-> 0]
+    /\ nonces = 0
 
 CanSpeak(p) == ~(Discipline /\ quarantine[p])
 
@@ -76,7 +85,7 @@ SendRecord(p) ==
           /\ uses' = uses \cup {<<p, c.sa, sends + 1>>}
           /\ encUses' = encUses \cup {<<p, c.se, sends + 1>>}
           /\ sends' = sends + 1
-    /\ UNCHANGED <<backup, restores, quarantine, lost, synced, forgedOk>>
+    /\ UNCHANGED <<backup, restores, quarantine, lost, synced, forgedOk, pending, nonces>>
 
 \* A hello (or finished) message: spends authentication material, not encryption material.
 \* The sender spends BEFORE it knows whether the peer's cursors agree.
@@ -89,20 +98,23 @@ SendHello(p) ==
           /\ net' = net \cup {m}
           /\ uses' = uses \cup {<<p, c.sa, sends + 1>>}
           /\ sends' = sends + 1
-    /\ UNCHANGED <<backup, encUses, restores, quarantine, lost, synced, forgedOk>>
+    /\ UNCHANGED <<backup, encUses, restores, quarantine, lost, synced, forgedOk, pending, nonces>>
 
 \* The sync message: spends one authentication slot, reports its cursors AFTER spending.
-SendSync(p) ==
+\* Under Fresh the message answers a nonce the peer issued (n is public: the adversary can relay it);
+\* otherwise it is unsolicited (nonce 0) as in the shipped protocol.
+SendSync(p, n) ==
     /\ CanSpeak(p) /\ sends < MaxSends
     /\ cur[p].sa < MaxC
+    /\ IF Fresh THEN n \in 1..nonces ELSE n = 0
     /\ LET c == cur[p]
            m == [kind |-> "sync", from |-> p, off |-> c.sa, csa |-> c.sa + 1, cse |-> c.se,
-                 cra |-> c.ra, cre |-> c.re, id |-> sends + 1]
+                 cra |-> c.ra, cre |-> c.re, nonce |-> n, id |-> sends + 1]
        IN /\ cur' = [cur EXCEPT ![p].sa = c.sa + 1]
           /\ net' = net \cup {m}
           /\ uses' = uses \cup {<<p, c.sa, sends + 1>>}
           /\ sends' = sends + 1
-    /\ UNCHANGED <<backup, encUses, restores, quarantine, lost, synced, forgedOk>>
+    /\ UNCHANGED <<backup, encUses, restores, quarantine, lost, synced, forgedOk, pending, nonces>>
 
 (* --- delivery ------------------------------------------------------------ *)
 
@@ -113,7 +125,7 @@ RecvData(q, m) ==
     /\ m.off = cur[q].ra /\ m.eoff = cur[q].re
     /\ cur' = [cur EXCEPT ![q].ra = cur[q].ra + 1,
                           ![q].re = IF m.kind = "rec" THEN cur[q].re + 1 ELSE cur[q].re]
-    /\ UNCHANGED <<backup, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk>>
+    /\ UNCHANGED <<backup, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk, pending, nonces>>
 
 \* Burn forward to the larger cursor in all four directions of pool use.
 Burn(q, csa, cse, cra, cre) ==
@@ -124,10 +136,12 @@ Burn(q, csa, cse, cra, cre) ==
 RecvSync(q, m) ==
     /\ m \in net /\ m.from = Peer(q) /\ m.kind = "sync"
     /\ m.off >= cur[q].ra
+    /\ (Fresh => (pending[q] # 0 /\ m.nonce = pending[q]))
     /\ cur' = [cur EXCEPT ![q] = Burn(q, m.csa, m.cse, m.cra, m.cre)]
     /\ synced' = TRUE
     /\ quarantine' = [quarantine EXCEPT ![q] = FALSE]
-    /\ UNCHANGED <<backup, net, uses, encUses, sends, restores, lost, forgedOk>>
+    /\ pending' = [pending EXCEPT ![q] = 0]
+    /\ UNCHANGED <<backup, net, uses, encUses, sends, restores, lost, forgedOk, nonces>>
 
 Reused(d, o) ==
     \E u1 \in uses : \E u2 \in uses :
@@ -143,30 +157,40 @@ ForgedSync(q) ==
          /\ cur' = [cur EXCEPT ![q] = Burn(q, csa, cse, cra, cre)]
          /\ cur'[q] # cur[q]
     /\ forgedOk' = TRUE
-    /\ UNCHANGED <<backup, net, uses, encUses, sends, restores, quarantine, lost, synced>>
+    /\ UNCHANGED <<backup, net, uses, encUses, sends, restores, quarantine, lost, synced, pending, nonces>>
+
+\* A party chooses a nonce no earlier request used. Choosing one spends no pool material.
+Request(p) ==
+    /\ Fresh /\ nonces < MaxNonce
+    /\ nonces' = nonces + 1
+    /\ pending' = [pending EXCEPT ![p] = nonces + 1]
+    /\ UNCHANGED <<cur, backup, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk>>
 
 Lose(m) ==
-    /\ m \in net
+    /\ ~NoLoss /\ m \in net
     /\ net' = net \ {m}
     /\ lost' = TRUE
-    /\ UNCHANGED <<cur, backup, uses, encUses, sends, restores, quarantine, synced, forgedOk>>
+    /\ UNCHANGED <<cur, backup, uses, encUses, sends, restores, quarantine, synced, forgedOk, pending, nonces>>
 
 (* --- backup and restore -------------------------------------------------- *)
 
 TakeBackup(p) ==
     /\ Restore /\ backup[p] # cur[p]
     /\ backup' = [backup EXCEPT ![p] = cur[p]]
-    /\ UNCHANGED <<cur, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk>>
+    /\ UNCHANGED <<cur, net, uses, encUses, sends, restores, quarantine, lost, synced, forgedOk, pending, nonces>>
 
 RestoreOne(p) ==
     /\ Restore /\ restores < 1 /\ backup[p] # cur[p]
+    /\ (InStepOnly => (cur[p].sa = cur[Peer(p)].ra /\ cur[p].se = cur[Peer(p)].re))
     /\ cur' = [cur EXCEPT ![p] = backup[p]]
     /\ quarantine' = [quarantine EXCEPT ![p] = TRUE]
+    \* the restored party starts a new process: a nonce it was waiting for is forgotten
+    /\ pending' = [pending EXCEPT ![p] = 0]
     /\ restores' = restores + 1
-    /\ UNCHANGED <<backup, net, uses, encUses, sends, lost, synced, forgedOk>>
+    /\ UNCHANGED <<backup, net, uses, encUses, sends, lost, synced, forgedOk, nonces>>
 
 Next ==
-    \/ \E p \in Parties : SendRecord(p) \/ SendHello(p) \/ SendSync(p)
+    \/ \E p \in Parties : SendRecord(p) \/ SendHello(p) \/ (\E n \in 0..MaxNonce : SendSync(p, n)) \/ Request(p)
     \/ \E q \in Parties : \E m \in net : RecvData(q, m) \/ RecvSync(q, m)
     \/ \E q \in Parties : ForgedSync(q)
     \/ \E m \in net : Lose(m)
@@ -197,5 +221,9 @@ InStep == \A p \in Parties : cur[p].sa = cur[Peer(p)].ra /\ cur[p].se = cur[Peer
 \* Reachability checks (expected to be VIOLATED, which shows the state can be reached):
 \* the pair loses a message, applies a sync, and ends up back in step.
 NotHealed == ~(lost /\ synced /\ InStep /\ sends > 0 /\ ~forgedOk)
+
+\* Reachability check (expected to be VIOLATED): a restored party applies a fresh sync, which lifts
+\* its quarantine, and messages go on afterwards.
+NotRecovered == ~(restores = 1 /\ synced /\ \A p \in Parties : ~quarantine[p]) \/ sends < 3
 
 =============================================================================

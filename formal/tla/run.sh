@@ -8,7 +8,11 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
 # config:expectation   (pass, or the name of the invariant that must be violated)
 for item in safe:pass unauth:NoForgery unauth_overrun:NoOverrun restore:NoAuthReuse \
-            restore_pad:NoPadReuse discipline:NoAuthReuse discipline_pad:NoPadReuse reach:NotHealed; do
+            restore_pad:NoPadReuse discipline:NoAuthReuse discipline_pad:NoPadReuse reach:NotHealed \
+            fresh_safe:pass fresh_reach:NotHealed fresh_discipline:NoAuthReuse \
+            instep_discipline:NoAuthReuse instep_discipline_pad:NoPadReuse \
+            fresh_instep_discipline:pass fresh_instep_nodiscipline:NoAuthReuse \
+            fresh_instep_recovers:NotRecovered; do
   cfg="${item%%:*}"; want="${item#*:}"
   out="$work/$cfg.txt"
   (cd "$work" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -nowarning -config "$here/$cfg.cfg" \

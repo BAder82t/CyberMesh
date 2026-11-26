@@ -47,7 +47,9 @@ Tested (`cybermesh-transport`, `resync/tests.rs`):
   its peer (its slot is unspent in the restored copy), which burns nothing past what the party had
   already used, so its next messages reuse pad and authentication material. The code does the same
   (`a_stale_genuine_sync_is_accepted_by_a_restored_side_and_does_not_heal_it`). The message
-  authenticates cursors, not their freshness; a fix needs a counter the restore cannot roll back.
+  authenticates cursors, not their freshness. A nonce challenge closes this hole in the model
+  (`formal-model.md`, not yet implemented); it does not fix a message lost or in flight at the moment of the
+  restore, which needs durable local state.
 * **Both parties restored to the same moment: not detected.** Their cursors agree, the
   handshake succeeds, and the same plaintext meets the same pad, giving the same ciphertext
   (`restoring_both_parties_is_not_detected_and_reuses_the_pad`). With two different plaintexts
