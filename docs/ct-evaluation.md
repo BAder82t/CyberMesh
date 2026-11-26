@@ -77,6 +77,40 @@ All proportions are reported with 95 % Wilson intervals.
   - for hosts both flag, CyberMesh's log timestamp against phishunt's `first_seen`;
   - confirmed hosts that one catches and the other misses.
 
+### 4.1 Labelling protocol for the false-alarm sample
+
+*Written on 2026-11-26, before the test-window sample was drawn and before any test-window result was examined. Any later change is listed as a deviation in §8.1.*
+
+**Input.** The `fp-sample.csv` that `ct evaluate` writes for the test window (days 3 to 7). The shipped engine and revision 1 each draw their own 200 names (§5); both are labelled with these rules, a name that is in both is labelled once, and both sets are reported.
+
+**What the labeller may use.** The `name` and `brands` columns, and only these public, non-contact sources:
+1. The brand's documented domains (the evidence bundle's `legitimate` list, and the brand's own public documentation, cited by URL).
+2. The Majestic Million rank of the registrable domain, from one snapshot whose date is recorded.
+3. CT history in the run's own stored names: when the registrable domain was first logged, how many names sit under it, and whether any certificate names it together with a domain on the brand's list (the shared-certificate rule of §5.1).
+
+**What the labeller must not use.** The columns `verdict`, `risk_score_bp`, `codes` and `phishunt_listed`, any confirmation by a feed, and any DNS lookup or HTTP request to the host. This keeps the label independent of the engine's own reasoning and of the feeds that score it.
+
+**Categories, applied in this order; the first that holds wins.**
+1. **Brand-owned infrastructure.** The registrable domain is on the brand's list, or is documented as the brand's by the brand's own public documentation, or the shared-certificate rule links it to a domain on the list.
+2. **Other legitimate.** The name is a generated or customer-assigned hostname under an operator's documented naming scheme (for example a cloud provider's own hostname pattern for a customer's resource), or the registrable domain has a Majestic rank of 100,000 or better and the brand token is explained by the name's structure (a customer's own label) and not by a lookalike of the brand's domain. A hosting platform alone is **not** enough: platforms such as `pages.dev` host phishing as well.
+3. **Likely phishing.** Only on an explicit structural reason: the brand token sits on a registrable domain that is not the brand's and not in category 1 or 2, **and** either (a) it is joined to a lure word (login, secure, verify, account, support, wallet, recover, update, billing, or the like), or (b) the registrable domain is within edit distance 2 of a domain on the brand's list, or uses a homoglyph or a punycode form of it. "Likely" means a structural judgement, not a confirmation.
+4. **Unknown.** Everything else, and every case in which two categories seem to apply. A doubt goes to unknown, never to likely phishing.
+
+**Record.** Each label is written to the `label` column with the rule that decided it and, for categories 1 and 2, the URL or rank behind it, in an added `basis` column.
+
+**Process.** A first pass labels the whole sample. A second pass, by a separate run that has this protocol and does not see the first labels, labels it again. The agreement between the two (raw agreement and Cohen's kappa) is reported, and every disagreement is listed with both bases. **Neither pass is a human domain expert**; a human spot-check of a random 20 labels is invited and, if made, reported with its result.
+
+**Reporting.** Counts per category with 95 % Wilson intervals, per brand stratum and overall, and the sample's share extrapolated to all unconfirmed warn-level names by the strata's sizes. "Unknown" is reported as unknown and not split between the other categories. The labelled sample estimates the composition of the false alarms; it is not a measure of the engine's precision (§4, "Precision").
+
+### 4.2 The final analysis, as it will be run
+
+After the feed snapshots end on 2026-11-28 at 18:05 UTC, with the staged analysis binary (`cybermesh 0.3.6`, built from `07e6798`; the evaluation code, `apps/cybermesh-cli/src/ct_evaluate.rs`, and the analysis crate are unchanged on `main` since, checked on 2026-11-26; `Cargo.lock` has changed, and the staged binary keeps the lock it was built with):
+
+1. `scripts/ct-eval.sh history` (adds OpenPhish's public history to the feeds).
+2. `cybermesh ct evaluate --run <run> --evidence <shipped evidence> --from-ms 1795197923278 --to-ms 1795629922000 --out <dir>`, and again with `--rescore-evidence ct-evidence-rev1` (SHA-256 of its `brands.json` is `3a43b4f0…`, §5.1).
+3. Window: days 3 to 7, from 2026-11-20 18:05:23 UTC to the end of the CT window, 2026-11-25 18:05:22 UTC, with the usual 24-hour burn-in.
+4. Both reports and both false-alarm samples are published, whatever they show, including the failures.
+
 ## 5. Engine changes during evaluation
 
 The run records engine 0.4.0 unchanged. Improvements, for example lists of brand owners' own infrastructure, may be derived **only from the first two days** (dev). Revised engines are scored **only on days 3–7** (test), by re-assessing the stored names offline, and are reported next to the shipped engine's results.
