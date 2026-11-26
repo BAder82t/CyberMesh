@@ -44,9 +44,14 @@ whether corrupt domains may also tamper, and how tampering is handled.
 | tampering, no protection | refused | wrong secret could come back with no error |
 
 These follow from the sharing constructions in this repository (`n - t - f >= k` when tampered
-shares are rejected; `2e + s <= n - k` when they are corrected). The classical perfectly-secure-
-message-transmission bounds are of the same shape; the citations are from memory and to be
-verified in the literature review. `plan_transmission` returns the `n` cheapest disjoint paths or
+shares are rejected; `2e + s <= n - k` when they are corrected). They are counted in **our** model,
+where sender and receiver already share pairwise MAC material. The classical perfectly-secure-
+message-transmission bounds are for a model with **no** pre-shared secrets: as restated by Desmedt
+and Wang (EUROCRYPT 2002) and by Spini and Zemor, and attributed there to Dolev, Dwork, Waarts and
+Yung, one round needs `3t + 1` node-disjoint paths and two or more rounds `2t + 1`. The original
+paper could not be read (`literature-review.md`, `ddwy1993` V1), and our one-round `2t + 1` with
+authenticated shares is a different statement in a different model, argued here and not reviewed.
+`plan_transmission` returns the `n` cheapest disjoint paths or
 `Insufficient { found, needed }`. Only `Domain` mode makes "`t` corrupt domains" mean domains.
 
 ## Router: failures, exclusion, budgets

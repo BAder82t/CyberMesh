@@ -14,7 +14,7 @@ other columns say what the repository does today and what would close the item.
 | 5 | Secure erasure on SSDs and snapshot-based storage | High | Best effort | Consumed regions are overwritten with zeros and synced | Storage that guarantees erasure (or encrypted-at-rest pools with key destruction) and snapshot discipline |
 | 6 | Distributed identity and authentication | High | Pairwise MAC only | Pairwise MACs; an in-memory registry and policy (`trust-policy.md`) | A way to bind identities to pairwise material across many parties and agree on membership |
 | 7 | Side-channel resistance | High | Not independently verified | Field multiplication without secret-dependent branches or tables; constant-time tag compare | An independent timing and side-channel review, and constant-time elimination and decoding |
-| 8 | Publicly verifiable unconditional authentication | Research | Not provided | Symmetric MACs only: the receiver could forge | Unconditionally secure signature schemes exist only under extra model assumptions (citation to be verified); not implemented |
+| 8 | Publicly verifiable unconditional authentication | Research | Not provided | Symmetric MACs only: the receiver could forge | Unconditionally secure signature schemes need per-user signing and verification and explicit dispute-resolution trust assumptions (Swanson and Stinson); not implemented |
 
 ## 1. Backup restoration
 
@@ -86,10 +86,22 @@ intention, not a result.
   check it, so tags convince only their verifier and give no non-repudiation. Governance and
   identity signatures elsewhere in CyberMesh stay Ed25519 and are computational.
 
+## Literature behind the register
+
+`literature-review.md` records what the sources say. For #1 the known direction is a protected
+monotonic counter or a quorum of witnesses (ROTE, Ariadne and Memoir address rollback for trusted
+execution; none applies to a pool of plain files without protected hardware). For #4, NIST SP
+800-90B says its estimation methods rest on statistical assumptions and "should not replace
+in-depth analysis" of the noise source. For #5, Wei et al. found that overwriting the whole visible
+address space twice is usually, not always, sufficient on SSDs and that file-level techniques
+designed for hard drives are not effective; Gutmann 1996 covers magnetic media and volatile memory,
+**not flash**, and NIST SP 800-88 Rev. 1 was withdrawn on 2025-09-26 in favour of Rev. 2. For #8,
+Swanson and Stinson. For #7, Kocher 1996 and Bernstein 2005.
+
 ## What this register does not cover
 
 This is the list the review raised. The limits of each crate are in `limitations.md`,
 `authentication.md`, `transport-protocol.md`, `trust-policy.md`, `secure-routing.md` and
-`private-computation.md`. The verified literature review, the formal models and the paper have
-not been written, and no benchmarks of the real protocol code exist yet (`simulation.md` covers
-the routing and budget model only).
+`private-computation.md`. A first verified literature review is in `literature-review.md` (73 records; read its section 1 for what
+the verification levels do and do not show). The formal models and the paper have not been written, and no
+benchmarks of the real protocol code exist yet (`simulation.md` covers the routing and budget model only).

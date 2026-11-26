@@ -28,8 +28,10 @@ itself and its subsets.
   lost domains the policy tolerates; for "any `k` of `n`" they are `k - 1` and `n - k`
   (checked for `n <= 6`). Exhaustive over subsets, so limited to 20 domains.
 * `q_condition(k)`: no `k` corruptible sets cover all domains, the `Q^k` conditions of the
-  general-adversary multiparty-computation literature (citation to be verified in the literature
-  review). For "any `t` of `n`" it holds exactly when `k * t < n` (checked).
+  general-adversary multiparty-computation literature. Per Hirt and Maurer's abstract, `k = 2`
+  characterises passive adversaries and active adversaries **with** a broadcast channel, and `k = 3`
+  active adversaries **without** broadcast (`literature-review.md`: `hirtmaurer1997` V1, `cdm2000`
+  V2). For "any `t` of `n`" it holds exactly when `k * t < n` (checked).
 
 ## Authenticated approvals
 

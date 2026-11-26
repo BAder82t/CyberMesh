@@ -278,11 +278,12 @@ fn forgery_bound_is_what_the_docs_say() {
     assert!((forgery_bound(32, 1) - 3.0 * 2f64.powi(-128)).abs() < 1e-45);
 }
 
-/// The polynomial claim, checked exhaustively over GF(2^8) with the same construction: for any
-/// two different messages of up to 3 blocks, at most `3 + 1` of the 256 keys make the hashes
-/// equal.
+/// The property the forgery bound needs, checked exhaustively over GF(2^8) with the same
+/// construction: for any two different messages of up to 3 blocks and **every** difference `d`,
+/// at most `3 + 1` of the 256 keys give `H(x) xor H(y) = d` (almost-XOR-universal, which is
+/// stronger than the collision-only case `d = 0`).
 #[test]
-fn almost_universal_bound_holds_exhaustively_over_a_small_field() {
+fn almost_xor_universal_bound_holds_exhaustively_over_a_small_field() {
     const SYMS: [u8; 5] = [0, 1, 2, 0x80, 0xff];
     let mut msgs: Vec<Vec<u8>> = vec![vec![]];
     for len in 1..=3 {
@@ -312,15 +313,21 @@ fn almost_universal_bound_holds_exhaustively_over_a_small_field() {
             gf8_mul,
         )
     };
-    let mut worst = 0;
+    let (mut worst, mut worst_collision) = (0, 0);
     for (i, x) in msgs.iter().enumerate() {
         for y in &msgs[i + 1..] {
-            let equal = (0..=255u8).filter(|&r| h(x, r) == h(y, r)).count();
-            worst = worst.max(equal);
-            assert!(equal <= 4, "{x:?} vs {y:?}: {equal} colliding keys");
+            let mut by_difference = [0usize; 256];
+            for r in 0..=255u8 {
+                by_difference[usize::from(h(x, r) ^ h(y, r))] += 1;
+            }
+            let top = *by_difference.iter().max().unwrap();
+            assert!(top <= 4, "{x:?} vs {y:?}: {top} keys give one difference");
+            worst = worst.max(top);
+            worst_collision = worst_collision.max(by_difference[0]);
         }
     }
     assert!(worst >= 2, "the bound is not vacuous here (worst {worst})");
+    assert!(worst_collision <= worst);
 }
 
 #[test]

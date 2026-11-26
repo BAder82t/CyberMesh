@@ -16,7 +16,8 @@ once, across crashes and restarts".
 | `Pseudorandom` | deterministic expansion of a short seed | refused |
 | `Public` | known to others | refused |
 
-The crate cannot verify provenance: it records the operator's declaration and refuses the
+The crate cannot verify provenance (NIST SP 800-90B states that its entropy-estimation methods rest on
+statistical assumptions and "should not replace in-depth analysis" of the noise source; `literature-review.md`): it records the operator's declaration and refuses the
 declarations that cannot support an information-theoretic claim. Locally generated randomness
 does not become shared secret randomness between remote parties by being stored in a pool.
 Encryption and authentication material live in separate pools (`Purpose`), and a reservation

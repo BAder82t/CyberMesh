@@ -1,7 +1,9 @@
 # Trust Fabric: transport protocol
 
 Status: experimental, unaudited. Implemented in `crates/cybermesh-transport`. Inspired by the
-shape of TLS 1.3; **not TLS and not wire-compatible with it**. The existing CyberMesh libp2p
+shape of TLS 1.3 (now specified by RFC 9846, which obsoletes RFC 8446; the key schedule uses HKDF
+and authentication uses a signature and a MAC, so TLS 1.3 is computational throughout);
+**not TLS and not wire-compatible with it**. The existing CyberMesh libp2p
 transport (Noise, computational) may carry these messages, but its protection is never counted
 towards the guarantees here.
 
@@ -122,7 +124,11 @@ random loss patterns.
   not authenticated; it needs a quiescent pair.
 * **Cost.** One secret byte per plaintext byte (at least 8 per record) plus 16 authentication
   bytes per record, and 48 / 32 bytes per handshake. Throughput is bounded by provisioning.
-* The pools are provisioned out of band: this crate does not establish keys. ITSAKE and other
-  information-theoretic key establishment were considered and are not implemented.
+* The pools are provisioned out of band: this crate does not establish keys. ITSAKE (IACR ePrint
+  2026/222, Jacqmin and Lienardy, February 2026) is a two-message protocol from a pre-shared secret
+  with entity authentication and forward secrecy, proven without computational assumptions; it is a
+  preprint with no peer-reviewed venue found, only its abstract was read, and it is **not
+  implemented**. Other information-theoretic key establishment was not evaluated
+  (`literature-review.md`).
 * Variable-time record handling on secret data is not claimed constant time; no timing review.
 * Wire formats are versioned (`ver = 1`) but not frozen.
