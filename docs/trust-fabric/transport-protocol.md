@@ -92,27 +92,44 @@ short messages are padded.
 
 A lost record, or a crash with undelivered records in flight, leaves one party's cursor ahead of
 the other's copy of the same pool; the next handshake reports `OutOfStep` and consumes nothing.
-`Endpoint::sync_message` gives the party's four cursors (no secrets) and `Endpoint::resync`
-takes the peer's message and, for each of the four pools, **burns forward to the larger of the
-two cursors**. Cursors never move backwards, so after both parties apply it the pair is in step
-and a new handshake works. A session, even a terminated one, returns its pools with
-`Session::into_endpoint`.
+`Endpoint::sync_message` gives the party's four cursors and `Endpoint::resync` takes the peer's
+message and, for each of the four pools, **burns forward to the larger of the two cursors**.
+Cursors never move backwards, so after both parties apply it the pair is in step and a new
+handshake works. A session, even a terminated one, returns its pools with `Session::into_endpoint`.
 
-Why it needs no authentication for safety: every byte below a party's cursor is already spent or
-erased on that side, so burning forward can only waste material; it cannot make a pad usable
-twice or reveal anything. A forged or replayed sync message can only persuade a party to burn
-material (denial of service), bounded by: a target beyond the pool's provisioned size is refused
-(`ResyncExceedsPool`), the caller's `max_burn` per pool (`ResyncExceedsPolicy`), and a gap no
-sequence of records can produce (under 8 bytes) is refused (`Misaligned`). All four targets are
-validated before anything is burned. A stale message moves nothing; applying the same exchange
-twice is a no-op. If a lie leaves the pair out of step, the next authenticated handshake detects
-it and another honest exchange heals it; the cost is only burned material. Run it with no
-session active.
+**The sync message is authenticated.** It is `'S' | version 2 | role | four cursors | tag`
+(51 bytes). The tag is a **one-time MAC** (`cybermesh_trust::mac::tag_one_time`): the sender spends
+32 fresh bytes from its send authentication pool (a hash key, then a pad) and reports its
+cursors **after** spending them, so the message names where its material is. The receiver reads
+those 32 bytes at that offset in its own copy of the pool **without consuming them**
+(`Pool::peek_unspent`, for verification only), verifies the tag, and only then changes anything.
+Forged, tampered, reflected (wrong role) and replayed messages are refused before any state
+changes: a forger has none of the material, so succeeds with probability at most
+`(blocks + 1) / 2^128` per message and burns nothing. A replay names material the receiver has
+already spent and is refused (`SyncStale`).
+
+After authentication, burning forward is safe as before: every byte below a party's cursor is
+already spent or erased on that side, so burning can only waste material. It is bounded by the pool
+size (`ResyncExceedsPool`), the caller's `max_burn` per pool (`ResyncExceedsPolicy`), and a gap no
+sequence of records can produce, under 8 bytes (`Misaligned`). All four targets are validated
+before anything is burned. The 32 bytes the message spent are spent, not burned, and are not
+counted in the report.
+
+**Order matters after a restore.** A party restored from a backup has a cursor behind its peer's,
+so the next 32 bytes it takes for a sync message (or a handshake hello) are bytes it **already
+used**; the peer refuses such a message as stale, and its tag reuses a key and pad
+(`known-issues.md`, #1). A party that might have been restored should therefore **apply the peer's
+message first**, which burns it forward past everything the peer has used, and only then create
+its own. Nothing local tells a party that it was restored, so this is a procedure, not a
+guarantee.
 
 Tested: a lost record, losses in both directions and a crash with records in flight, a session
-terminated by tampering, idempotence, stale messages, forged claims (beyond the pool, over
-policy, misaligned, within policy then healed), erased bytes on disk, and a property test over
-random loss patterns.
+terminated by tampering, an in-step exchange that burns nothing, replays and stale messages,
+forged messages (right shape and wrong tag, at and far ahead of the right offset; every cursor
+byte flipped; the tag flipped; a reflected message; one byte of the receiver's material changed;
+beyond the pool) with the pools unchanged afterwards and 300 further forgeries leaving them
+unchanged, a genuine message beyond the policy, erased bytes on disk, a property test over random
+loss patterns, and the restore scenarios.
 
 ## Limitations
 
@@ -120,8 +137,9 @@ random loss patterns.
   future traffic until they are replaced.
 * **Availability is not protected.** An active attacker can end any session by injecting or
   altering one record.
-* **Resynchronisation is manual and burns material** (next section). It is not automatic and
-  not authenticated; it needs a quiescent pair.
+* **Resynchronisation is manual and burns material** (previous section). It is authenticated
+  but not automatic; it needs a quiescent pair, and after a restore the order of the two
+  messages matters.
 * **Cost.** One secret byte per plaintext byte (at least 8 per record) plus 16 authentication
   bytes per record, and 48 / 32 bytes per handshake. Throughput is bounded by provisioning.
 * The pools are provisioned out of band: this crate does not establish keys. ITSAKE (IACR ePrint

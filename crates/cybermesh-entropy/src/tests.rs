@@ -353,3 +353,69 @@ fn reservations_are_redacted_and_into_secret_keeps_the_bytes() {
     assert_eq!(&s[..], &material(32)[..8]);
     assert!(!format!("{pool:?}").contains("material"));
 }
+
+#[test]
+fn peeking_reads_unspent_bytes_without_consuming_them() {
+    let d = tempfile::tempdir().unwrap();
+    let pool = new_pool(d.path(), 128);
+    let want = &material(128)[40..72];
+    // Ahead of the cursor, twice: the same bytes, and nothing is spent.
+    assert_eq!(&pool.peek_unspent(40, 32).unwrap()[..], want);
+    assert_eq!(&pool.peek_unspent(40, 32).unwrap()[..], want);
+    assert_eq!(pool.stats().unwrap().consumed, 0);
+    // They are still unspent: a later reservation hands the same bytes out (the documented hazard
+    // of peeking, which is why it is for verification only).
+    pool.reserve(40).unwrap();
+    let again = pool.reserve(32).unwrap();
+    assert_eq!(again.as_bytes(), want);
+}
+
+#[test]
+fn peeking_refuses_spent_out_of_range_and_erased_regions() {
+    let d = tempfile::tempdir().unwrap();
+    let pool = new_pool(d.path(), 64);
+    pool.reserve(24).unwrap();
+    // Below or straddling the cursor.
+    assert!(matches!(
+        pool.peek_unspent(0, 16),
+        Err(EntropyError::AlreadySpent {
+            offset: 0,
+            cursor: 24
+        })
+    ));
+    assert!(matches!(
+        pool.peek_unspent(16, 16),
+        Err(EntropyError::AlreadySpent { .. })
+    ));
+    assert!(
+        pool.peek_unspent(24, 16).is_ok(),
+        "exactly at the cursor is unspent"
+    );
+    // Beyond the material, including a wrapping offset.
+    assert!(matches!(
+        pool.peek_unspent(56, 16),
+        Err(EntropyError::OutOfRange)
+    ));
+    assert!(matches!(
+        pool.peek_unspent(u64::MAX - 4, 16),
+        Err(EntropyError::OutOfRange)
+    ));
+    // Length bounds.
+    for bad in [0, MIN_RESERVATION - 1, MAX_RESERVATION + 1] {
+        assert!(
+            matches!(pool.peek_unspent(24, bad), Err(EntropyError::InvalidLength)),
+            "{bad}"
+        );
+    }
+    // An erased region ahead of the cursor (an old cursor restored) is refused too.
+    let (_, cp) = paths(d.path(), ID);
+    let old = std::fs::read(&cp).unwrap();
+    pool.reserve(16).unwrap();
+    drop(pool);
+    std::fs::write(&cp, &old).unwrap();
+    let pool = Pool::open(d.path(), ID).unwrap();
+    assert!(matches!(
+        pool.peek_unspent(24, 16),
+        Err(EntropyError::Burned)
+    ));
+}
