@@ -92,47 +92,71 @@ short messages are padded.
 
 A lost record, or a crash with undelivered records in flight, leaves one party's cursor ahead of
 the other's copy of the same pool; the next handshake reports `OutOfStep` and consumes nothing.
-`Endpoint::sync_message` gives the party's four cursors and `Endpoint::resync` takes the peer's
-message and, for each of the four pools, **burns forward to the larger of the two cursors**.
-Cursors never move backwards, so after both parties apply it the pair is in step and a new
-handshake works. A session, even a terminated one, returns its pools with `Session::into_endpoint`.
+Resynchronisation is a **request and a response**. The party that wants to resync calls
+`Endpoint::sync_request` (a fresh random nonce, no pool material spent) and sends the request; the
+peer answers with `Endpoint::sync_response`; the requester passes the response and its `SyncRequest`
+to `Endpoint::resync`, which, for each of the four pools, **burns forward to the larger of the two
+cursors**. Cursors never move backwards, so after both parties have asked once the pair is in step and
+a new handshake works. A session, even a terminated one, returns its pools with
+`Session::into_endpoint`.
 
-**The sync message is authenticated.** It is `'S' | version 2 | role | four cursors | tag`
-(51 bytes). The tag is a **one-time MAC** (`cybermesh_trust::mac::tag_one_time`): the sender spends
-32 fresh bytes from its send authentication pool (a hash key, then a pad) and reports its
-cursors **after** spending them, so the message names where its material is. The receiver reads
-those 32 bytes at that offset in its own copy of the pool **without consuming them**
-(`Pool::peek_unspent`, for verification only), verifies the tag, and only then changes anything.
-Forged, tampered, reflected (wrong role) and replayed messages are refused before any state
-changes: a forger has none of the material, so succeeds with probability at most
-`(blocks + 1) / 2^128` per message and burns nothing. A replay names material the receiver has
-already spent and is refused (`SyncStale`).
+```text
+Request   'Q' ver 3 role nonce[16]                                       (19 bytes)
+Response  'S' ver 3 role nonce[16] cursors[4 x 8] tag[16]                (67 bytes)
+```
+
+**The response is authenticated.** Its tag is a **one-time MAC** (`cybermesh_trust::mac::tag_one_time`)
+over the whole body, nonce included: the responder spends 32 fresh bytes from its send authentication
+pool (a hash key, then a pad) and reports its cursors **after** spending them, so the message names
+where its material is. The requester reads those 32 bytes at that offset in its own copy of the pool
+**without consuming them** (`Pool::peek_unspent`, for verification only), verifies the tag, and only
+then changes anything. Forged, tampered, reflected (wrong role) and replayed responses are refused
+before any state changes: a forger has none of the material, so succeeds with probability at most
+`(blocks + 1) / 2^128` per message and burns nothing. A response naming material the requester has
+already spent is refused (`SyncStale`).
+
+**The response is fresh.** `resync` accepts a response only if it echoes the nonce of the
+`SyncRequest` it is given (`SyncNotRequested` otherwise), and a `SyncRequest` is used by one
+successful resync. A genuine response that the peer made for an earlier request therefore cannot
+be accepted by a party that has restarted since: its new request has a new nonce, and the old
+request is gone with the old process. The nonce is public and needs uniqueness, not secrecy. This
+closes the hole the TLA+ model found, where a restored party accepted a genuine but old message that
+burned nothing past what it had used (`formal-model.md`); the test
+`a_stale_genuine_response_is_refused_by_a_restored_side_which_then_heals_properly` pins it.
 
 After authentication, burning forward is safe as before: every byte below a party's cursor is
 already spent or erased on that side, so burning can only waste material. It is bounded by the pool
 size (`ResyncExceedsPool`), the caller's `max_burn` per pool (`ResyncExceedsPolicy`), and a gap no
 sequence of records can produce, under 8 bytes (`Misaligned`). All four targets are validated
-before anything is burned. The 32 bytes the message spent are spent, not burned, and are not
-counted in the report.
+before anything is burned. The 32 bytes the response spent are spent, not burned, and are not
+counted in the report. A refused response leaves the `SyncRequest` usable.
 
-**Order matters after a restore.** A party restored from a backup has a cursor behind its peer's,
-so the next 32 bytes it takes for a sync message (or a handshake hello) are bytes it **already
-used**; the peer refuses such a message as stale, and its tag reuses a key and pad
-(`known-issues.md`, #1). A party that might have been restored should therefore **apply the peer's
-message first**, which burns it forward past everything the peer has used, and only then create
-its own. Nothing local tells a party that it was restored, so this is a procedure, not a
-guarantee.
-It is not even sufficient: a genuine but **old** message from the peer is accepted by a restored side
-and burns nothing past what that side had already used, because the message authenticates cursors, not
-their freshness (found by the TLA+ model in `formal-model.md`, pinned by a test).
+**Procedure after a restore.** A party that might have been restored should **request first and
+answer only after it has applied a fresh response**: answering spends 32 bytes at the responder's own
+cursor, which on a restored party are bytes it already used (the peer refuses such an answer as stale,
+and its tag reuses a key and pad; `known-issues.md`, #1). Nothing local tells a party that it was
+restored, so this is a procedure, not a guarantee; the model suggests a party run a request and
+response at every start before it sends anything, but that rule is **not enforced or modelled in full**
+(two parties that both wait for the other are not sequenced).
+
+**What it does not fix.** A message of the restored party's that was lost or in flight at the restore:
+its slot was used and seen on the wire, but the peer never accepted it, so the restored party reuses
+it and no exchange can tell it (needs durable local state, #1). Both parties restored to the same
+moment is not detected. Nonce uniqueness is assumed (a whole-VM restore can also restore the random
+number generator), and so is that a `SyncRequest` does not outlive the restore: a process that keeps a
+request while only its disk is rolled back could still accept a response made for that request. **A forged request costs the responder 32 authentication bytes** and leaves the pair
+out of step until a resync; this is pinned by a test as a known cost and is in line with availability not
+being protected.
 
 Tested: a lost record, losses in both directions and a crash with records in flight, a session
-terminated by tampering, an in-step exchange that burns nothing, replays and stale messages,
-forged messages (right shape and wrong tag, at and far ahead of the right offset; every cursor
-byte flipped; the tag flipped; a reflected message; one byte of the receiver's material changed;
-beyond the pool) with the pools unchanged afterwards and 300 further forgeries leaving them
-unchanged, a genuine message beyond the policy, erased bytes on disk, a property test over random
-loss patterns, and the restore scenarios.
+terminated by tampering, an in-step exchange that burns nothing, replays and stale responses,
+a response accepted once and only for its own request, forged responses (right shape and wrong tag,
+at and far ahead of the right offset; every body byte flipped; the tag flipped; a reflected
+message; one byte of the receiver's material changed; beyond the pool) with the pools unchanged
+afterwards and 300 further forgeries leaving them unchanged, a genuine response beyond the policy,
+erased bytes on disk, a property test over random loss patterns, the restore scenarios, and the
+cost of a forged request. Mutation checks: skipping the nonce comparison, the used-request check,
+the request-role check, or the marking of a used request each fail a test.
 
 ## Limitations
 
