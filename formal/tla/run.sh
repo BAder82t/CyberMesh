@@ -12,7 +12,10 @@ for item in safe:pass unauth:NoForgery unauth_overrun:NoOverrun restore:NoAuthRe
             fresh_safe:pass fresh_reach:NotHealed fresh_discipline:NoAuthReuse \
             instep_discipline:NoAuthReuse instep_discipline_pad:NoPadReuse \
             fresh_instep_discipline:pass fresh_instep_nodiscipline:NoAuthReuse \
-            fresh_instep_recovers:NotRecovered; do
+            fresh_instep_recovers:NotRecovered \
+            startup_none_cold:pass startup_both_cold:NeverSequenced startup_responder_cold:NeverSequenced \
+            startup_both_safe:pass startup_responder_safe:pass startup_both_hygiene:NoAuthReuse \
+            startup_responder_hygiene:NoAuthReuse startup_both_recovers:NotRecovered; do
   cfg="${item%%:*}"; want="${item#*:}"
   out="$work/$cfg.txt"
   (cd "$work" && java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -nowarning -config "$here/$cfg.cfg" \

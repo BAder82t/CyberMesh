@@ -50,7 +50,7 @@ Tested (`cybermesh-transport`, `resync/tests.rs`):
   `a_stale_genuine_response_is_refused_by_a_restored_side_which_then_heals_properly`). **Still
   open:** a message of the restored party's that was lost or in flight when it was restored is
   reused and no exchange can tell it (needs durable local state); the "ask first, answer after a
-  fresh response" rule is a procedure the code does not enforce; nonce uniqueness is assumed.
+  fresh response" rule is a procedure the code does not enforce (the model shows that applying it at every start, with the responder allowed to answer while quarantined, avoids a start-up deadlock and reuses at most an authentication slot that the in-step peer has already spent; `formal-model.md`); nonce uniqueness is assumed.
 * **Both parties restored to the same moment: not detected.** Their cursors agree, the
   handshake succeeds, and the same plaintext meets the same pad, giving the same ciphertext
   (`restoring_both_parties_is_not_detected_and_reuses_the_pad`). With two different plaintexts
