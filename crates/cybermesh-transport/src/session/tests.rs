@@ -54,7 +54,15 @@ impl Rig {
         }
         Self { di, dr }
     }
+    /// An endpoint as if its owner had already applied a fresh sync response: the gate on
+    /// handshakes is open. Most tests are about what happens after that.
     pub(crate) fn ep(&self, role: Role) -> Endpoint {
+        let ep = self.cold(role);
+        ep.mark_synced();
+        ep
+    }
+    /// An endpoint exactly as opening the pools gives it: unsynced.
+    pub(crate) fn cold(&self, role: Role) -> Endpoint {
         let (d, se, sa, re, ra) = match role {
             Role::Initiator => (&self.di, IR_ENC, IR_AUTH, RI_ENC, RI_AUTH),
             Role::Responder => (&self.dr, RI_ENC, RI_AUTH, IR_ENC, IR_AUTH),

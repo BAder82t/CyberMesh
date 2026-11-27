@@ -111,8 +111,9 @@ sequenced is not settled.
 * **Nonce uniqueness is an assumption.** Restoring a whole virtual machine can also restore the random
   number generator's state and a nonce already chosen; the model assumes the restart gives a new,
   never-used nonce.
-* **A restored party's first attempt before it knows** (a hello or sync made from reused material)
-  is not prevented by the start-up rule if the party was not yet started that way.
+* **A restored party's first attempt before it knows** (a hello made from reused material) is now
+  refused by the endpoint's start-up gate; a sync **response** made before it knows is still allowed
+  (see below).
 * **A forged request** makes the peer spend 32 authentication bytes: a small denial of service that needs
   a rate limit or a policy.
 
@@ -120,7 +121,7 @@ Bounds for the restore pair: `MaxSends = 3`, `MaxNonce = 2`, no loss; with four 
 not finish in the time I gave it (about 2.1 million states and a growing queue), so it is a bound, not a
 proof for larger ones.
 
-## Start-up sequencing: a rule that needs no oracle (modelled, not implemented)
+## Start-up sequencing: a rule that needs no oracle (modelled and implemented in the transport)
 
 The restore configurations above give a restored party an oracle: the restore action quarantines it. The
 real code has none, so the rule has to apply to **every start**: a party sends no record and no hello
@@ -149,10 +150,16 @@ while quarantined) is enough to break the symmetry and exposes one party's answe
   forgery at that slot becomes possible. The start-up configurations require an in-step restore and no loss;
   the case without them was shown to fail earlier (`fresh_discipline`) and was not repeated with the start-up
   rule.
-* **The code does not enforce the rule.** `Initiator::start` and `Responder::accept` do not check that a
-  sync has been applied since the endpoint was opened; enforcing it (an endpoint that knows whether it
-  has synced since it was opened, and refuses to start a handshake before then) is a design change that is
-  **not made**. Until it is made, the start-up rule is a procedure.
+* **The code enforces the rule at the handshake, not at the model's granularity.** An `Endpoint` is
+  unsynced when opened; `Initiator::start` and `Responder::accept` return `NotSynced` until
+  `resync` has applied a fresh response to a request of its own (`is_synced`). Answering is allowed
+  while unsynced, as the `startup_*_safe` configurations require. The flag is in memory only. **The
+  model was not re-derived from this code**: the code was checked by tests (a cold endpoint cannot
+  start or accept; two cold parties start up together and then talk; a restored party cannot make
+  the hello that reuses material; four mutations, each caught), not by the model. Nothing stops a
+  caller from using the pools without the `Endpoint` (for example `Pool::reserve` directly), and a
+  caller that never restarts the process after a restore (an `Endpoint` kept in memory across a
+  disk rollback) keeps its flag. The rule is only as good as "opening an endpoint is every start".
 * Bounds as before: `MaxSends = 3`, `MaxNonce = 2`, one restore. Both parties restored to the same moment
   is not modelled and is still not detected.
 
