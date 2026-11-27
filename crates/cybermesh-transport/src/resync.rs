@@ -28,13 +28,23 @@
 //! Burning forward is also safe on its own: every byte below a party's cursor is already spent or
 //! erased on that side, so it can only waste material, never make a pad usable twice.
 //!
+//! # The start-up rule is enforced
+//!
+//! Nothing local says a party was restored, so the rule has to apply to **every start**: an
+//! [`Endpoint`] is *unsynced* when it is opened, and [`Initiator::start`](crate::Initiator::start)
+//! and [`Responder::accept`](crate::Responder::accept) refuse ([`TransportError::NotSynced`]) until a
+//! fresh response to a request of its own has been applied by [`Endpoint::resync`] (an in-step
+//! response counts: it burns nothing). The flag lives in memory only, so a restart or a restore
+//! clears it. Answering ([`Endpoint::sync_response`]) is **allowed while unsynced**: two parties that
+//! start together both wait for the other's answer, and the model (`startup_*` in
+//! `docs/trust-fabric/formal-model.md`) shows that a rule letting nobody answer deadlocks.
+//!
 //! # What this does not fix
 //!
-//! * **A responder that was restored spends material it already used when it answers.** Answering
-//!   spends 32 bytes at the responder's own cursor. A party that might have been restored should
-//!   therefore **request first and answer only after it has applied a fresh response**. Nothing local
-//!   says a party was restored, so this is a procedure, not a guarantee, and two parties that both
-//!   wait for the other are not sequenced here.
+//! * **A party that answers while unsynced may reuse an authentication slot it used before a
+//!   restore.** In the model that is harmless (the in-step peer has already spent that slot, so the
+//!   message is refused as stale), but only for an in-step restore with nothing lost. The rule stops
+//!   a restored party sending a hello or a record before it knows; it does not stop it answering.
 //! * **A message lost or in flight when a party is restored.** Its slot was used and seen on the wire
 //!   but the peer never accepted it, so the peer cannot tell the restored party; it reuses that
 //!   slot. No exchange fixes that (`known-issues.md`, #1).
@@ -322,6 +332,8 @@ impl Endpoint {
             };
         }
         request.used = true;
+        // A fresh, authenticated response has been applied: this endpoint may now handshake.
+        self.mark_synced();
         Ok(ResyncReport { burned })
     }
 }

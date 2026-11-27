@@ -26,6 +26,7 @@
 
 use cybermesh_entropy::{EntropyError, Pool, Purpose};
 use cybermesh_trust::mac::{MacError, MacKey, TAG_LEN, Tag, Verifier};
+use std::sync::atomic::{AtomicBool, Ordering};
 use zeroize::Zeroize;
 
 use crate::SecurityProfile;
@@ -84,6 +85,11 @@ pub enum TransportError {
     Randomness,
     #[error("malformed resync message")]
     BadSync,
+    #[error(
+        "this endpoint has not applied a fresh sync response since it was opened: ask the peer \
+         first (sync_request, then resync) before starting or accepting a handshake"
+    )]
+    NotSynced,
     #[error("the sync response does not answer the request it was given; nothing was changed")]
     SyncNotRequested,
     #[error("the sync message does not authenticate; nothing was changed")]
@@ -122,6 +128,9 @@ pub struct Endpoint {
     send_auth: Pool,
     recv_enc: Pool,
     recv_auth: Pool,
+    /// True once a fresh sync response has been applied since this endpoint was opened. Opening
+    /// an endpoint (a restart, a restore) always starts it false: nothing durable carries it.
+    synced: AtomicBool,
 }
 
 impl core::fmt::Debug for Endpoint {
@@ -183,7 +192,27 @@ impl Endpoint {
             send_auth,
             recv_enc,
             recv_auth,
+            synced: AtomicBool::new(false),
         })
+    }
+
+    /// Whether a fresh sync response has been applied since this endpoint was opened. A handshake
+    /// can be started or accepted only when this is true (see [`Endpoint::resync`]).
+    #[must_use]
+    pub fn is_synced(&self) -> bool {
+        self.synced.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_synced(&self) {
+        self.synced.store(true, Ordering::Release);
+    }
+
+    fn require_synced(&self) -> Result<(), TransportError> {
+        if self.is_synced() {
+            Ok(())
+        } else {
+            Err(TransportError::NotSynced)
+        }
     }
 
     fn dir(&self) -> u8 {
@@ -309,12 +338,15 @@ impl Initiator {
     /// Start a session: take this direction's hash key and hello pad and produce the hello.
     ///
     /// # Errors
+    /// [`TransportError::NotSynced`] if the endpoint has not applied a fresh sync response since it
+    /// was opened (nothing is consumed; the endpoint is dropped, so reopen it, sync, and retry),
     /// [`TransportError::BadEndpoint`] if the endpoint is not an initiator, entropy errors if a
     /// pool is exhausted, [`TransportError::Randomness`].
     pub fn start(ep: Endpoint) -> Result<(Self, Vec<u8>), TransportError> {
         if ep.role != Role::Initiator {
             return Err(TransportError::BadEndpoint("not an initiator endpoint"));
         }
+        ep.require_synced()?;
         let mut sid = [0u8; 16];
         getrandom::fill(&mut sid).map_err(|_| TransportError::Randomness)?; // public nonce
         let (auth_start, enc_start) = (consumed(&ep.send_auth)?, consumed(&ep.send_enc)?);
@@ -385,12 +417,14 @@ impl Responder {
     /// Verify the initiator's hello and produce the responder's hello.
     ///
     /// # Errors
-    /// Any authentication, downgrade, malformed or out-of-step condition ends the attempt. Pool
-    /// cursors are compared **before** any material is consumed.
+    /// [`TransportError::NotSynced`] as for [`Initiator::start`]. Any authentication, downgrade,
+    /// malformed or out-of-step condition ends the attempt. Pool cursors are compared **before**
+    /// any material is consumed.
     pub fn accept(ep: Endpoint, initiator_hello: &[u8]) -> Result<(Self, Vec<u8>), TransportError> {
         if ep.role != Role::Responder {
             return Err(TransportError::BadEndpoint("not a responder endpoint"));
         }
+        ep.require_synced()?;
         let i = parse_hello(initiator_hello, Role::Initiator)?;
         check_in_step(&ep, &i)?;
         let mut recv = Verifier::new(key(&ep.recv_auth)?, 1);

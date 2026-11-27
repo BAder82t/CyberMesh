@@ -131,13 +131,20 @@ sequence of records can produce, under 8 bytes (`Misaligned`). All four targets 
 before anything is burned. The 32 bytes the response spent are spent, not burned, and are not
 counted in the report. A refused response leaves the `SyncRequest` usable.
 
-**Procedure after a restore.** A party that might have been restored should **request first and
-answer only after it has applied a fresh response**: answering spends 32 bytes at the responder's own
-cursor, which on a restored party are bytes it already used (the peer refuses such an answer as stale,
-and its tag reuses a key and pad; `known-issues.md`, #1). Nothing local tells a party that it was
-restored, so this is a procedure, not a guarantee; the model suggests a party run a request and
-response at every start before it sends anything, but that rule is **not enforced or modelled in full**
-(two parties that both wait for the other are not sequenced).
+**The start-up rule.** A party that might have been restored should **request first and answer only
+after it has applied a fresh response**: answering spends 32 bytes at the responder's own cursor,
+which on a restored party are bytes it already used (the peer refuses such an answer as stale, and
+its tag reuses a key and pad; `known-issues.md`, #1). Nothing local tells a party that it was
+restored, so the rule applies to **every start**, and the code enforces the part that matters for a
+session: an `Endpoint` is unsynced when it is opened, and `Initiator::start` and `Responder::accept`
+return `NotSynced` until `Endpoint::resync` has applied a fresh response to a request of its own
+(`is_synced`; an in-step response counts and burns nothing). Answering is allowed while unsynced, because
+two parties that start together would otherwise both wait for the other; the model shows that
+answering reuses at most an authentication slot the in-step peer has already spent. Each party
+therefore runs one request and response before the first hello, in both directions. The flag is in
+memory only (a restart or restore clears it), the endpoint a `Session` hands back stays synced, and
+the code was tested against the rule, not re-modelled. An endpoint kept in memory across a rollback of
+its disk keeps its flag, and nothing stops a caller using the pools without an `Endpoint`.
 
 **What it does not fix.** A message of the restored party's that was lost or in flight at the restore:
 its slot was used and seen on the wire, but the peer never accepted it, so the restored party reuses

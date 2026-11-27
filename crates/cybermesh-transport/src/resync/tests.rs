@@ -711,3 +711,117 @@ fn restoring_both_parties_is_not_detected_and_reuses_the_pad() {
     // XOR of the plaintexts: the one-time pad is void. This is what a backup restore costs.
     let _ = (RI_ENC, RI_AUTH);
 }
+
+// The start-up rule: an endpoint just opened may not begin a handshake until it has applied a fresh
+// sync response to a request of its own.
+#[test]
+fn a_cold_endpoint_cannot_start_or_accept_a_handshake_until_it_has_synced() {
+    let rig = big();
+    assert!(!rig.cold(Role::Initiator).is_synced());
+    let before = all_cursors(&rig);
+    assert!(matches!(
+        Initiator::start(rig.cold(Role::Initiator)),
+        Err(TransportError::NotSynced)
+    ));
+    // A hello from a synced initiator is still refused by a cold responder, with nothing consumed.
+    let (_i, hello) = Initiator::start(rig.ep(Role::Initiator)).unwrap();
+    let after_hello = rig.ep(Role::Initiator).cursors().unwrap();
+    assert!(
+        after_hello.send_auth > before.0.send_auth,
+        "the hello spent its tag"
+    );
+    let responder_before = rig.ep(Role::Responder).cursors().unwrap();
+    assert!(matches!(
+        Responder::accept(rig.cold(Role::Responder), &hello),
+        Err(TransportError::NotSynced)
+    ));
+    assert_eq!(rig.ep(Role::Responder).cursors().unwrap(), responder_before);
+}
+
+#[test]
+fn a_successful_resync_opens_the_gate_and_a_refused_one_does_not() {
+    let rig = big();
+    let (ci, cr) = (rig.cold(Role::Initiator), rig.cold(Role::Responder));
+    // Answering is allowed while cold, and does not open the gate.
+    let mut rq = ci.sync_request().unwrap();
+    let resp = cr.sync_response(&rq.to_bytes()).unwrap();
+    assert!(!cr.is_synced());
+    // A forged response, a stale one and a wrong-nonce one are all refused and leave it cold.
+    let mut bad = resp.clone();
+    *bad.last_mut().unwrap() ^= 1;
+    assert!(ci.resync(&bad, &mut rq, POLICY).is_err());
+    assert!(!ci.is_synced());
+    let other = ci.sync_request().unwrap();
+    let wrong = cr.sync_response(&other.to_bytes()).unwrap();
+    assert!(matches!(
+        ci.resync(&wrong, &mut rq, POLICY),
+        Err(TransportError::SyncNotRequested)
+    ));
+    assert!(!ci.is_synced());
+    // A genuine, fresh answer (here in step: nothing to burn) opens it, for this side only.
+    ci.resync(&resp, &mut rq, POLICY).unwrap();
+    assert!(ci.is_synced());
+    assert!(!cr.is_synced(), "answering does not sync the answerer");
+}
+
+#[test]
+fn both_cold_parties_can_start_up_together_and_then_talk() {
+    // The deadlock the model warns about: both ask, and both must be able to answer while cold.
+    let rig = big();
+    let (ci, cr) = (rig.cold(Role::Initiator), rig.cold(Role::Responder));
+    let (mut qi, mut qr) = (ci.sync_request().unwrap(), cr.sync_request().unwrap());
+    let to_i = ci.sync_response(&qr.to_bytes()).unwrap();
+    let to_r = cr.sync_response(&qi.to_bytes()).unwrap();
+    ci.resync(&to_r, &mut qi, POLICY).unwrap();
+    cr.resync(&to_i, &mut qr, POLICY).unwrap();
+    assert!(ci.is_synced() && cr.is_synced());
+    let (ini, hello) = Initiator::start(ci).unwrap();
+    let (res, reply) = Responder::accept(cr, &hello).unwrap();
+    let (mut a, fin) = ini.finish(&reply).unwrap();
+    let mut b = res.finish(&fin).unwrap();
+    assert_eq!(
+        b.open(&a.seal(b"after a joint start-up").unwrap()).unwrap(),
+        Opened::Data(b"after a joint start-up".to_vec())
+    );
+}
+
+#[test]
+fn a_restart_clears_the_gate_and_a_session_keeps_it() {
+    let rig = big();
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    // An endpoint handed back by a session is still synced (it opened the session after a sync).
+    b.open(&a.seal(b"x").unwrap()).unwrap();
+    assert!(a.into_endpoint().is_synced());
+    // Reopening the pools (a restart, a restore) gives an unsynced endpoint again.
+    assert!(!rig.cold(Role::Responder).is_synced());
+    drop(b);
+}
+
+#[test]
+fn a_restored_party_cannot_make_the_first_attempt_that_reused_material() {
+    // The hazard that the earlier restore test pins (`hello1[20..28] == hello2[20..28]`): a restored
+    // initiator's first hello reuses the first handshake's authentication key and pad. With the rule
+    // it never gets to make that hello before it has asked and been burned forward.
+    let rig = big();
+    let snap = snapshot(rig.di.path());
+    let (mut a, mut b) = connect_fresh(&rig).unwrap();
+    b.open(&a.seal(b"before").unwrap()).unwrap();
+    drop((a, b));
+    copy_files(snap.path(), rig.di.path());
+    let ahead = rig.ep(Role::Responder).cursors().unwrap();
+    assert!(matches!(
+        Initiator::start(rig.cold(Role::Initiator)),
+        Err(TransportError::NotSynced)
+    ));
+    // Asking first heals it; the hello it then makes is from fresh material.
+    let (ci, cr) = (rig.cold(Role::Initiator), rig.cold(Role::Responder));
+    let mut rq = ci.sync_request().unwrap();
+    ci.resync(&cr.sync_response(&rq.to_bytes()).unwrap(), &mut rq, POLICY)
+        .unwrap();
+    assert!(ci.cursors().unwrap().send_auth >= ahead.recv_auth);
+    let (_i, hello) = Initiator::start(ci).unwrap();
+    assert!(
+        u64::from_be_bytes(hello[20..28].try_into().unwrap()) >= ahead.recv_auth,
+        "the hello names fresh authentication material"
+    );
+}
